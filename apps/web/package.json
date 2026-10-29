@@ -7,9 +7,10 @@
   "type": "module",
   "scripts": {
     "cf-typegen": "wrangler types",
-    "typecheck": "wrangler types && tsc -p . && tsc -p test",
-    "test": "vitest run",
-    "deploy": "wrangler deploy"
+    "build": "vite build",
+    "typecheck": "wrangler types && tsc -p . && tsc -p spa && tsc -p test",
+    "test": "vite build && vitest run",
+    "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",

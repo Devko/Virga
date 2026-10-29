@@ -23,6 +23,11 @@ export default defineConfig({
         ],
         test: { name: "worker", include: ["test/**/*.test.ts"] },
       },
+      {
+        // SPA views rendered to HTML in Node.
+        oxc: { jsx: { runtime: "automatic", importSource: "react" } },
+        test: { name: "spa", include: ["spa/**/*.test.tsx"], environment: "node" },
+      },
     ],
   },
 });
