@@ -1,0 +1,21 @@
+{
+  "name": "@virga/broker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Credential broker Worker: token vault, onboarding write check, read-only API caller, rate budget",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "cf-typegen": "wrangler types",
+    "typecheck": "wrangler types && tsc -p . && tsc -p test",
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@virga/cf-api": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.2",
+    "wrangler": "4.151.0"
+  }
+}

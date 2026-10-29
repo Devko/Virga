@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "virga-broker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // The broker holds tokens. It has no routes and is reachable only through
+  // service bindings to its ApiCaller and TokenIntake entrypoints.
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "vars": {
+    // Version of the master key below. Raise it when rotating the key (D-15).
+    "MASTER_KEY_VERSION": "1"
+  },
+  // The vault has a database of its own, bound only to this Worker (D-08).
+  // database_id is left out so that `wrangler deploy` provisions it.
+  "d1_databases": [
+    {
+      "binding": "VAULT",
+      "database_name": "virga-vault",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Master key: 32 random bytes, base64, in Secrets Store (D-15). Set store_id
+  // to your store. Fallback without Secrets Store: remove this entry and run
+  // `wrangler secret put MASTER_KEY`.
+  "secrets_store_secrets": [
+    {
+      "binding": "MASTER_KEY_STORE",
+      "store_id": "<SECRETS_STORE_ID>",
+      "secret_name": "virga-master-key"
+    }
+  ]
+}
