@@ -4488,6 +4488,266 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-009",
+    "name": "undecided-unknown-entry-point",
+    "description": "Evaluated on 2026-10-29. Three idle, old Workers bind the database that a busy Worker uses. The evaluator could not decide the workers.dev of quiet, nor the version URL of pinned; either may be public, which would rule the Worker out, so both are undecided. half has an unknown workers.dev as well, but its route is public, which rules it out.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "busy",
+        "name": "busy",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "b1",
+        "props": {
+          "script_node_id": "worker_script:busy"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "quiet",
+        "name": "quiet",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "q1",
+        "props": {
+          "script_node_id": "worker_script:quiet"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "quiet.acme.workers.dev",
+        "name": "quiet.acme.workers.dev",
+        "props": {
+          "script": "quiet"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "pinned",
+        "name": "pinned",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "p1",
+        "props": {
+          "script_node_id": "worker_script:pinned"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "p1-pinned.acme.workers.dev",
+        "name": "p1-pinned.acme.workers.dev",
+        "props": {
+          "script": "pinned",
+          "kind": "version",
+          "version_id": "p1",
+          "alias": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "half",
+        "name": "half",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "h1",
+        "props": {
+          "script_node_id": "worker_script:half"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "half.acme.workers.dev",
+        "name": "half.acme.workers.dev",
+        "props": {
+          "script": "half"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-half",
+        "name": "half.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "half.example.com/*",
+          "script": "half"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "orders",
+        "name": "orders"
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:busy",
+        "dst": "worker_version:b1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:b1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:quiet",
+        "dst": "worker_version:q1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:q1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:quiet.acme.workers.dev",
+        "dst": "worker_script:quiet"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:pinned",
+        "dst": "worker_version:p1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:p1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:p1-pinned.acme.workers.dev",
+        "dst": "worker_version:p1"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:half",
+        "dst": "worker_version:h1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:h1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:half.acme.workers.dev",
+        "dst": "worker_script:half"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-half",
+        "dst": "worker_script:half"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "workers_dev:quiet.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_preview_url:p1-pinned.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "workers_dev:half.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_route:r-half",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "worker_script:busy",
+        "name": "invocations_30d",
+        "value": 50
+      },
+      {
+        "node": "worker_script:quiet",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:pinned",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:half",
+        "name": "invocations_30d",
+        "value": 0
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-009:worker_script:quiet",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-009:worker_script:pinned",
+        "decided": false
+      }
+    ]
+  },
+  {
     "rule": "CF-010",
     "name": "negative-restricted-audience",
     "description": "Every policy on the app in front of a Worker with a D1 binding narrows who may sign in, or is no Allow policy: Everyone with a required email domain, an IdP group, the corporate IdP as login method, a group of the corporate domain, a Bypass (CF-011), Service Auth and a Block.\n",
