@@ -1790,6 +1790,570 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-007",
+    "name": "negative-no-shared-origin",
+    "description": "No unproxied record shares an address with a proxied one: different addresses, both records proxied, both unproxied, an unknown proxy status, a CNAME, and malformed content that only looks like an address.\n",
+    "nodes": [
+      {
+        "type": "dns_record",
+        "id": "p1",
+        "name": "a.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.10",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u1",
+        "name": "a-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.11",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p2",
+        "name": "b.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.20",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p2b",
+        "name": "b2.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.20",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u3",
+        "name": "c.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.30",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u3b",
+        "name": "c2.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.30",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p4",
+        "name": "d.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.40",
+          "proxied": null,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u4",
+        "name": "d-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.40",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p5",
+        "name": "e.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.50",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u5",
+        "name": "e-alias.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "CNAME",
+          "content": "203.0.113.50",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p6",
+        "name": "f.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.060",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u6",
+        "name": "f-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.060",
+          "proxied": false,
+          "ttl": 300
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-007",
+    "name": "negative-not-an-origin-address",
+    "description": "Proxied and unproxied records share addresses that no one can reach as an origin: Cloudflare's ranges (including the last address of 104.24.0.0/14 and the /29 2a06:98c0::/29), the originless placeholders, the Mesh range, private and loopback addresses.\n",
+    "nodes": [
+      {
+        "type": "dns_record",
+        "id": "p1",
+        "name": "a.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "104.27.255.255",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u1",
+        "name": "a-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "104.27.255.255",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p2",
+        "name": "b.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "AAAA",
+          "content": "2a06:98c7::1",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u2",
+        "name": "b-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "AAAA",
+          "content": "2a06:98c7::1",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p3",
+        "name": "c.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "192.0.2.0",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u3",
+        "name": "c-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "192.0.2.0",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p4",
+        "name": "d.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "AAAA",
+          "content": "100::",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u4",
+        "name": "d-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "AAAA",
+          "content": "100::",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p5",
+        "name": "e.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "100.96.0.12",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u5",
+        "name": "e-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "100.96.0.12",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p6",
+        "name": "f.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "10.1.2.3",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u6",
+        "name": "f-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "10.1.2.3",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "p7",
+        "name": "g.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "AAAA",
+          "content": "::1",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "u7",
+        "name": "g-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "AAAA",
+          "content": "::1",
+          "proxied": false,
+          "ttl": 300
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-007",
+    "name": "positive-bypasses-access",
+    "description": "Access protects app.example.com through an exact target and wiki.example.com through *.example.com; unproxied records reach both origins directly (high). The wildcard does not cover a.b.example.com, so that bypass stays medium.\n",
+    "nodes": [
+      {
+        "type": "dns_record",
+        "id": "rec-app",
+        "name": "app.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "198.51.100.7",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-app-direct",
+        "name": "app-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "198.51.100.7",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-wiki",
+        "name": "Wiki.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "198.51.100.8",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-wiki-direct",
+        "name": "wiki-origin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "198.51.100.8",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-deep",
+        "name": "a.b.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "198.51.100.9",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-deep-direct",
+        "name": "deep-origin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "198.51.100.9",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-1",
+        "name": "App",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "app.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-2",
+        "name": "Intranet",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-007:dns_record:rec-app-direct",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-007:dns_record:rec-wiki-direct",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-007:dns_record:rec-deep-direct",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-007",
+    "name": "positive-origin-behind-unproxied-record",
+    "description": "www is proxied; origin.example.com points to the same IPv4 address without the proxy, and an AAAA pair does the same in another zone. 104.28.0.1 lies just past the Cloudflare range 104.24.0.0/14, so it is an origin address.\n",
+    "nodes": [
+      {
+        "type": "dns_record",
+        "id": "rec-www",
+        "name": "www.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.10",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-origin",
+        "name": "origin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "203.0.113.10",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-shop6",
+        "name": "shop.example.net",
+        "props": {
+          "zone_id": "z2",
+          "type": "AAAA",
+          "content": "2001:db8:5::10",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-direct6",
+        "name": "direct.example.org",
+        "props": {
+          "zone_id": "z3",
+          "type": "AAAA",
+          "content": "2001:DB8:5::10",
+          "proxied": false,
+          "ttl": 300
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-edge",
+        "name": "edge.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "104.28.0.1",
+          "proxied": true,
+          "ttl": 1
+        }
+      },
+      {
+        "type": "dns_record",
+        "id": "rec-edge-direct",
+        "name": "edge-direct.example.com",
+        "props": {
+          "zone_id": "z1",
+          "type": "A",
+          "content": "104.28.0.1",
+          "proxied": false,
+          "ttl": 300
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-007:dns_record:rec-origin",
+        "severity": "medium"
+      },
+      {
+        "fingerprint": "CF-007:dns_record:rec-direct6",
+        "severity": "medium"
+      },
+      {
+        "fingerprint": "CF-007:dns_record:rec-edge-direct",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
     "rule": "CF-009",
     "name": "negative-no-production-binding",
     "description": "Evaluated on 2026-10-29; all three Workers are idle and old. One binds only its own KV namespace. One binds the shared database only from a version with 0 % of traffic. One binds a bucket that only a Pages preview environment and another idle Worker use. A store bound only by idle workloads is not in production use.\n",

@@ -1,0 +1,20 @@
+# Source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/
+# (id, name, type, content, proxied, ttl)
+# Cloudflare ranges: https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6
+# Graph shape: docs/architecture/graph-contract.md, dns_record
+description: >
+  www is proxied; origin.example.com points to the same IPv4 address without
+  the proxy, and an AAAA pair does the same in another zone. 104.28.0.1 lies
+  just past the Cloudflare range 104.24.0.0/14, so it is an origin address.
+nodes:
+  - { type: dns_record, id: rec-www, name: www.example.com, props: { zone_id: z1, type: A, content: 203.0.113.10, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: rec-origin, name: origin.example.com, props: { zone_id: z1, type: A, content: 203.0.113.10, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: rec-shop6, name: shop.example.net, props: { zone_id: z2, type: AAAA, content: "2001:db8:5::10", proxied: true, ttl: 1 } }
+  - { type: dns_record, id: rec-direct6, name: direct.example.org, props: { zone_id: z3, type: AAAA, content: "2001:DB8:5::10", proxied: false, ttl: 300 } }
+  - { type: dns_record, id: rec-edge, name: edge.example.com, props: { zone_id: z1, type: A, content: 104.28.0.1, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: rec-edge-direct, name: edge-direct.example.com, props: { zone_id: z1, type: A, content: 104.28.0.1, proxied: false, ttl: 300 } }
+edges: []
+expect:
+  - { fingerprint: "CF-007:dns_record:rec-origin", severity: medium }
+  - { fingerprint: "CF-007:dns_record:rec-direct6", severity: medium }
+  - { fingerprint: "CF-007:dns_record:rec-edge-direct", severity: medium }
