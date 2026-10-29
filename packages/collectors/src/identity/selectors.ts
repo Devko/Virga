@@ -35,18 +35,25 @@ export const EVERYONE_ID = nodeId("everyone", "everyone");
 
 const other = (rule: unknown): Selector => ({ kind: "other", value: bounded(rule) });
 
+// Emails, domains, IDs and group names are far shorter; a longer value is not one of them.
+const MAX_VALUE = 512;
+const short = (value: unknown): string | null => {
+  const v = str(value);
+  return v !== null && v.length <= MAX_VALUE ? v : null;
+};
+
 function text(
   kind: Exclude<SelectorKind, "idp_group" | "other">,
   value: unknown,
   rule: unknown,
 ): Selector {
-  const v = str(value);
+  const v = short(value);
   return v === null ? other(rule) : { kind, value: v };
 }
 
 function idpGroup(idp: unknown, name: string | null, rule: unknown): Selector {
-  const id = str(idp);
-  return id === null || name === null
+  const id = short(idp);
+  return id === null || name === null || name.length > MAX_VALUE
     ? other(rule)
     : { kind: "idp_group", value: { idp: id, name } };
 }

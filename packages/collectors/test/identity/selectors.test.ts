@@ -73,6 +73,14 @@ describe("selector", () => {
   it.each(others)("maps %j to other with the raw rule", (rule) => {
     expect(selector(rule)).toEqual({ kind: "other", value: rule });
   });
+
+  it("maps an overlong value to other with a bounded raw rule", () => {
+    const long = `${"a".repeat(600)}@example.com`;
+    const s = selector({ email: { email: long } });
+    expect(s.kind).toBe("other");
+    expect(JSON.stringify(s).length).toBeLessThan(400);
+    expect(selector({ okta: { identity_provider_id: IDP, name: long } }).kind).toBe("other");
+  });
 });
 
 describe("selectors", () => {

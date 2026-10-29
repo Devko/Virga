@@ -16,6 +16,7 @@ export type Target =
 const other = (raw: unknown): Target => ({ kind: "other", raw: bounded(raw) });
 
 const LABEL = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?$/;
+const MAX_PATH = 1024;
 
 const isHostname = (host: string): boolean =>
   host.length <= 253 && host.split(".").every((label) => label.length <= 63 && LABEL.test(label));
@@ -33,7 +34,7 @@ export function hostTarget(value: string, raw: unknown = value): Target {
   const host = (slash < 0 ? text : text.slice(0, slash)).toLowerCase();
   let path = slash < 0 ? "" : text.slice(slash);
   const bare = host.startsWith("*.") ? host.slice(2) : host;
-  if (!isHostname(bare) || /[?#]/.test(path)) return other(raw);
+  if (!isHostname(bare) || /[?#]/.test(path) || path.length > MAX_PATH) return other(raw);
   if (path.endsWith("/*")) path = path.slice(0, -2);
   if (path.includes("*")) return other(raw);
   path = path.replace(/\/+$/, "");

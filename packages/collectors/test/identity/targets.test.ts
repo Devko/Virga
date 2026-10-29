@@ -43,6 +43,11 @@ describe("hostTarget", () => {
   it.each(unplaceable)("maps %j to other", (input) => {
     expect(hostTarget(input)).toEqual({ kind: "other", raw: input });
   });
+
+  it("maps an overlong host or path to other", () => {
+    expect(hostTarget(`${"a".repeat(64)}.example.com`).kind).toBe("other");
+    expect(hostTarget(`example.com/${"p".repeat(2000)}`).kind).toBe("other");
+  });
 });
 
 describe("appTargets", () => {
