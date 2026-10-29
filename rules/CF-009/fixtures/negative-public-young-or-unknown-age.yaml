@@ -1,0 +1,36 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/list/ (created_on)
+# Graph shape: docs/architecture/graph-contract.md, worker_script, workers_dev, exposure, invocations_30d signal
+description: >
+  Evaluated on 2026-10-29. Three idle Workers bind the database that a busy
+  Worker uses. One is public through workers.dev (CF-001 or CF-006 decide
+  about it), one is 19 days old, and one has no known creation date.
+params: { now_ms: 1793232000000 }
+nodes:
+  - { type: worker_script, id: busy, name: busy, props: { created_on: "2025-01-01T00:00:00.000Z" } }
+  - { type: worker_version, id: b1, props: { script_node_id: "worker_script:busy" } }
+  - { type: worker_script, id: public-idle, name: public-idle, props: { created_on: "2025-01-01T00:00:00.000Z", workers_dev: true } }
+  - { type: worker_version, id: p1, props: { script_node_id: "worker_script:public-idle" } }
+  - { type: workers_dev, id: public-idle.example.workers.dev, name: public-idle.example.workers.dev, props: { script: public-idle } }
+  - { type: worker_script, id: young, name: young, props: { created_on: "2026-10-10T00:00:00.000Z" } }
+  - { type: worker_version, id: y1, props: { script_node_id: "worker_script:young" } }
+  - { type: worker_script, id: undated, name: undated, props: { created_on: null } }
+  - { type: worker_version, id: u1, props: { script_node_id: "worker_script:undated" } }
+  - { type: d1_database, id: orders, name: orders }
+edges:
+  - { type: DEPLOYS, src: "worker_script:busy", dst: "worker_version:b1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:b1", dst: "d1_database:orders", key: DB, props: { binding_type: d1 } }
+  - { type: DEPLOYS, src: "worker_script:public-idle", dst: "worker_version:p1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:p1", dst: "d1_database:orders", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "workers_dev:public-idle.example.workers.dev", dst: "worker_script:public-idle" }
+  - { type: DEPLOYS, src: "worker_script:young", dst: "worker_version:y1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:y1", dst: "d1_database:orders", key: DB, props: { binding_type: d1 } }
+  - { type: DEPLOYS, src: "worker_script:undated", dst: "worker_version:u1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:u1", dst: "d1_database:orders", key: DB, props: { binding_type: d1 } }
+exposure:
+  - { entry: "workers_dev:public-idle.example.workers.dev", decision: public, confidence: 2 }
+signals:
+  - { node: "worker_script:busy", name: invocations_30d, value: 50 }
+  - { node: "worker_script:public-idle", name: invocations_30d, value: 0 }
+  - { node: "worker_script:young", name: invocations_30d, value: 0 }
+  - { node: "worker_script:undated", name: invocations_30d, value: 0 }
+expect: []

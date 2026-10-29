@@ -893,6 +893,607 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-003",
+    "name": "negative-read-only-or-restricted",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires. Read permissions only; a risky write permission limited to an IP range; a write permission outside the risky list; and a risky permission that a policy denies.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "a0000000000000000000000000000001",
+        "name": "inventory",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-r1",
+                  "name": "Workers Scripts Read"
+                },
+                {
+                  "id": "pg-r2",
+                  "name": "DNS Read"
+                },
+                {
+                  "id": "pg-r3",
+                  "name": "Access: Apps and Policies Read"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "a0000000000000000000000000000002",
+        "name": "ci-from-runners",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "198.51.100.0/24",
+              "2001:db8::/32"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "a0000000000000000000000000000003",
+        "name": "cache-writer",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-w1",
+                  "name": "Workers KV Storage Write"
+                },
+                {
+                  "id": "pg-w2",
+                  "name": "DNS Firewall Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "a0000000000000000000000000000004",
+        "name": "denied",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "deny",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            },
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-z",
+                  "name": "Zone Read"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": {
+                  "com.cloudflare.api.account.zone.*": "*"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-003",
+    "name": "negative-scan-clock",
+    "description": "Without a now_ms override, time runs from the fixture scan's start at epoch 1 ms. This token expires 59 days after it, so it is not long-lived.\n",
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "c0000000000000000000000000000001",
+        "name": "short-by-scan-clock",
+        "props": {
+          "status": "active",
+          "issued_on": "1970-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": "1970-03-01T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-003",
+    "name": "negative-short-lived-or-inactive",
+    "description": "Evaluated on 2026-10-29. Risky write permissions, but one token expires in 33 days, one in exactly 90 days (the limit itself is not long-lived), one is disabled and one expired. An unparseable expiry is not treated as none.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "b0000000000000000000000000000001",
+        "name": "short",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": "2026-12-01T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-3",
+                  "name": "DNS Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.zone.*": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "b0000000000000000000000000000002",
+        "name": "at-the-limit",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-29T00:00:00Z",
+          "modified_on": null,
+          "expires_on": "2027-01-27T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "b0000000000000000000000000000003",
+        "name": "disabled",
+        "props": {
+          "status": "disabled",
+          "issued_on": "2025-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-9",
+                  "name": "Zero Trust Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "b0000000000000000000000000000004",
+        "name": "expired",
+        "props": {
+          "status": "expired",
+          "issued_on": "2025-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": "2026-01-01T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-10",
+                  "name": "Account API Tokens Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "b0000000000000000000000000000005",
+        "name": "odd-expiry",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": "next year",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-003",
+    "name": "positive-long-lived-write-tokens",
+    "description": "Evaluated on 2026-10-29. Five active, unrestricted tokens with risky write permissions: one without expiry (high); one whose DNS grant covers all zones of the account (critical); one with the dashboard name of an Access permission, unused for 120 days (critical); one never used since it was issued in May (critical); one with only a not_in IP list (high).\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f",
+        "name": "deploy-ci",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-10T09:00:00Z",
+          "modified_on": "2026-01-10T09:00:00Z",
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                },
+                {
+                  "id": "pg-2",
+                  "name": "Account Settings Read"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+        "name": "dns-bot",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-06-01T00:00:00Z",
+          "modified_on": "2026-06-01T00:00:00Z",
+          "expires_on": "2027-06-01T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-3",
+                  "name": "DNS Write"
+                },
+                {
+                  "id": "pg-4",
+                  "name": "Zone Read"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": {
+                  "com.cloudflare.api.account.zone.*": "*"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e",
+        "name": "access-admin",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-02-01T00:00:00Z",
+          "modified_on": "2026-02-01T00:00:00Z",
+          "expires_on": "2027-10-01T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-5",
+                  "name": "Access: Apps and Policies Edit"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f",
+        "name": "logpush",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-05-01T00:00:00Z",
+          "modified_on": "2026-05-01T00:00:00Z",
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-6",
+                  "name": "Logs Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+        "name": "secrets-sync",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-09-01T00:00:00Z",
+          "modified_on": "2026-09-01T00:00:00Z",
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [],
+            "not_in": [
+              "203.0.113.0/24"
+            ]
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-7",
+                  "name": "Secrets Store Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "account_token:0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e",
+        "name": "last_used_on",
+        "value": 1782864000000
+      },
+      {
+        "node": "account_token:4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+        "name": "last_used_on",
+        "value": 1793145600000
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-003:account_token:0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-003:account_token:2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-003:account_token:3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-003:account_token:4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-003",
+    "name": "positive-scan-clock",
+    "description": "Without a now_ms override the rule measures time from the start of the current scan. Fixtures load in a scan that starts at epoch 1 ms, so the token below expires 151 days after it: long-lived.\n",
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+        "name": "routes",
+        "props": {
+          "status": "active",
+          "issued_on": "1970-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": "1970-06-01T00:00:00Z",
+          "not_before": null,
+          "ip_condition": null,
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-8",
+                  "name": "Workers Routes Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.zone.22b1de5f1c0e4b3ea97bb1e963b06a43": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "account_token:5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+        "name": "last_used_on",
+        "value": 0
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-003:account_token:5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-004",
     "name": "negative-http-status-origin",
     "description": "A public hostname whose ingress rule only answers with a fixed status code.",
@@ -1185,6 +1786,624 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "fingerprint": "CF-004:tunnel_hostname:remote.example.com/desk",
         "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-009",
+    "name": "negative-no-production-binding",
+    "description": "Evaluated on 2026-10-29; all three Workers are idle and old. One binds only its own KV namespace. One binds the shared database only from a version with 0 % of traffic. One binds a bucket that only a Pages preview environment and another idle Worker use. A store bound only by idle workloads is not in production use.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "busy",
+        "name": "busy",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "b1",
+        "props": {
+          "script_node_id": "worker_script:busy"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "lonely",
+        "name": "lonely",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "l1",
+        "props": {
+          "script_node_id": "worker_script:lonely"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "gradual",
+        "name": "gradual",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "g-old",
+        "props": {
+          "script_node_id": "worker_script:gradual"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "g-new",
+        "props": {
+          "script_node_id": "worker_script:gradual"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "preview-sync",
+        "name": "preview-sync",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "ps1",
+        "props": {
+          "script_node_id": "worker_script:preview-sync"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "site",
+        "name": "site",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "site.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "orders",
+        "name": "orders"
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-lonely",
+        "name": "lonely-cache"
+      },
+      {
+        "type": "r2_bucket",
+        "id": "preview-assets",
+        "name": "preview-assets"
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:busy",
+        "dst": "worker_version:b1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:b1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:lonely",
+        "dst": "worker_version:l1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:l1",
+        "dst": "kv_namespace:kv-lonely",
+        "key": "CACHE",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:gradual",
+        "dst": "worker_version:g-old",
+        "props": {
+          "percentage": 0
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:gradual",
+        "dst": "worker_version:g-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:g-old",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:preview-sync",
+        "dst": "worker_version:ps1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:ps1",
+        "dst": "r2_bucket:preview-assets",
+        "key": "ASSETS",
+        "props": {
+          "binding_type": "r2_bucket"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:l1",
+        "dst": "r2_bucket:preview-assets",
+        "key": "ASSETS",
+        "props": {
+          "binding_type": "r2_bucket"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:site",
+        "dst": "r2_bucket:preview-assets",
+        "key": "preview:ASSETS",
+        "props": {
+          "binding_type": "r2_bucket",
+          "environment": "preview"
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "worker_script:busy",
+        "name": "invocations_30d",
+        "value": 50
+      },
+      {
+        "node": "worker_script:lonely",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:gradual",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:preview-sync",
+        "name": "invocations_30d",
+        "value": 0
+      }
+    ],
+    "expect": []
+  },
+  {
+    "rule": "CF-009",
+    "name": "negative-public-young-or-unknown-age",
+    "description": "Evaluated on 2026-10-29. Three idle Workers bind the database that a busy Worker uses. One is public through workers.dev (CF-001 or CF-006 decide about it), one is 19 days old, and one has no known creation date.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "busy",
+        "name": "busy",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "b1",
+        "props": {
+          "script_node_id": "worker_script:busy"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "public-idle",
+        "name": "public-idle",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "p1",
+        "props": {
+          "script_node_id": "worker_script:public-idle"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "public-idle.example.workers.dev",
+        "name": "public-idle.example.workers.dev",
+        "props": {
+          "script": "public-idle"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "young",
+        "name": "young",
+        "props": {
+          "created_on": "2026-10-10T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "y1",
+        "props": {
+          "script_node_id": "worker_script:young"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "undated",
+        "name": "undated",
+        "props": {
+          "created_on": null
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "u1",
+        "props": {
+          "script_node_id": "worker_script:undated"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "orders",
+        "name": "orders"
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:busy",
+        "dst": "worker_version:b1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:b1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:public-idle",
+        "dst": "worker_version:p1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:p1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:public-idle.example.workers.dev",
+        "dst": "worker_script:public-idle"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:young",
+        "dst": "worker_version:y1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:y1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:undated",
+        "dst": "worker_version:u1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:u1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "workers_dev:public-idle.example.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "worker_script:busy",
+        "name": "invocations_30d",
+        "value": 50
+      },
+      {
+        "node": "worker_script:public-idle",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:young",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:undated",
+        "name": "invocations_30d",
+        "value": 0
+      }
+    ],
+    "expect": []
+  },
+  {
+    "rule": "CF-009",
+    "name": "positive-idle-worker-with-production-data",
+    "description": "Evaluated on 2026-10-29. old-export has had no invocations for 30 days but still binds the D1 database that the busy shop-api uses. nightly-sync has no traffic signal at all, which means no invocations, and binds the R2 bucket of a Pages production deployment. The busy Worker itself is not idle, and its public route does not matter here.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "old-export",
+        "name": "old-export",
+        "props": {
+          "created_on": "2025-03-01T10:00:00.000Z",
+          "modified_on": "2025-03-02T10:00:00.000Z",
+          "workers_dev": false,
+          "preview_urls": false
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "oe1",
+        "props": {
+          "script_node_id": "worker_script:old-export"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "shop-api",
+        "name": "shop-api",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "workers_dev": false,
+          "preview_urls": false
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "sa1",
+        "props": {
+          "script_node_id": "worker_script:shop-api"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-shop",
+        "name": "shop.example.com/api/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "shop.example.com/api/*",
+          "script": "shop-api"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "nightly-sync",
+        "name": "nightly-sync",
+        "props": {
+          "created_on": "2025-06-01T00:00:00.000Z",
+          "workers_dev": false,
+          "preview_urls": false
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "ns1",
+        "props": {
+          "script_node_id": "worker_script:nightly-sync"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "storefront",
+        "name": "storefront",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "storefront.pages.dev",
+          "preview_deployments": "none"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "7b2c-orders",
+        "name": "orders"
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-export-cache",
+        "name": "export-cache"
+      },
+      {
+        "type": "r2_bucket",
+        "id": "assets",
+        "name": "assets"
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:old-export",
+        "dst": "worker_version:oe1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:oe1",
+        "dst": "d1_database:7b2c-orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:oe1",
+        "dst": "kv_namespace:kv-export-cache",
+        "key": "CACHE",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:shop-api",
+        "dst": "worker_version:sa1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:sa1",
+        "dst": "d1_database:7b2c-orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-shop",
+        "dst": "worker_script:shop-api"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:nightly-sync",
+        "dst": "worker_version:ns1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:ns1",
+        "dst": "r2_bucket:assets",
+        "key": "ASSETS",
+        "props": {
+          "binding_type": "r2_bucket"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:storefront",
+        "dst": "r2_bucket:assets",
+        "key": "production:ASSETS",
+        "props": {
+          "binding_type": "r2_bucket",
+          "environment": "production"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_route:r-shop",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "worker_script:old-export",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:shop-api",
+        "name": "invocations_30d",
+        "value": 120000
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-009:worker_script:old-export",
+        "severity": "low"
+      },
+      {
+        "fingerprint": "CF-009:worker_script:nightly-sync",
+        "severity": "low"
       }
     ]
   },

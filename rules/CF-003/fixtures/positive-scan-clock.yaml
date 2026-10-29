@@ -1,0 +1,26 @@
+# Source: https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, account_token
+description: >
+  Without a now_ms override the rule measures time from the start of the
+  current scan. Fixtures load in a scan that starts at epoch 1 ms, so the
+  token below expires 151 days after it: long-lived.
+nodes:
+  - type: account_token
+    id: 5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+    name: routes
+    props:
+      status: active
+      issued_on: "1970-01-01T00:00:00Z"
+      modified_on: null
+      expires_on: "1970-06-01T00:00:00Z"
+      not_before: null
+      ip_condition: null
+      policies:
+        - effect: allow
+          permission_groups: [{ id: pg-8, name: Workers Routes Write }]
+          resources: { "com.cloudflare.api.account.zone.22b1de5f1c0e4b3ea97bb1e963b06a43": "*" }
+edges: []
+signals:
+  - { node: "account_token:5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", name: last_used_on, value: 0 }
+expect:
+  - { fingerprint: "CF-003:account_token:5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", severity: high }

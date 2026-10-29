@@ -28,6 +28,29 @@ export const RULES: readonly CompiledRule[] = [
     ]
   },
   {
+    "id": "CF-003",
+    "version": 1,
+    "title": "Long-lived account token with a high-risk write permission and no IP restriction",
+    "severity": "high",
+    "kind": "posture",
+    "requires": [
+      "tokens"
+    ],
+    "params": {
+      "max_days": 90,
+      "unused_days": 90,
+      "now_ms": 0
+    },
+    "enriches": null,
+    "sql": "-- An active account token qualifies when\n-- 1. an allow policy grants a write or edit permission group for Workers\n--    scripts or routes, DNS, Access, account settings, API tokens, Logs,\n--    Secrets Store, or Zero Trust (including Tunnel and the Cloudflare One\n--    networks and connectors),\n-- 2. it never expires, or expires more than :max_days days after the\n--    evaluation time, and\n-- 3. no IP condition limits where it may be used from. Only an `in` list\n--    restricts; a `not_in` list alone still admits the rest of the internet.\n-- Critical when the token was not used for :unused_days days (or never, and\n-- was issued that long ago), or when a risky grant covers all zones of the\n-- account. A token without a `last_used_on` signal counts as never used: the\n-- API omits the field for unused tokens, and the tokens class is complete.\n--\n-- Permission groups are matched by name. The API reference calls names\n-- cosmetic and recommends IDs, but documents no ID list. Dashboard names end\n-- in \"Edit\" and API names in \"Write\", so both forms match.\nWITH\nclock(now_ms) AS (\n  SELECT CASE WHEN ? > 0 THEN ? ELSE COALESCE(\n    (SELECT s.started_at FROM scans s JOIN meta m ON m.key = 'current_scan' AND m.value = s.id),\n    0) END\n),\nrisky_group(name) AS (\n  VALUES ('Workers Scripts'), ('Workers Routes'), ('DNS'), ('Account Settings'),\n         ('Account API Tokens'), ('API Tokens'), ('Logs'), ('Secrets Store'), ('Zero Trust'),\n         ('Cloudflare Tunnel'), ('Cloudflare One Networks'), ('Cloudflare One Connectors'),\n         ('Cloudflare One Connector: cloudflared'), ('Cloudflare One Connector: WARP')\n),\nrisky_name(name) AS (\n  SELECT name || ' Write' FROM risky_group\n  UNION ALL\n  SELECT name || ' Edit' FROM risky_group\n),\ntoken AS (\n  SELECT t.id, t.props,\n         unixepoch(t.props ->> '$.expires_on') * 1000 AS expires_ms,\n         unixepoch(t.props ->> '$.issued_on') * 1000  AS issued_ms\n  FROM nodes t\n  WHERE t.type = 'account_token' AND t.deleted_at IS NULL\n    AND t.props ->> '$.status' = 'active'\n    AND COALESCE(json_array_length(t.props, '$.ip_condition.in'), 0) = 0\n),\nlong_lived AS (\n  SELECT tk.*\n  FROM token tk, clock c\n  WHERE tk.props ->> '$.expires_on' IS NULL\n     OR tk.expires_ms > c.now_ms + ? * 86400000\n),\nrisky_grant AS (\n  SELECT ll.id AS token_id,\n         pg.value ->> '$.name' AS permission,\n         EXISTS (\n           SELECT 1 FROM json_tree(pol.value, '$.resources') r\n           WHERE r.key = 'com.cloudflare.api.account.zone.*'\n         ) AS all_zones\n  FROM long_lived ll,\n       json_each(ll.props, '$.policies') pol,\n       json_each(pol.value, '$.permission_groups') pg\n  WHERE pol.value ->> '$.effect' = 'allow'\n    AND (\n      pg.value ->> '$.name' IN (SELECT name FROM risky_name)\n      OR (pg.value ->> '$.name' LIKE 'Access: %'\n          AND (pg.value ->> '$.name' LIKE '% Write' OR pg.value ->> '$.name' LIKE '% Edit'))\n    )\n)\nSELECT\n  'CF-003'                                    AS rule_id,\n  'CF-003:' || rg.token_id                    AS fingerprint,\n  CASE\n    WHEN max(rg.all_zones) = 1 THEN 'critical'\n    WHEN COALESCE(sg.value, ll.issued_ms) < c.now_ms - ? * 86400000 THEN 'critical'\n    ELSE 'high'\n  END                                         AS severity,\n  rg.token_id                                 AS subject_id,\n  json_group_array(DISTINCT rg.permission)    AS permissions,\n  ll.props ->> '$.expires_on'                 AS expires_on,\n  sg.value                                    AS last_used_ms,\n  max(rg.all_zones)                           AS all_zones\nFROM risky_grant rg\nJOIN long_lived ll ON ll.id = rg.token_id\nLEFT JOIN signals sg ON sg.node_id = rg.token_id AND sg.name = 'last_used_on'\nCROSS JOIN clock c\nGROUP BY rg.token_id",
+    "paramOrder": [
+      "now_ms",
+      "now_ms",
+      "max_days",
+      "unused_days"
+    ]
+  },
+  {
     "id": "CF-004",
     "version": 1,
     "title": "Published tunnel hostname reachable without Access",
@@ -42,6 +65,32 @@ export const RULES: readonly CompiledRule[] = [
     "enriches": null,
     "sql": "-- A public hostname in the remotely managed ingress of a Cloudflare Tunnel\n-- that the exposure evaluator decides `public` on at least one path prefix.\n-- Critical when the origin is not HTTP: SSH, RDP, SMB, arbitrary TCP, or the\n-- bastion mode, which lets cloudflared reach any local address. `http_status`\n-- origins answer with a fixed status code and expose nothing. `unknown`\n-- exposure never counts; Access is required for the same reason as in CF-021.\n-- One finding per tunnel hostname.\n--\n-- The spec has this rule reference the Security Insight \"Unprotected\n-- Cloudflare Tunnels\" instead of duplicating it. `enriches` stays null for\n-- now: the insights table types insights by API issue_type, a category such\n-- as `exposed_infrastructure`, and the API reference documents no\n-- issue_class for that insight.\nWITH hostname AS (\n  SELECT h.id AS hostname_id,\n         h.props ->> '$.origin_scheme' AS scheme,\n         h.props ->> '$.service'       AS service,\n         r.dst                         AS tunnel_id\n  FROM nodes h\n  LEFT JOIN edges r ON r.src = h.id AND r.type = 'ROUTES_TO' AND r.deleted_at IS NULL\n  WHERE h.type = 'tunnel_hostname' AND h.deleted_at IS NULL\n    AND COALESCE(h.props ->> '$.origin_scheme', '') <> 'http_status'\n)\nSELECT\n  'CF-004'                                   AS rule_id,\n  'CF-004:' || h.hostname_id                 AS fingerprint,\n  CASE\n    WHEN h.scheme IN ('ssh', 'rdp', 'smb', 'tcp') OR h.service = 'bastion' THEN 'critical'\n    ELSE 'high'\n  END                                        AS severity,\n  h.hostname_id                              AS subject_id,\n  h.scheme                                   AS origin_scheme,\n  json_group_array(DISTINCT x.path_prefix)   AS public_paths,\n  json_group_array(DISTINCT h.tunnel_id) FILTER (WHERE h.tunnel_id IS NOT NULL) AS tunnels,\n  min(x.confidence)                          AS exposure_confidence\nFROM hostname h\nJOIN exposure x ON x.entry_id = h.hostname_id AND x.decision = 'public'\nGROUP BY h.hostname_id",
     "paramOrder": []
+  },
+  {
+    "id": "CF-009",
+    "version": 1,
+    "title": "Idle Worker with bindings to production data",
+    "severity": "low",
+    "kind": "posture",
+    "requires": [
+      "workers",
+      "storage",
+      "pages",
+      "traffic",
+      "exposure",
+      "access"
+    ],
+    "params": {
+      "min_age_days": 30,
+      "now_ms": 0
+    },
+    "enriches": null,
+    "sql": "-- A Worker qualifies when\n-- 1. it had no invocations in 30 days across all triggers: the traffic signal\n--    `invocations_30d` is 0 or absent (the GraphQL dataset aggregates\n--    invocations, so a script without any has no row, and the traffic class\n--    is complete),\n-- 2. it was created at least :min_age_days days before the evaluation time,\n-- 3. a version with a traffic share in its deployment binds a data store that\n--    is in production use: another Worker with invocations binds it too, or\n--    the production environment of a Pages project does, and\n-- 4. no entry point of the Worker is decided `public`. Public Workers fall\n--    under CF-001 and CF-006 instead.\n--\n-- Gap: the graph has no marker for production data. \"Also bound by a live\n-- workload\" stands in for it, so a store that only the idle Worker uses is\n-- not reported.\nWITH\nclock(now_ms) AS (\n  SELECT CASE WHEN ? > 0 THEN ? ELSE COALESCE(\n    (SELECT s.started_at FROM scans s JOIN meta m ON m.key = 'current_scan' AND m.value = s.id),\n    0) END\n),\nstore_type(type) AS (\n  VALUES ('r2_bucket'), ('d1_database'), ('kv_namespace'), ('do_namespace'),\n         ('hyperdrive_config'), ('secrets_store_secret')\n),\nscript AS (\n  SELECT s.id AS script_id,\n         COALESCE(sg.value, 0) AS invocations,\n         unixepoch(s.props ->> '$.created_on') * 1000 AS created_ms\n  FROM nodes s\n  LEFT JOIN signals sg ON sg.node_id = s.id AND sg.name = 'invocations_30d'\n  WHERE s.type = 'worker_script' AND s.deleted_at IS NULL\n),\nbinding AS (\n  -- data stores of the versions that serve traffic\n  SELECT d.src AS script_id, b.dst AS store_id\n  FROM edges d\n  JOIN nodes v ON v.id = d.dst AND v.type = 'worker_version' AND v.deleted_at IS NULL\n  JOIN edges b ON b.src = v.id AND b.type = 'BINDS' AND b.deleted_at IS NULL\n  JOIN nodes t ON t.id = b.dst AND t.deleted_at IS NULL\n  WHERE d.type = 'DEPLOYS' AND d.deleted_at IS NULL\n    AND COALESCE(d.props ->> '$.percentage', 100) > 0\n    AND t.type IN (SELECT type FROM store_type)\n),\nproduction_use AS (\n  SELECT b.store_id, b.script_id AS user_id\n  FROM binding b\n  JOIN script s ON s.script_id = b.script_id AND s.invocations > 0\n  UNION\n  SELECT pb.dst, pb.src\n  FROM edges pb\n  JOIN nodes p ON p.id = pb.src AND p.type = 'pages_project' AND p.deleted_at IS NULL\n  JOIN nodes t ON t.id = pb.dst AND t.deleted_at IS NULL\n  WHERE pb.type = 'BINDS' AND pb.deleted_at IS NULL\n    AND pb.props ->> '$.environment' = 'production'\n    AND t.type IN (SELECT type FROM store_type)\n),\npublic_script AS (\n  -- route, Custom Domain, workers.dev\n  SELECT r.dst AS script_id\n  FROM edges r\n  JOIN nodes e ON e.id = r.src AND e.deleted_at IS NULL\n  JOIN nodes s ON s.id = r.dst AND s.type = 'worker_script'\n  JOIN exposure x ON x.entry_id = r.src AND x.decision = 'public'\n  WHERE r.type = 'ROUTES_TO' AND r.deleted_at IS NULL\n  UNION\n  -- version URLs\n  SELECT v.props ->> '$.script_node_id'\n  FROM edges r\n  JOIN nodes e ON e.id = r.src AND e.deleted_at IS NULL\n  JOIN nodes v ON v.id = r.dst AND v.type = 'worker_version'\n  JOIN exposure x ON x.entry_id = r.src AND x.decision = 'public'\n  WHERE r.type = 'ROUTES_TO' AND r.deleted_at IS NULL\n)\nSELECT\n  'CF-009'                                AS rule_id,\n  'CF-009:' || s.script_id                AS fingerprint,\n  'low'                                   AS severity,\n  s.script_id                             AS subject_id,\n  json_group_array(DISTINCT b.store_id)   AS data_stores,\n  json_group_array(DISTINCT pu.user_id)   AS shared_with\nFROM script s\nCROSS JOIN clock c\nJOIN binding b         ON b.script_id = s.script_id\nJOIN production_use pu ON pu.store_id = b.store_id AND pu.user_id <> s.script_id\nWHERE s.invocations = 0\n  AND s.created_ms <= c.now_ms - ? * 86400000\n  AND NOT EXISTS (SELECT 1 FROM public_script ps WHERE ps.script_id = s.script_id)\nGROUP BY s.script_id",
+    "paramOrder": [
+      "now_ms",
+      "now_ms",
+      "min_age_days"
+    ]
   },
   {
     "id": "CF-021",
