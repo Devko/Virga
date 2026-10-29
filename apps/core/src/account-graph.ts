@@ -22,6 +22,14 @@ import { RULES, type RuleHit, runRule } from "@virga/rules";
 import { describe } from "./errors.ts";
 import { checkOutput } from "./graph/chunk.ts";
 import { DEFAULT_EVALUATORS, type Evaluators } from "./graph/evaluators.ts";
+import { getFinding, graphSummary, listFindings, neighborhood } from "./graph/read.ts";
+import type {
+  FindingDetail,
+  FindingFilters,
+  FindingPage,
+  GraphSummary,
+  Neighborhood,
+} from "./graph/views.ts";
 import { STALE_SCAN_MS } from "./scan/policy.ts";
 import type {
   BeginResult,
@@ -170,5 +178,26 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     const rule = RULES.find((r) => r.id === ruleId);
     if (!rule) throw new Error(`unknown rule ${ruleId}`);
     return runRule(this.db, rule, overrides);
+  }
+
+  // Reads for GraphReader.
+
+  scanSummary(): GraphSummary {
+    return graphSummary(this.db);
+  }
+
+  listFindings(filters?: FindingFilters): FindingPage {
+    return listFindings(this.db, filters);
+  }
+
+  getFinding(fingerprint: string): FindingDetail | null {
+    return getFinding(this.db, fingerprint);
+  }
+
+  getNeighborhood(
+    nodeId: string,
+    options?: { depth?: number; limit?: number },
+  ): Neighborhood | null {
+    return neighborhood(this.db, nodeId, options);
   }
 }

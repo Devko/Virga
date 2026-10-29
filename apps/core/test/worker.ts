@@ -11,7 +11,14 @@ import { dnsStub, storageStub } from "./stubs.ts";
  * scan Workflow with stub collectors. Named re-exports, so the plugin sees
  * every class (it does not follow `export *`).
  */
-export { AccountGraph, DispatchWorkflow, default, ScanWorkflow } from "../src/index.ts";
+export {
+  AccountGraph,
+  Admin,
+  DispatchWorkflow,
+  default,
+  GraphReader,
+  ScanWorkflow,
+} from "../src/index.ts";
 
 /**
  * Stands in for the broker's ApiCaller behind the BROKER service binding.
