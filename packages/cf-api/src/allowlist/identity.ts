@@ -4,8 +4,10 @@ import type { ReadRule } from "./types.ts";
  * Reads used by the identity collectors (access, tunnels, tokens, members,
  * insights, traffic). Owned by the identity collectors work package.
  *
- * Deliberately absent: single service tokens and identity providers, and
- * every Access endpoint that is not a listing.
+ * Deliberately absent: tunnel and Mesh node tokens
+ * (`/cfd_tunnel/:tunnel_id/token`, `/warp_connector/:tunnel_id/token`),
+ * single service tokens and identity providers, tunnel connections and
+ * management, and every Access endpoint that is not a listing.
  */
 export const IDENTITY_READS: readonly ReadRule[] = [
   // access
@@ -24,4 +26,11 @@ export const IDENTITY_READS: readonly ReadRule[] = [
     usedBy: "access",
   },
   { method: "GET", pattern: "/accounts/:account_id/workers/workers", usedBy: "access" },
+  // tunnels
+  { method: "GET", pattern: "/accounts/:account_id/tunnels", usedBy: "tunnels" },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/cfd_tunnel/:tunnel_id/configurations",
+    usedBy: "tunnels",
+  },
 ];

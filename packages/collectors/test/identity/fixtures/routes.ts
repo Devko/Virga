@@ -18,6 +18,7 @@ import {
   tokenIdle,
   workers,
 } from "./access.ts";
+import { BLOG, blogConfig, LEGACY, legacyConfig, TUNNELS, tunnelsRoute } from "./tunnels.ts";
 
 const workersList = (q: CfQuery) =>
   envelope(workers, { count: workers.length, page: Number(q.page), per_page: 100, total_pages: 1 });
@@ -35,4 +36,10 @@ export const accessRoutes: Routes = {
   [`${BASE}/access/service_tokens`]: envelope([tokenCi, tokenIdle], listInfo(2)),
   [`${BASE}/access/identity_providers`]: envelope([idpOtp, idpOkta], listInfo(2)),
   [`${BASE}/workers/workers`]: workersList,
+};
+
+export const tunnelsRoutes: Routes = {
+  [`${BASE}/tunnels`]: tunnelsRoute(TUNNELS),
+  [`${BASE}/cfd_tunnel/${BLOG}/configurations`]: envelope(blogConfig),
+  [`${BASE}/cfd_tunnel/${LEGACY}/configurations`]: envelope(legacyConfig),
 };
