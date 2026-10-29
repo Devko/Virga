@@ -1,0 +1,57 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/policies/methods/list/
+# (decision: allow | deny | non_identity | bypass; include rules such as { everyone: {} })
+# Precedence: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
+# Graph shape: docs/architecture/graph-contract.md, access_app targets, access_policy, ALLOWS
+description: >
+  Both Workers have Worker-level Access with a group policy. On the api
+  Worker's domain, a path app bypasses Access for /public; on the shop
+  Worker's domain, a wildcard host app admits everyone. Host and path apps
+  take precedence, so Worker-level Access no longer decides those requests.
+nodes:
+  - { type: worker_script, id: api, name: api }
+  - { type: worker_custom_domain, id: api.example.com, name: api.example.com, props: { zone_id: z1, hostname: api.example.com, service: api, environment: null } }
+  - { type: worker_script, id: shop, name: shop }
+  - { type: worker_custom_domain, id: shop.example.com, name: shop.example.com, props: { zone_id: z1, hostname: shop.example.com, service: shop, environment: null } }
+  - type: access_app
+    id: wa-api
+    name: api (Worker)
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: api, scope: all }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: wa-shop
+    name: shop (Worker)
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: shop, scope: all }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: ha-public
+    name: API public paths
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: /public }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: ha-wildcard
+    name: Everything under example.com
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_policy
+    id: pol-staff
+    name: Staff
+    props: { decision: allow, include: [{ kind: group, value: grp-staff }], require: [], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-bypass
+    name: Public
+    props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-everyone
+    name: Anyone with a login
+    props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+edges:
+  - { type: ROUTES_TO, src: "worker_custom_domain:api.example.com", dst: "worker_script:api" }
+  - { type: ROUTES_TO, src: "worker_custom_domain:shop.example.com", dst: "worker_script:shop" }
+  - { type: ALLOWS, src: "access_policy:pol-staff", dst: "access_app:wa-api", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-staff", dst: "access_app:wa-shop", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-bypass", dst: "access_app:ha-public", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:ha-wildcard", props: { precedence: 1 } }
+exposure:
+  - { entry: "worker_custom_domain:api.example.com", decision: access, confidence: 2 }
+  - { entry: "worker_custom_domain:api.example.com", path: /public, decision: public, confidence: 2 }
+  - { entry: "worker_custom_domain:shop.example.com", decision: access, confidence: 1 }
+expect:
+  - { fingerprint: "CF-002:worker_script:api", severity: high }
+  - { fingerprint: "CF-002:worker_script:shop", severity: high }

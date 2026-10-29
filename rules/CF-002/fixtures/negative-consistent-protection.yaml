@@ -1,0 +1,29 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/list/
+# Graph shape: docs/architecture/graph-contract.md, worker entry points and exposure
+description: >
+  admin is protected on every entry point; a removed route that was public
+  is tombstoned. site keeps /admin behind Access on both of its hosts and is
+  public elsewhere on both, so no protected path is public anywhere.
+nodes:
+  - { type: worker_script, id: admin, name: admin, props: { workers_dev: true } }
+  - { type: worker_custom_domain, id: admin.example.com, name: admin.example.com, props: { zone_id: z1, hostname: admin.example.com, service: admin, environment: null } }
+  - { type: workers_dev, id: admin.acme.workers.dev, name: admin.acme.workers.dev, props: { script: admin } }
+  - { type: worker_route, id: r-old, name: "old.example.com/*", props: { zone_id: z1, pattern: "old.example.com/*", script: admin } }
+  - { type: worker_script, id: site, name: site, props: { workers_dev: true } }
+  - { type: worker_route, id: r-site, name: "https://www.example.com/*", props: { zone_id: z1, pattern: "https://www.example.com/*", script: site } }
+  - { type: workers_dev, id: site.acme.workers.dev, name: site.acme.workers.dev, props: { script: site } }
+edges:
+  - { type: ROUTES_TO, src: "worker_custom_domain:admin.example.com", dst: "worker_script:admin" }
+  - { type: ROUTES_TO, src: "workers_dev:admin.acme.workers.dev", dst: "worker_script:admin" }
+  - { type: ROUTES_TO, src: "worker_route:r-old", dst: "worker_script:admin", deleted: true }
+  - { type: ROUTES_TO, src: "worker_route:r-site", dst: "worker_script:site" }
+  - { type: ROUTES_TO, src: "workers_dev:site.acme.workers.dev", dst: "worker_script:site" }
+exposure:
+  - { entry: "worker_custom_domain:admin.example.com", decision: access, confidence: 2 }
+  - { entry: "workers_dev:admin.acme.workers.dev", decision: access, confidence: 2 }
+  - { entry: "worker_route:r-old", decision: public, confidence: 2 }
+  - { entry: "worker_route:r-site", decision: public, confidence: 2 }
+  - { entry: "worker_route:r-site", path: /admin, decision: access, confidence: 2 }
+  - { entry: "workers_dev:site.acme.workers.dev", decision: public, confidence: 2 }
+  - { entry: "workers_dev:site.acme.workers.dev", path: /admin/, decision: service_auth, confidence: 2 }
+expect: []

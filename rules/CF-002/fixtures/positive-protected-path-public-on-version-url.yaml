@@ -1,0 +1,22 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/list/
+# (metadata.hasPreview; version URLs: https://developers.cloudflare.com/workers/configuration/previews/)
+# Graph shape: docs/architecture/graph-contract.md, worker_route, worker_preview_url, exposure
+description: >
+  A path app protects /admin on the route's host, and the rest of the site is
+  public. A version URL serves the same Worker, and nothing protects /admin
+  there: the version URL's "/" row decides /admin.
+nodes:
+  - { type: worker_script, id: app, name: app, props: { workers_dev: false, preview_urls: true } }
+  - { type: worker_version, id: 0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f, props: { script_node_id: "worker_script:app" } }
+  - { type: worker_route, id: r-app, name: "app.example.com/*", props: { zone_id: z1, pattern: "app.example.com/*", script: app } }
+  - { type: worker_preview_url, id: 0f9e8d7c-app.acme.workers.dev, name: 0f9e8d7c-app.acme.workers.dev, props: { script: app, kind: version, version_id: 0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f, alias: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:app", dst: "worker_version:0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f", props: { percentage: 100 } }
+  - { type: ROUTES_TO, src: "worker_route:r-app", dst: "worker_script:app" }
+  - { type: ROUTES_TO, src: "worker_preview_url:0f9e8d7c-app.acme.workers.dev", dst: "worker_version:0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f" }
+exposure:
+  - { entry: "worker_route:r-app", decision: public, confidence: 2 }
+  - { entry: "worker_route:r-app", path: /admin, decision: access, confidence: 2 }
+  - { entry: "worker_preview_url:0f9e8d7c-app.acme.workers.dev", decision: public, confidence: 2 }
+expect:
+  - { fingerprint: "CF-002:worker_script:app", severity: high }

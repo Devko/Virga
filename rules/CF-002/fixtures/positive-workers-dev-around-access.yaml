@@ -1,0 +1,21 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/list/
+# (subdomain.enabled, subdomain.url, references.domains)
+# Worker-level Access and its scope: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
+# Graph shape: docs/architecture/graph-contract.md, worker_custom_domain, workers_dev, exposure
+description: >
+  Access protects the Custom Domain of the admin Worker, but workers.dev is
+  still enabled and public, so the same code answers there without Access.
+nodes:
+  - { type: worker_script, id: admin, name: admin, props: { workers_dev: true, preview_urls: false } }
+  - { type: worker_version, id: a1, props: { script_node_id: "worker_script:admin" } }
+  - { type: worker_custom_domain, id: admin.example.com, name: admin.example.com, props: { zone_id: z1, hostname: admin.example.com, service: admin, environment: null } }
+  - { type: workers_dev, id: admin.acme.workers.dev, name: admin.acme.workers.dev, props: { script: admin } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:admin", dst: "worker_version:a1", props: { percentage: 100 } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:admin.example.com", dst: "worker_script:admin" }
+  - { type: ROUTES_TO, src: "workers_dev:admin.acme.workers.dev", dst: "worker_script:admin" }
+exposure:
+  - { entry: "worker_custom_domain:admin.example.com", decision: access, confidence: 2 }
+  - { entry: "workers_dev:admin.acme.workers.dev", decision: public, confidence: 2 }
+expect:
+  - { fingerprint: "CF-002:worker_script:admin", severity: high }

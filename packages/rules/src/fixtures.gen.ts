@@ -893,6 +893,942 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-002",
+    "name": "negative-consistent-protection",
+    "description": "admin is protected on every entry point; a removed route that was public is tombstoned. site keeps /admin behind Access on both of its hosts and is public elsewhere on both, so no protected path is public anywhere.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "admin",
+        "name": "admin",
+        "props": {
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "admin.example.com",
+        "name": "admin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "admin.example.com",
+          "service": "admin",
+          "environment": null
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "admin.acme.workers.dev",
+        "name": "admin.acme.workers.dev",
+        "props": {
+          "script": "admin"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-old",
+        "name": "old.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "old.example.com/*",
+          "script": "admin"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "site",
+        "name": "site",
+        "props": {
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-site",
+        "name": "https://www.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "https://www.example.com/*",
+          "script": "site"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "site.acme.workers.dev",
+        "name": "site.acme.workers.dev",
+        "props": {
+          "script": "site"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:admin.example.com",
+        "dst": "worker_script:admin"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:admin.acme.workers.dev",
+        "dst": "worker_script:admin"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-old",
+        "dst": "worker_script:admin",
+        "deleted": true
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-site",
+        "dst": "worker_script:site"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:site.acme.workers.dev",
+        "dst": "worker_script:site"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:admin.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:admin.acme.workers.dev",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-old",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-site",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-site",
+        "path": "/admin",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:site.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:site.acme.workers.dev",
+        "path": "/admin/",
+        "decision": "service_auth",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-002",
+    "name": "negative-host-app-without-override",
+    "description": "plain has a bypass host app but no Worker-level Access to override. deep has Worker-level Access, and the wildcard app that admits everyone does not cover its two-label subdomain. strict has Worker-level Access and a host app whose only policy is limited to an email domain.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "plain",
+        "name": "plain"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "plain.example.com",
+        "name": "plain.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "plain.example.com",
+          "service": "plain",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "deep",
+        "name": "deep"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "a.b.example.com",
+        "name": "a.b.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "a.b.example.com",
+          "service": "deep",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "strict",
+        "name": "strict"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "strict.example.org",
+        "name": "strict.example.org",
+        "props": {
+          "zone_id": "z2",
+          "hostname": "strict.example.org",
+          "service": "strict",
+          "environment": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-plain",
+        "name": "plain bypass",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "plain.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-deep",
+        "name": "deep (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "deep",
+              "scope": "all"
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-wildcard",
+        "name": "Everything one level under example.com",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-strict",
+        "name": "strict (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "strict",
+              "scope": "all"
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-strict",
+        "name": "strict host",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "strict.example.org",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Anyone",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-corp",
+        "name": "Corp",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "email_domain",
+              "value": "example.com"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:plain.example.com",
+        "dst": "worker_script:plain"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:a.b.example.com",
+        "dst": "worker_script:deep"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:strict.example.org",
+        "dst": "worker_script:strict"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:ha-plain",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:wa-deep",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:ha-wildcard",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:wa-strict",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:ha-strict",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:plain.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:a.b.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:strict.example.org",
+        "decision": "access",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-002",
+    "name": "negative-unknown-or-all-public",
+    "description": "blog is public on every entry point, which is not a protection gap (CF-006 judges public Workers). tool is protected on its domain, but the evaluator could not decide workers.dev and has no row for the version URL; unknown is never public.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "blog",
+        "name": "blog"
+      },
+      {
+        "type": "worker_route",
+        "id": "r-blog",
+        "name": "blog.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "blog.example.com/*",
+          "script": "blog"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "blog.acme.workers.dev",
+        "name": "blog.acme.workers.dev",
+        "props": {
+          "script": "blog"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "tool",
+        "name": "tool"
+      },
+      {
+        "type": "worker_version",
+        "id": "t1",
+        "props": {
+          "script_node_id": "worker_script:tool"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "tool.example.com",
+        "name": "tool.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "tool.example.com",
+          "service": "tool",
+          "environment": null
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "tool.acme.workers.dev",
+        "name": "tool.acme.workers.dev",
+        "props": {
+          "script": "tool"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "t1-tool.acme.workers.dev",
+        "name": "t1-tool.acme.workers.dev",
+        "props": {
+          "script": "tool",
+          "kind": "version",
+          "version_id": "t1",
+          "alias": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-blog",
+        "dst": "worker_script:blog"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:blog.acme.workers.dev",
+        "dst": "worker_script:blog"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:tool.example.com",
+        "dst": "worker_script:tool"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:tool.acme.workers.dev",
+        "dst": "worker_script:tool"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:t1-tool.acme.workers.dev",
+        "dst": "worker_version:t1"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_route:r-blog",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:blog.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:tool.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:tool.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-002",
+    "name": "positive-host-app-overrides-worker-access",
+    "description": "Both Workers have Worker-level Access with a group policy. On the api Worker's domain, a path app bypasses Access for /public; on the shop Worker's domain, a wildcard host app admits everyone. Host and path apps take precedence, so Worker-level Access no longer decides those requests.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "api.example.com",
+        "name": "api.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "api.example.com",
+          "service": "api",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "shop",
+        "name": "shop"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "shop.example.com",
+        "name": "shop.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "shop.example.com",
+          "service": "shop",
+          "environment": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-api",
+        "name": "api (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "api",
+              "scope": "all"
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-shop",
+        "name": "shop (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "shop",
+              "scope": "all"
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-public",
+        "name": "API public paths",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "api.example.com",
+              "path": "/public"
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-wildcard",
+        "name": "Everything under example.com",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-staff",
+        "name": "Staff",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-staff"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Anyone with a login",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:api.example.com",
+        "dst": "worker_script:api"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:shop.example.com",
+        "dst": "worker_script:shop"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-staff",
+        "dst": "access_app:wa-api",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-staff",
+        "dst": "access_app:wa-shop",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:ha-public",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:ha-wildcard",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:api.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:api.example.com",
+        "path": "/public",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:shop.example.com",
+        "decision": "access",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:api",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-002:worker_script:shop",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-002",
+    "name": "positive-protected-path-public-on-version-url",
+    "description": "A path app protects /admin on the route's host, and the rest of the site is public. A version URL serves the same Worker, and nothing protects /admin there: the version URL's \"/\" row decides /admin.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "app",
+        "name": "app",
+        "props": {
+          "workers_dev": false,
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f",
+        "props": {
+          "script_node_id": "worker_script:app"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-app",
+        "name": "app.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "app.example.com/*",
+          "script": "app"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "0f9e8d7c-app.acme.workers.dev",
+        "name": "0f9e8d7c-app.acme.workers.dev",
+        "props": {
+          "script": "app",
+          "kind": "version",
+          "version_id": "0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f",
+          "alias": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:app",
+        "dst": "worker_version:0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-app",
+        "dst": "worker_script:app"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:0f9e8d7c-app.acme.workers.dev",
+        "dst": "worker_version:0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_route:r-app",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-app",
+        "path": "/admin",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_preview_url:0f9e8d7c-app.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:app",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-002",
+    "name": "positive-workers-dev-around-access",
+    "description": "Access protects the Custom Domain of the admin Worker, but workers.dev is still enabled and public, so the same code answers there without Access.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "admin",
+        "name": "admin",
+        "props": {
+          "workers_dev": true,
+          "preview_urls": false
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "a1",
+        "props": {
+          "script_node_id": "worker_script:admin"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "admin.example.com",
+        "name": "admin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "admin.example.com",
+          "service": "admin",
+          "environment": null
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "admin.acme.workers.dev",
+        "name": "admin.acme.workers.dev",
+        "props": {
+          "script": "admin"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:admin",
+        "dst": "worker_version:a1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:admin.example.com",
+        "dst": "worker_script:admin"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:admin.acme.workers.dev",
+        "dst": "worker_script:admin"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:admin.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:admin.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:admin",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-003",
     "name": "negative-read-only-or-restricted",
     "description": "Evaluated on 2026-10-29; none of these tokens expires. Read permissions only; a risky write permission limited to an IP range; a write permission outside the risky list; and a risky permission that a policy denies.\n",
