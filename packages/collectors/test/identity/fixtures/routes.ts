@@ -18,6 +18,7 @@ import {
   tokenIdle,
   workers,
 } from "./access.ts";
+import { TOKENS, tokensRoute } from "./tokens.ts";
 import { BLOG, blogConfig, LEGACY, legacyConfig, TUNNELS, tunnelsRoute } from "./tunnels.ts";
 
 const workersList = (q: CfQuery) =>
@@ -43,3 +44,5 @@ export const tunnelsRoutes: Routes = {
   [`${BASE}/cfd_tunnel/${BLOG}/configurations`]: envelope(blogConfig),
   [`${BASE}/cfd_tunnel/${LEGACY}/configurations`]: envelope(legacyConfig),
 };
+
+export const tokensRoutes: Routes = { [`${BASE}/tokens`]: tokensRoute(TOKENS) };

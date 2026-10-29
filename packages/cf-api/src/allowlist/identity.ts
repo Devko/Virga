@@ -33,4 +33,6 @@ export const IDENTITY_READS: readonly ReadRule[] = [
     pattern: "/accounts/:account_id/cfd_tunnel/:tunnel_id/configurations",
     usedBy: "tunnels",
   },
+  // tokens
+  { method: "GET", pattern: "/accounts/:account_id/tokens", usedBy: "tokens" },
 ];
