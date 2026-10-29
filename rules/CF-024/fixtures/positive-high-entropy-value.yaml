@@ -1,0 +1,26 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/
+# Binding shapes: https://developers.cloudflare.com/workers/configuration/multipart-upload-metadata/
+# Graph shape: docs/architecture/graph-contract.md, worker_version.plain_text_vars
+description: >
+  A version without a traffic share in a gradual deployment still stores a
+  high-entropy plain-text value, which stays readable whatever the share.
+nodes:
+  - { type: worker_script, id: search, name: search }
+  - type: worker_version
+    id: v-new
+    props:
+      script_node_id: "worker_script:search"
+      plain_text_vars: []
+      secret_names: [INDEX_KEY]
+  - type: worker_version
+    id: v-old
+    props:
+      script_node_id: "worker_script:search"
+      plain_text_vars:
+        - { name: INDEX_KEY, looks_secret: true, secret_pattern: high_entropy }
+      secret_names: []
+edges:
+  - { type: DEPLOYS, src: "worker_script:search", dst: "worker_version:v-new", props: { percentage: 100 } }
+  - { type: DEPLOYS, src: "worker_script:search", dst: "worker_version:v-old", props: { percentage: 0 } }
+expect:
+  - { fingerprint: "CF-024:worker_script:search", severity: medium }

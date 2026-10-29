@@ -26,5 +26,19 @@ export const RULES: readonly CompiledRule[] = [
       "min_conf",
       "sev_min"
     ]
+  },
+  {
+    "id": "CF-024",
+    "version": 1,
+    "title": "Secret in a plain-text variable instead of a secret binding",
+    "severity": "medium",
+    "kind": "posture",
+    "requires": [
+      "workers"
+    ],
+    "params": {},
+    "enriches": null,
+    "sql": "-- A collected Worker version (deployed, or reachable through a version URL)\n-- has a plain-text variable whose value the workers collector judged to look\n-- like a secret: a Cloudflare token or key prefix, an AWS access key, a\n-- private key, or a high-entropy string. Plain-text values are readable by\n-- anyone who can read the Worker's settings, unlike secret bindings. The value\n-- never enters the graph; the evidence names the variables, the matched\n-- patterns and the versions. One finding per Worker.\n--\n-- Pages projects have plain-text variables too, but the graph contract does\n-- not carry them yet.\nWITH leaked AS (\n  SELECT v.props ->> '$.script_node_id'  AS script_id,\n         v.id                            AS version_id,\n         var.value ->> '$.name'          AS variable,\n         var.value ->> '$.secret_pattern' AS pattern\n  FROM nodes v, json_each(v.props, '$.plain_text_vars') AS var\n  WHERE v.type = 'worker_version' AND v.deleted_at IS NULL\n    AND var.value ->> '$.looks_secret' = 1\n)\nSELECT\n  'CF-024'                                AS rule_id,\n  'CF-024:' || l.script_id                AS fingerprint,\n  'medium'                                AS severity,\n  l.script_id                             AS subject_id,\n  json_group_array(DISTINCT l.variable)   AS variables,\n  json_group_array(DISTINCT l.pattern) FILTER (WHERE l.pattern IS NOT NULL) AS patterns,\n  json_group_array(DISTINCT l.version_id) AS versions\nFROM leaked l\nJOIN nodes s ON s.id = l.script_id AND s.type = 'worker_script' AND s.deleted_at IS NULL\nGROUP BY l.script_id",
+    "paramOrder": []
   }
 ];

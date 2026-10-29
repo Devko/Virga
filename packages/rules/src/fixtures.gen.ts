@@ -891,5 +891,260 @@ export const FIXTURES: readonly RuleFixture[] = [
         "severity": "critical"
       }
     ]
+  },
+  {
+    "rule": "CF-024",
+    "name": "negative-no-plain-text-vars",
+    "description": "A version without plain-text variables, and one whose list is missing.",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "static",
+        "name": "static"
+      },
+      {
+        "type": "worker_version",
+        "id": "v1",
+        "props": {
+          "script_node_id": "worker_script:static",
+          "plain_text_vars": [],
+          "secret_names": []
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "v2",
+        "props": {
+          "script_node_id": "worker_script:static"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:static",
+        "dst": "worker_version:v1",
+        "props": {
+          "percentage": 50
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:static",
+        "dst": "worker_version:v2",
+        "props": {
+          "percentage": 50
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-024",
+    "name": "negative-secret-binding",
+    "description": "The token is a secret_text binding, and the plain-text variables hold values the collector did not flag.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "billing",
+        "name": "billing"
+      },
+      {
+        "type": "worker_version",
+        "id": "v1",
+        "props": {
+          "script_node_id": "worker_script:billing",
+          "plain_text_vars": [
+            {
+              "name": "LOG_LEVEL",
+              "looks_secret": false,
+              "secret_pattern": null
+            },
+            {
+              "name": "ACCOUNT_ID",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ],
+          "secret_names": [
+            "CF_API_TOKEN"
+          ]
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:billing",
+        "dst": "worker_version:v1",
+        "props": {
+          "percentage": 100
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-024",
+    "name": "positive-high-entropy-value",
+    "description": "A version without a traffic share in a gradual deployment still stores a high-entropy plain-text value, which stays readable whatever the share.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "search",
+        "name": "search"
+      },
+      {
+        "type": "worker_version",
+        "id": "v-new",
+        "props": {
+          "script_node_id": "worker_script:search",
+          "plain_text_vars": [],
+          "secret_names": [
+            "INDEX_KEY"
+          ]
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "v-old",
+        "props": {
+          "script_node_id": "worker_script:search",
+          "plain_text_vars": [
+            {
+              "name": "INDEX_KEY",
+              "looks_secret": true,
+              "secret_pattern": "high_entropy"
+            }
+          ],
+          "secret_names": []
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:search",
+        "dst": "worker_version:v-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:search",
+        "dst": "worker_version:v-old",
+        "props": {
+          "percentage": 0
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-024:worker_script:search",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-024",
+    "name": "positive-token-in-plain-text",
+    "description": "The deployed version keeps a Cloudflare API token in a plain-text variable next to a harmless one. An older version behind a version URL holds an AWS access key. Both land in one finding for the Worker.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "billing",
+        "name": "billing",
+        "props": {
+          "workers_dev": false,
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "4a1c0f6e-2b0d-4c51-9a55-0d1f0c2a7b10",
+        "name": "12",
+        "props": {
+          "script_node_id": "worker_script:billing",
+          "number": 12,
+          "plain_text_vars": [
+            {
+              "name": "CF_API_TOKEN",
+              "looks_secret": true,
+              "secret_pattern": "cfat_"
+            },
+            {
+              "name": "LOG_LEVEL",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ],
+          "secret_names": [
+            "STRIPE_KEY"
+          ]
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "9e0b3c2d-1f4a-4e6b-8c7d-5a6b7c8d9e0f",
+        "name": "9",
+        "props": {
+          "script_node_id": "worker_script:billing",
+          "number": 9,
+          "plain_text_vars": [
+            {
+              "name": "AWS_KEY_ID",
+              "looks_secret": true,
+              "secret_pattern": "aws_access_key"
+            }
+          ],
+          "secret_names": []
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "9e0b3c2d-billing.example.workers.dev",
+        "name": "9e0b3c2d-billing.example.workers.dev",
+        "props": {
+          "script": "billing",
+          "kind": "version",
+          "version_id": "9e0b3c2d-1f4a-4e6b-8c7d-5a6b7c8d9e0f",
+          "alias": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:billing",
+        "dst": "worker_version:4a1c0f6e-2b0d-4c51-9a55-0d1f0c2a7b10",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:9e0b3c2d-billing.example.workers.dev",
+        "dst": "worker_version:9e0b3c2d-1f4a-4e6b-8c7d-5a6b7c8d9e0f"
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-024:worker_script:billing",
+        "severity": "medium"
+      }
+    ]
   }
 ];

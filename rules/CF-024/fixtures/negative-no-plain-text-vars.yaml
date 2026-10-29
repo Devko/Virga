@@ -1,0 +1,11 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, worker_version
+description: A version without plain-text variables, and one whose list is missing.
+nodes:
+  - { type: worker_script, id: static, name: static }
+  - { type: worker_version, id: v1, props: { script_node_id: "worker_script:static", plain_text_vars: [], secret_names: [] } }
+  - { type: worker_version, id: v2, props: { script_node_id: "worker_script:static" } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:static", dst: "worker_version:v1", props: { percentage: 50 } }
+  - { type: DEPLOYS, src: "worker_script:static", dst: "worker_version:v2", props: { percentage: 50 } }
+expect: []
