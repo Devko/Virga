@@ -6966,7 +6966,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-022",
     "name": "negative-previews-behind-access",
-    "description": "Previews share the production database, but an Access app covers the preview wildcard. Unknown exposure on a second project does not count as public either.\n",
+    "description": "Previews share the production database, but an Access app covers the preview wildcard. The evaluator could not decide the previews of a second project, but they bind nothing that production binds, so that project would not qualify even if they were public.\n",
     "nodes": [
       {
         "type": "pages_project",
@@ -7008,6 +7008,11 @@ export const FIXTURES: readonly RuleFixture[] = [
         "type": "d1_database",
         "id": "db-prod",
         "name": "prod"
+      },
+      {
+        "type": "d1_database",
+        "id": "db-blog-preview",
+        "name": "blog-preview"
       }
     ],
     "edges": [
@@ -7060,7 +7065,7 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "type": "BINDS",
         "src": "pages_project:blog",
-        "dst": "d1_database:db-prod",
+        "dst": "d1_database:db-blog-preview",
         "key": "preview:DB",
         "props": {
           "binding_type": "d1",
@@ -7381,6 +7386,142 @@ export const FIXTURES: readonly RuleFixture[] = [
     "expect": [
       {
         "fingerprint": "CF-022:pages_project:shop",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-022",
+    "name": "undecided-unknown-previews",
+    "description": "The previews of both projects bind the production database. The evaluator could not decide the preview wildcard of blog, which would qualify if it were public, so its row is undecided. It could not decide / on the preview wildcard of docs either, but /public is public, which decides docs.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "blog",
+        "name": "blog",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "blog.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.blog.pages.dev",
+        "name": "*.blog.pages.dev",
+        "props": {
+          "project": "blog"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "docs",
+        "name": "docs",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "docs.pages.dev",
+          "preview_deployments": "custom"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.docs.pages.dev",
+        "name": "*.docs.pages.dev",
+        "props": {
+          "project": "docs"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "db-prod",
+        "name": "prod"
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.blog.pages.dev",
+        "dst": "pages_project:blog",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.docs.pages.dev",
+        "dst": "pages_project:docs",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:blog",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:blog",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "pages_preview:*.blog.pages.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "pages_preview:*.docs.pages.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "pages_preview:*.docs.pages.dev",
+        "path": "/public",
+        "decision": "public",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-022:pages_project:blog",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-022:pages_project:docs",
         "severity": "medium"
       }
     ]
