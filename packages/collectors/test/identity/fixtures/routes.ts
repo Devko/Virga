@@ -18,6 +18,7 @@ import {
   tokenIdle,
   workers,
 } from "./access.ts";
+import { MEMBERS, membersRoute } from "./members.ts";
 import { TOKENS, tokensRoute } from "./tokens.ts";
 import { BLOG, blogConfig, LEGACY, legacyConfig, TUNNELS, tunnelsRoute } from "./tunnels.ts";
 
@@ -46,3 +47,5 @@ export const tunnelsRoutes: Routes = {
 };
 
 export const tokensRoutes: Routes = { [`${BASE}/tokens`]: tokensRoute(TOKENS) };
+
+export const membersRoutes: Routes = { [`${BASE}/members`]: membersRoute(MEMBERS) };
