@@ -28,7 +28,7 @@ interface CfTunnel {
 
 /** developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get */
 interface CfTunnelConfig {
-  config?: { ingress?: unknown };
+  config?: { ingress?: unknown; originRequest?: unknown };
 }
 
 const TUNNEL_TYPES = ["cfd_tunnel", "warp_connector"];
@@ -73,6 +73,20 @@ const SCHEMES: Record<string, string> = {
 export function originScheme(service: string): string {
   const scheme = /^([a-z][a-z0-9+._-]*):/i.exec(service)?.[1]?.toLowerCase();
   return (scheme && SCHEMES[scheme]) || "other";
+}
+
+/**
+ * Whether cloudflared validates an Access JWT before it proxies a request
+ * (`originRequest.access.required`). Settings at the top of the configuration
+ * apply to every rule that does not set its own. A rule's own `access` object
+ * is read without merging in the top-level one, and anything but `true` reads
+ * as not required: both err toward reporting exposure.
+ * developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
+ */
+export function accessRequired(rule: Record<string, unknown>, defaults: unknown): boolean {
+  const access = (originRequest: unknown) =>
+    isObject(originRequest) && isObject(originRequest.access) ? originRequest.access : null;
+  return (access(rule.originRequest) ?? access(defaults))?.required === true;
 }
 
 /** Drops credentials from a URL-style service value: `http://user:pw@host` → `http://host`. */
@@ -127,7 +141,8 @@ async function collectIngress(
 ): Promise<void> {
   const path = `/accounts/${ctx.accountId}/cfd_tunnel/${id}/configurations`;
   const result = await unlessGone(ctx.api.get<CfTunnelConfig | null>(path));
-  const ingress = result?.config?.ingress;
+  const config = isObject(result?.config) ? result.config : {};
+  const ingress = config.ingress;
   const seen = new Set<string>();
   for (const rule of Array.isArray(ingress) ? ingress.filter(isObject) : []) {
     const hostname = str(rule.hostname)?.toLowerCase();
@@ -135,7 +150,8 @@ async function collectIngress(
     // The catch-all rule has no hostname.
     if (!hostname || !service) continue;
     const rulePath = str(rule.path) ?? "";
-    const nativeId = `${hostname}${rulePath}`;
+    // The tunnel ID keeps two tunnels that serve the same hostname apart.
+    const nativeId = `${id}:${hostname}${rulePath}`;
     // cloudflared uses the first matching rule, so a repeated hostname and path never applies.
     if (seen.has(nativeId) || !fitsId(nativeId)) continue;
     seen.add(nativeId);
@@ -145,6 +161,7 @@ async function collectIngress(
       service: withoutUserinfo(service),
       origin_scheme: originScheme(service),
       tunnel_id: id,
+      access_required: accessRequired(rule, config.originRequest),
     });
     g.edge("ROUTES_TO", hostId, tunnelNode);
   }
