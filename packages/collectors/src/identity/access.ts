@@ -1,6 +1,7 @@
 import { NoPermissionError } from "@virga/cf-api";
 import type { SignalRow } from "@virga/graph";
 import {
+  bool,
   chunk,
   GraphBuilder,
   isObject,
@@ -148,6 +149,8 @@ async function collectDirectory(ctx: CollectorContext, g: GraphBuilder): Promise
     const tokenId = g.node("service_token", id, displayName(token.name), {
       expires_at: str(token.expires_at),
       duration: str(token.duration),
+      // A disabled token authenticates nothing; null when the API omits the field.
+      enabled: bool(token.enabled),
     });
     signals.push({ nodeId: tokenId, name: "last_seen_at", value: epochMs(token.last_seen_at) });
   }

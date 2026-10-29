@@ -16,6 +16,7 @@ import {
   policyUnused,
   tokenCi,
   tokenIdle,
+  tokenLeaked,
   workers,
 } from "./access.ts";
 import { exampleIssue, insightsRoute } from "./insights.ts";
@@ -37,7 +38,7 @@ export const accessRoutes: Routes = {
   ),
   [`${BASE}/access/policies`]: envelope([policyDevs, policyUnused], listInfo(2)),
   [`${BASE}/access/groups`]: envelope([groupEng, groupContractors], listInfo(2)),
-  [`${BASE}/access/service_tokens`]: envelope([tokenCi, tokenIdle], listInfo(2)),
+  [`${BASE}/access/service_tokens`]: envelope([tokenCi, tokenIdle, tokenLeaked], listInfo(3)),
   [`${BASE}/access/identity_providers`]: envelope([idpOtp, idpOkta], listInfo(2)),
   [`${BASE}/workers/workers`]: workersList,
 };

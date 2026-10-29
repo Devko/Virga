@@ -26,6 +26,7 @@ import {
   POLICY_UNUSED,
   TOKEN_CI,
   TOKEN_IDLE,
+  TOKEN_LEAKED,
   WORKER_UNKNOWN,
 } from "./fixtures/access.ts";
 import { accessRoutes } from "./fixtures/routes.ts";
@@ -91,20 +92,19 @@ describe("access collector", () => {
       name: "Admin Site",
       props: {
         app_type: "self_hosted",
+        // Paths as configured, wildcards and the trailing slash included.
         targets: [
-          { kind: "hostname", host: "*.example.com", path: "" },
-          { kind: "hostname", host: "example.com", path: "/api" },
-          { kind: "hostname", host: "test.example.com", path: "/admin" },
-          // The override makes /api/health public, which a hostname target cannot say.
+          { kind: "hostname", host: "*.example.com", path: "", overrides: [] },
+          { kind: "hostname", host: "example.com", path: "/foo*/bar", overrides: [] },
           {
-            kind: "other",
-            raw: {
-              overrides: [{ behavior: "public", path_pattern: "/api/health" }],
-              type: "public",
-              uri: "example.com/api/*",
-            },
+            kind: "hostname",
+            host: "example.com",
+            path: "/api/*",
+            overrides: [{ behavior: "public", path_pattern: "/api/health" }],
           },
-          { kind: "other", raw: { type: "public", uri: "example.com/foo*/bar" } },
+          { kind: "hostname", host: "test.example.com", path: "/admin/", overrides: [] },
+          // A partial label wildcard has no place in the contract.
+          { kind: "other", raw: { type: "public", uri: "shop*.example.com" } },
         ],
         session_duration: "24h",
         allowed_idps: [IDP_OKTA],
@@ -122,12 +122,17 @@ describe("access collector", () => {
     const { output, calls } = await run(accessCollector, routes);
     expect(node(output, app(APP_WORKER)).props?.targets).toEqual([
       { kind: "other", raw: { type: "worker", worker_id: WORKER_UNKNOWN } },
-      { kind: "worker", script: "my-worker", scope: "all" },
-      { kind: "worker", script: "api-worker", scope: "previews" },
+      { kind: "worker", script: "api-worker", scope: "previews", overrides: [] },
+      {
+        kind: "worker",
+        script: "my-worker",
+        scope: "all",
+        overrides: [{ behavior: "public", path_pattern: "/webhooks/*" }],
+      },
     ]);
     // Account-level Worker Access has no single script.
     expect(node(output, app(APP_ALL_PREVIEWS)).props?.targets).toEqual([
-      { kind: "other", raw: { type: "all_preview_workers" } },
+      { kind: "all_workers", scope: "previews", overrides: [] },
     ]);
     // Read once, and only because of the Worker destinations.
     expect(callPaths(calls).filter((p) => p.endsWith("/workers/workers"))).toHaveLength(1);
@@ -138,13 +143,21 @@ describe("access collector", () => {
       ...routes,
       [`${BASE}/workers/workers`]: denied(),
     });
+    // The raw destination keeps the override, so its public path is not lost.
     expect(node(output, app(APP_WORKER)).props?.targets).toEqual([
+      {
+        kind: "other",
+        raw: {
+          overrides: [{ behavior: "public", path_pattern: "/webhooks/*" }],
+          type: "worker",
+          worker_id: "e8f70fdbc8b1fb0b8ddb1af166186758",
+        },
+      },
       {
         kind: "other",
         raw: { type: "preview_worker", worker_id: "c81a2d22c29840ed9d61681a3270dbff" },
       },
       { kind: "other", raw: { type: "worker", worker_id: WORKER_UNKNOWN } },
-      { kind: "other", raw: { type: "worker", worker_id: "e8f70fdbc8b1fb0b8ddb1af166186758" } },
     ]);
     expect(node(output, app(APP_ADMIN)).props?.targets).toHaveLength(5);
   });
@@ -170,12 +183,12 @@ describe("access collector", () => {
       { kind: "other", raw: { mcp_server_id: "mcp-1", type: "via_mcp_server_portal" } },
     ]);
     expect(node(output, app(APP_SSH)).props?.targets).toEqual([
-      { kind: "hostname", host: "ssh.example.com", path: "" },
-      { kind: "hostname", host: "test.anotherexample.com", path: "/staff" },
+      { kind: "hostname", host: "ssh.example.com", path: "", overrides: [] },
+      { kind: "hostname", host: "test.anotherexample.com", path: "/staff", overrides: [] },
     ]);
     expect(node(output, app(APP_VNC)).props).toMatchObject({
       app_type: "vnc",
-      targets: [{ kind: "hostname", host: "vnc.example.com", path: "" }],
+      targets: [{ kind: "hostname", host: "vnc.example.com", path: "", overrides: [] }],
       session_duration: "1h",
     });
     // A bookmark links, it does not protect.
@@ -327,16 +340,23 @@ describe("access collector", () => {
       },
     });
 
-    expectProps(output, "service_token", ["expires_at", "duration"]);
+    expectProps(output, "service_token", ["expires_at", "duration", "enabled"]);
     expect(node(output, `service_token:${TOKEN_CI}`)).toEqual({
       type: "service_token",
       nativeId: TOKEN_CI,
       name: "CI/CD token",
-      props: { expires_at: "2014-01-01T05:20:00.12345Z", duration: "60m" },
+      props: { expires_at: "2014-01-01T05:20:00.12345Z", duration: "60m", enabled: true },
     });
+    // The field is optional: null, not a guess, when the API omits it.
     expect(node(output, `service_token:${TOKEN_IDLE}`).props).toEqual({
       expires_at: null,
       duration: "forever",
+      enabled: null,
+    });
+    expect(node(output, `service_token:${TOKEN_LEAKED}`).props).toEqual({
+      expires_at: "2026-02-01T00:00:00Z",
+      duration: "8760h",
+      enabled: false,
     });
     expect(output.signals).toEqual([
       {
@@ -346,6 +366,11 @@ describe("access collector", () => {
       },
       // Never seen: null, not missing, so rules can tell it from no data.
       { nodeId: `service_token:${TOKEN_IDLE}`, name: "last_seen_at", value: null },
+      {
+        nodeId: `service_token:${TOKEN_LEAKED}`,
+        name: "last_seen_at",
+        value: Date.parse("2025-06-01T08:00:00Z"),
+      },
     ]);
 
     expectProps(output, "identity_provider", ["idp_type"]);
