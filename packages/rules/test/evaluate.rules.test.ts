@@ -28,6 +28,7 @@ describe("rule fixtures through evaluateRules", () => {
         ruleId: rule.id,
         status: "evaluated",
         hits: fixture.expect.length,
+        undecided: 0,
         missing: [],
         opened: fixture.expect.length,
         resolved: 0,

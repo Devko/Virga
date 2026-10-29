@@ -5,8 +5,14 @@ import { type CompiledRule, RULE_SEVERITIES, type RuleSeverity } from "./types.t
 export interface RuleRunSummary {
   ruleId: string;
   status: "evaluated" | "not_evaluated" | "error";
-  /** Rows the rule returned; 0 unless evaluated. */
+  /** Decided rows the rule returned, as in `rule_runs.hits`; 0 unless evaluated. */
   hits: number;
+  /**
+   * Undecided rows (`decided = 0`) the rule returned; 0 unless evaluated.
+   * `evaluateRules` always sets it; it is optional for summaries built
+   * elsewhere, such as test doubles.
+   */
+  undecided?: number;
   /** Resource classes or derived tables without complete coverage. */
   missing: string[];
   /** Findings created, or reopened after they were resolved. */
@@ -25,10 +31,11 @@ export interface RuleRunSummary {
  *   query does not run. Derived inputs (`exposure`, `vulns`, `packages`)
  *   count as complete once their producing step marked them complete in
  *   `coverage`.
- * - Hits upsert findings by fingerprint (open, last_seen, evidence,
- *   finding_nodes); a resolved finding that reappears is reopened.
- * - Open findings of an evaluated rule that are no longer returned are
- *   resolved.
+ * - Decided rows (hits) upsert findings by fingerprint (open, last_seen,
+ *   evidence, finding_nodes); a resolved finding that reappears is reopened.
+ * - Undecided rows change no finding (see below).
+ * - Open findings of an evaluated rule whose fingerprint it no longer
+ *   returns, decided or undecided, are resolved.
  * - Expired suppressions return to open; suppressed findings stay
  *   suppressed while the suppression lasts unless their severity rises.
  * - One row per rule in `rule_runs`.
@@ -39,8 +46,21 @@ export interface RuleRunSummary {
  *   scans and unique in the result (D-10: one finding per subject);
  * - `severity`: one of `RULE_SEVERITIES`;
  * - `subject_id`: the ID (`<type>:<native_id>`) of the node the finding is
- *   about.
+ *   about;
+ * - `decided`, optional: 1 (the default when the column is absent) for a
+ *   hit, 0 when the rule cannot decide the fingerprint, for example because
+ *   the entry points that decide it have exposure `unknown`.
  * A row that breaks the contract makes the run an `error`.
+ *
+ * Unknown is a result. An undecided row meets the same contract, but it
+ * neither opens nor resolves a finding: an existing finding with its
+ * fingerprint keeps its status, severity, evidence, node links, insight and
+ * `last_seen`, whether it is open, suppressed (even past `suppressed_until`)
+ * or resolved; without one, nothing opens. The fingerprint still counts as
+ * returned, so an open finding is not resolved. Fingerprints stay unique
+ * across decided and undecided rows: a rule that decides a fingerprint on one
+ * path and cannot on another returns one decided row. `hits` in `rule_runs`
+ * and in the summary counts decided rows only; `undecided` counts the others.
  *
  * Evidence is every other column, stored by column name as a JSON object in
  * `findings.evidence`. Text that parses as a JSON array (`json_group_array`,
@@ -88,19 +108,21 @@ export function evaluateRules(
   );
   return rules.map((rule): RuleRunSummary => {
     const missing = rule.requires.filter((input) => !complete.has(input));
-    const summary = { ruleId: rule.id, hits: 0, missing, opened: 0, resolved: 0 };
+    const summary = { ruleId: rule.id, hits: 0, undecided: 0, missing, opened: 0, resolved: 0 };
     if (missing.length > 0) {
       recordRun(db, scanId, rule.id, "not_evaluated", 0, missing);
       return { ...summary, status: "not_evaluated" };
     }
     try {
-      const hits = prepareHits(rule, runRule(db, rule));
+      const rows = prepareHits(rule, runRule(db, rule));
+      const hits = rows.filter((row) => row.decided).length;
       const counts = db.transaction(() => {
-        const result = applyHits(db, rule, hits, at);
-        recordRun(db, scanId, rule.id, "evaluated", hits.length, null);
+        const result = applyHits(db, rule, rows, at);
+        recordRun(db, scanId, rule.id, "evaluated", hits, null);
         return result;
       });
-      return { ...summary, status: "evaluated", hits: hits.length, ...counts };
+      const undecided = rows.length - hits;
+      return { ...summary, status: "evaluated", hits, undecided, ...counts };
     } catch (error) {
       recordRun(db, scanId, rule.id, "error", 0, null);
       const message = error instanceof Error ? error.message : String(error);
@@ -109,7 +131,7 @@ export function evaluateRules(
   });
 }
 
-const CONTRACT_COLUMNS = new Set(["rule_id", "fingerprint", "severity", "subject_id"]);
+const CONTRACT_COLUMNS = new Set(["rule_id", "fingerprint", "severity", "subject_id", "decided"]);
 const SEVERITY_RANK: Record<RuleSeverity, number> = {
   info: 0,
   low: 1,
@@ -132,6 +154,7 @@ const encoder = new TextEncoder();
 
 interface Hit {
   fingerprint: string;
+  decided: boolean;
   severity: RuleSeverity;
   evidence: string;
   nodes: { node: string; role: string }[];
@@ -142,6 +165,17 @@ interface StoredFinding {
   status: "open" | "resolved" | "suppressed";
   severity: RuleSeverity;
   suppressed_until: number | null;
+}
+
+/**
+ * Reads the optional `decided` column of a rule row: true when it is absent
+ * or 1, false when it is 0, and null for any other value, which breaks the
+ * output contract.
+ */
+export function decidedOf(row: Row): boolean | null {
+  const value = row.decided;
+  if (value === undefined || value === 1) return true;
+  return value === 0 ? false : null;
 }
 
 function isNodeId(value: unknown): value is string {
@@ -192,6 +226,8 @@ function prepareHits(rule: CompiledRule, rows: readonly Row[]): Hit[] {
       throw new Error(`${where}: invalid severity`);
     }
     if (!isNodeId(subject)) throw new Error(`${where}: subject_id is not a node ID`);
+    const decided = decidedOf(row);
+    if (decided === null) throw new Error(`${where}: decided must be 0 or 1`);
 
     const evidence: Record<string, unknown> = {};
     const truncated: Record<string, number> = {};
@@ -216,7 +252,7 @@ function prepareHits(rule: CompiledRule, rows: readonly Row[]): Hit[] {
     if (encoder.encode(json).length > MAX_EVIDENCE_BYTES) {
       throw new Error(`${where}: evidence larger than ${MAX_EVIDENCE_BYTES} bytes`);
     }
-    return { fingerprint, severity: severity as RuleSeverity, evidence: json, nodes };
+    return { fingerprint, decided, severity: severity as RuleSeverity, evidence: json, nodes };
   });
 }
 
@@ -269,8 +305,9 @@ function applyHits(
       .map((finding) => [finding.fingerprint, finding]),
   );
   const insightFor = insightLookup(db, rule);
+  const decided = hits.filter((hit) => hit.decided);
   let opened = 0;
-  const rows = hits.map((hit) => {
+  const rows = decided.map((hit) => {
     const before = stored.get(hit.fingerprint);
     let status: StoredFinding["status"] = "open";
     let severity = hit.severity;
@@ -293,18 +330,19 @@ function applyHits(
     };
   });
 
+  // Undecided fingerprints count as returned, so their findings stay as they are.
   const returned = new Set(hits.map((hit) => hit.fingerprint));
   const gone = [...stored.values()]
     .filter((finding) => finding.status !== "resolved" && !returned.has(finding.fingerprint))
     .map((finding) => finding.fingerprint);
-  const links = hits.flatMap((hit) =>
+  const links = decided.flatMap((hit) =>
     hit.nodes.map(({ node, role }) => ({ fingerprint: hit.fingerprint, node, role })),
   );
 
   for (const json of jsonChunks(rows)) {
     db.run(UPSERT_FINDINGS, rule.id, rule.version, rule.title, at, at, json);
   }
-  for (const json of jsonChunks([...returned])) db.run(CLEAR_NODES, json);
+  for (const json of jsonChunks(decided.map((hit) => hit.fingerprint))) db.run(CLEAR_NODES, json);
   for (const json of jsonChunks(links)) db.run(INSERT_NODES, json);
   for (const json of jsonChunks(gone)) db.run(RESOLVE, at, json);
   return { opened, resolved: gone.length };
