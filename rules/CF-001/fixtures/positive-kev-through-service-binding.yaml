@@ -1,0 +1,25 @@
+description: >
+  A Custom Domain serves a Worker whose package has a known-exploited (KEV)
+  vulnerability rated high. The Worker reaches a KV namespace through a service
+  binding to another Worker. KEV makes it critical even without traffic.
+nodes:
+  - { type: worker_custom_domain, id: b.example.com, name: b.example.com }
+  - { type: worker_script, id: b, name: b }
+  - { type: worker_version, id: b1, props: { script_node_id: "worker_script:b" } }
+  - { type: package, id: "pkg:npm/x@1.0.0", name: x }
+  - { type: worker_script, id: c, name: c }
+  - { type: worker_version, id: c1, props: { script_node_id: "worker_script:c" } }
+  - { type: kv_namespace, id: kv1, name: cache }
+edges:
+  - { type: ROUTES_TO, src: "worker_custom_domain:b.example.com", dst: "worker_script:b" }
+  - { type: DEPLOYS, src: "worker_script:b", dst: "worker_version:b1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:b1", dst: "package:pkg:npm/x@1.0.0", props: { confidence: 1 } }
+  - { type: BINDS, src: "worker_version:b1", dst: "worker_script:c", key: BACKEND }
+  - { type: DEPLOYS, src: "worker_script:c", dst: "worker_version:c1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:c1", dst: "kv_namespace:kv1", key: CACHE }
+exposure:
+  - { entry: "worker_custom_domain:b.example.com", decision: public, confidence: 1 }
+vulns:
+  - { package: "package:pkg:npm/x@1.0.0", id: CVE-2026-0001, severity: high, kev: true }
+expect:
+  - { fingerprint: "CF-001:worker_script:b", severity: critical }

@@ -1,0 +1,23 @@
+description: >
+  A route serves a Worker with traffic. Its only deployed version contains a
+  critical vulnerability and binds a D1 database directly.
+nodes:
+  - { type: worker_route, id: r-a, name: "a.example.com/*" }
+  - { type: worker_script, id: a, name: a }
+  - { type: worker_version, id: a1, props: { script_node_id: "worker_script:a" } }
+  - { type: package, id: "pkg:npm/lodash@4.17.20", name: lodash }
+  - { type: d1_database, id: main, name: main }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-a", dst: "worker_script:a" }
+  - { type: DEPLOYS, src: "worker_script:a", dst: "worker_version:a1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:a1", dst: "package:pkg:npm/lodash@4.17.20", props: { confidence: 2 } }
+  - { type: BINDS, src: "worker_version:a1", dst: "d1_database:main", key: DB }
+exposure:
+  - { entry: "worker_route:r-a", decision: public, confidence: 2 }
+  - { entry: "worker_route:r-a", path: /admin, decision: access, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/lodash@4.17.20", id: GHSA-test-crit, severity: critical }
+signals:
+  - { node: "worker_script:a", name: invocations_30d, value: 10 }
+expect:
+  - { fingerprint: "CF-001:worker_script:a", severity: critical }

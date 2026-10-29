@@ -1,0 +1,15 @@
+description: Public Worker with a critical vulnerability but no data store binding.
+nodes:
+  - { type: worker_route, id: r-f, name: "f.example.com/*" }
+  - { type: worker_script, id: f, name: f }
+  - { type: worker_version, id: f1, props: { script_node_id: "worker_script:f" } }
+  - { type: package, id: "pkg:npm/lodash@4.17.20", name: lodash }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-f", dst: "worker_script:f" }
+  - { type: DEPLOYS, src: "worker_script:f", dst: "worker_version:f1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:f1", dst: "package:pkg:npm/lodash@4.17.20", props: { confidence: 2 } }
+exposure:
+  - { entry: "worker_route:r-f", decision: public, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/lodash@4.17.20", id: GHSA-test-crit, severity: critical }
+expect: []

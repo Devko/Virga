@@ -1,0 +1,22 @@
+{
+  "name": "@virga/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Core Worker: account graph, scan orchestration, rules",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "cf-typegen": "wrangler types",
+    "typecheck": "wrangler types && tsc -p . && tsc -p test",
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@virga/graph": "workspace:*",
+    "@virga/rules": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.2",
+    "wrangler": "4.151.0"
+  }
+}

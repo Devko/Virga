@@ -1,0 +1,23 @@
+{
+  "name": "@virga/rules",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Rule compiler, rule runtime and fixture runner",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures": "./src/fixtures.gen.ts",
+    "./compile": "./src/compile.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@virga/graph": "workspace:*"
+  },
+  "devDependencies": {
+    "yaml": "2.9.1"
+  }
+}

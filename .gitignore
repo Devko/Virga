@@ -24,3 +24,4 @@ coverage/
 .vscode/*
 !.vscode/extensions.json
 *.log
+worker-configuration.d.ts

@@ -1,0 +1,19 @@
+description: >
+  A preview URL points at an old version that no deployment references. The old
+  version has a critical vulnerability and an R2 binding. No traffic, so high.
+nodes:
+  - { type: worker_preview_url, id: e0-e.example.workers.dev, name: e0-e.example.workers.dev }
+  - { type: worker_script, id: e, name: e }
+  - { type: worker_version, id: e0, props: { script_node_id: "worker_script:e" } }
+  - { type: package, id: "pkg:npm/lodash@4.17.20", name: lodash }
+  - { type: r2_bucket, id: files, name: files }
+edges:
+  - { type: ROUTES_TO, src: "worker_preview_url:e0-e.example.workers.dev", dst: "worker_version:e0" }
+  - { type: CONTAINS, src: "worker_version:e0", dst: "package:pkg:npm/lodash@4.17.20", props: { confidence: 2 } }
+  - { type: BINDS, src: "worker_version:e0", dst: "r2_bucket:files", key: FILES }
+exposure:
+  - { entry: "worker_preview_url:e0-e.example.workers.dev", decision: public, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/lodash@4.17.20", id: GHSA-test-crit, severity: critical }
+expect:
+  - { fingerprint: "CF-001:worker_script:e", severity: high }

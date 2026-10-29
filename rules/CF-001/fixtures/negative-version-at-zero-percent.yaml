@@ -1,0 +1,22 @@
+description: >
+  Gradual deployment: the vulnerable version gets 0 % of traffic and the clean
+  version 100 %. Both bind D1.
+nodes:
+  - { type: worker_route, id: r-i, name: "i.example.com/*" }
+  - { type: worker_script, id: i, name: i }
+  - { type: worker_version, id: i1, props: { script_node_id: "worker_script:i" } }
+  - { type: worker_version, id: i2, props: { script_node_id: "worker_script:i" } }
+  - { type: package, id: "pkg:npm/lodash@4.17.20", name: lodash }
+  - { type: d1_database, id: main, name: main }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-i", dst: "worker_script:i" }
+  - { type: DEPLOYS, src: "worker_script:i", dst: "worker_version:i1", props: { percentage: 0 } }
+  - { type: DEPLOYS, src: "worker_script:i", dst: "worker_version:i2", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:i1", dst: "package:pkg:npm/lodash@4.17.20", props: { confidence: 2 } }
+  - { type: BINDS, src: "worker_version:i1", dst: "d1_database:main", key: DB }
+  - { type: BINDS, src: "worker_version:i2", dst: "d1_database:main", key: DB }
+exposure:
+  - { entry: "worker_route:r-i", decision: public, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/lodash@4.17.20", id: GHSA-test-crit, severity: critical }
+expect: []

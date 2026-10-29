@@ -1,0 +1,26 @@
+description: >
+  The public Worker reaches data only through a service binding to a version of
+  the bound Worker that gets 0 % of traffic. The spec's original query reported
+  this case.
+nodes:
+  - { type: worker_route, id: r-k, name: "k.example.com/*" }
+  - { type: worker_script, id: k, name: k }
+  - { type: worker_version, id: k1, props: { script_node_id: "worker_script:k" } }
+  - { type: package, id: "pkg:npm/lodash@4.17.20", name: lodash }
+  - { type: worker_script, id: l, name: l }
+  - { type: worker_version, id: l1, props: { script_node_id: "worker_script:l" } }
+  - { type: worker_version, id: l2, props: { script_node_id: "worker_script:l" } }
+  - { type: kv_namespace, id: kv1, name: cache }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-k", dst: "worker_script:k" }
+  - { type: DEPLOYS, src: "worker_script:k", dst: "worker_version:k1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:k1", dst: "package:pkg:npm/lodash@4.17.20", props: { confidence: 2 } }
+  - { type: BINDS, src: "worker_version:k1", dst: "worker_script:l", key: SVC }
+  - { type: DEPLOYS, src: "worker_script:l", dst: "worker_version:l1", props: { percentage: 0 } }
+  - { type: DEPLOYS, src: "worker_script:l", dst: "worker_version:l2", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:l1", dst: "kv_namespace:kv1", key: CACHE }
+exposure:
+  - { entry: "worker_route:r-k", decision: public, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/lodash@4.17.20", id: GHSA-test-crit, severity: critical }
+expect: []

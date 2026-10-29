@@ -1,0 +1,17 @@
+description: Vulnerable Worker with a D1 binding, but Access protects every entry point.
+nodes:
+  - { type: worker_route, id: r-g, name: "g.example.com/*" }
+  - { type: worker_script, id: g, name: g }
+  - { type: worker_version, id: g1, props: { script_node_id: "worker_script:g" } }
+  - { type: package, id: "pkg:npm/lodash@4.17.20", name: lodash }
+  - { type: d1_database, id: main, name: main }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-g", dst: "worker_script:g" }
+  - { type: DEPLOYS, src: "worker_script:g", dst: "worker_version:g1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:g1", dst: "package:pkg:npm/lodash@4.17.20", props: { confidence: 2 } }
+  - { type: BINDS, src: "worker_version:g1", dst: "d1_database:main", key: DB }
+exposure:
+  - { entry: "worker_route:r-g", decision: access, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/lodash@4.17.20", id: GHSA-test-crit, severity: critical }
+expect: []

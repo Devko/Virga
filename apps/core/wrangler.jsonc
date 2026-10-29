@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "virga-core",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // The core Worker holds no routes and is reachable only through service
+  // bindings (docs/implementation-plan.md, deployment topology).
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "ACCOUNT_GRAPH", "class_name": "AccountGraph" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountGraph"] }]
+}

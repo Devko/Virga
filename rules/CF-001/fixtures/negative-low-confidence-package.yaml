@@ -1,0 +1,19 @@
+description: >
+  The vulnerable package is known only with low confidence, for example from
+  dependency metadata without bundle evidence.
+nodes:
+  - { type: worker_route, id: r-h, name: "h.example.com/*" }
+  - { type: worker_script, id: h, name: h }
+  - { type: worker_version, id: h1, props: { script_node_id: "worker_script:h" } }
+  - { type: package, id: "pkg:npm/vitest@1.0.0", name: vitest }
+  - { type: d1_database, id: main, name: main }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-h", dst: "worker_script:h" }
+  - { type: DEPLOYS, src: "worker_script:h", dst: "worker_version:h1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:h1", dst: "package:pkg:npm/vitest@1.0.0", props: { confidence: 0, source: package_dependencies } }
+  - { type: BINDS, src: "worker_version:h1", dst: "d1_database:main", key: DB }
+exposure:
+  - { entry: "worker_route:r-h", decision: public, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/vitest@1.0.0", id: GHSA-test-dev, severity: critical }
+expect: []

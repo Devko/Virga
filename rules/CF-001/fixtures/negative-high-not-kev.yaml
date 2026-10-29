@@ -1,0 +1,17 @@
+description: High (not critical) vulnerability that is not known-exploited.
+nodes:
+  - { type: worker_route, id: r-m, name: "m.example.com/*" }
+  - { type: worker_script, id: m, name: m }
+  - { type: worker_version, id: m1, props: { script_node_id: "worker_script:m" } }
+  - { type: package, id: "pkg:npm/y@2.0.0", name: y }
+  - { type: d1_database, id: main, name: main }
+edges:
+  - { type: ROUTES_TO, src: "worker_route:r-m", dst: "worker_script:m" }
+  - { type: DEPLOYS, src: "worker_script:m", dst: "worker_version:m1", props: { percentage: 100 } }
+  - { type: CONTAINS, src: "worker_version:m1", dst: "package:pkg:npm/y@2.0.0", props: { confidence: 2 } }
+  - { type: BINDS, src: "worker_version:m1", dst: "d1_database:main", key: DB }
+exposure:
+  - { entry: "worker_route:r-m", decision: public, confidence: 2 }
+vulns:
+  - { package: "package:pkg:npm/y@2.0.0", id: CVE-2026-0002, severity: high, kev: false }
+expect: []
