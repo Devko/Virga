@@ -98,3 +98,22 @@ describe("fixture names", () => {
     if (kind === "undecided") expect(undecided).toBeGreaterThan(0);
   });
 });
+
+describe("rules that read exposure", () => {
+  it.each(RULES.map((r) => [r.id, r] as const))(
+    "%s requires exposure and access if it reads exposure",
+    (_, rule) => {
+      if (/\b(FROM|JOIN)\s+exposure\b/i.test(rule.sql)) {
+        expect(rule.requires).toEqual(expect.arrayContaining(["exposure", "access"]));
+      }
+    },
+  );
+
+  it.each(RULES.filter((r) => r.requires.includes("exposure")).map((r) => [r.id]))(
+    "%s has a fixture for unknown exposure",
+    (id) => {
+      const fixtures = FIXTURES.filter((f) => f.rule === id);
+      expect(fixtures.some((f) => f.expect.some((e) => e.decided === false))).toBe(true);
+    },
+  );
+});
