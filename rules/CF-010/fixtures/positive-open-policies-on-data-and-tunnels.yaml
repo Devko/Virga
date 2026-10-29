@@ -1,0 +1,68 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/policies/methods/list/
+# (decision; include/require/exclude rules: { everyone: {} }, { login_method: { id } }, { group: { id } }, { ip: ... })
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/identity_providers/methods/list/ (type "onetimepin")
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/groups/methods/list/
+# Graph shape: docs/architecture/graph-contract.md, access_app, access_policy, access_group, identity_provider, ALLOWS
+description: >
+  Three Allow policies admit anyone. pol-everyone includes Everyone and only
+  requires an IP range; its app fronts a Worker with a D1 binding.
+  pol-otp includes the One-time PIN login method; its app fronts a tunnel
+  hostname. pol-group includes a group that includes Everyone; its app
+  fronts the production domain of a Pages project with a KV binding.
+nodes:
+  - { type: identity_provider, id: idp-otp, name: One-time PIN, props: { idp_type: onetimepin } }
+  - { type: worker_script, id: admin, name: admin }
+  - { type: worker_version, id: a1, props: { script_node_id: "worker_script:admin" } }
+  - { type: worker_custom_domain, id: admin.example.com, name: admin.example.com, props: { zone_id: z1, hostname: admin.example.com, service: admin, environment: null } }
+  - { type: d1_database, id: users-db, name: users }
+  - { type: tunnel, id: t1, name: monitoring, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: grafana.example.net, name: grafana.example.net, props: { hostname: grafana.example.net, path: "", service: "http://localhost:3000", origin_scheme: http, tunnel_id: t1 } }
+  - { type: pages_project, id: docs, name: docs, props: { production_branch: main, subdomain: docs.pages.dev, preview_deployments: none } }
+  - { type: pages_domain, id: docs.example.org, name: docs.example.org, props: { project: docs, status: active } }
+  - { type: kv_namespace, id: kv-docs, name: docs-cache }
+  - type: access_app
+    id: app-admin
+    name: Admin
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: app-grafana
+    name: Grafana
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: grafana.example.net, path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: app-docs
+    name: Docs
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: docs.example.org, path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_group
+    id: grp-all
+    name: All users
+    props: { include: [{ kind: everyone, value: null }], require: [], exclude: [] }
+  - type: access_policy
+    id: pol-everyone
+    name: Everyone from the office
+    props: { decision: allow, include: [{ kind: everyone, value: null }], require: [{ kind: ip, value: 198.51.100.0/24 }], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-otp
+    name: Email login
+    props: { decision: allow, include: [{ kind: login_method, value: idp-otp }], require: [], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-group
+    name: All users group
+    props: { decision: allow, include: [{ kind: group, value: grp-all }], require: [], exclude: [], session_duration: null }
+edges:
+  - { type: DEPLOYS, src: "worker_script:admin", dst: "worker_version:a1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:a1", dst: "d1_database:users-db", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:admin.example.com", dst: "worker_script:admin" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:grafana.example.net", dst: "tunnel:t1" }
+  - { type: ROUTES_TO, src: "pages_domain:docs.example.org", dst: "pages_project:docs", props: { environment: production } }
+  - { type: BINDS, src: "pages_project:docs", dst: "kv_namespace:kv-docs", key: "production:CACHE", props: { binding_type: kv_namespace, environment: production } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-admin", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-otp", dst: "access_app:app-grafana", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-group", dst: "access_app:app-docs", props: { precedence: 1 } }
+  - { type: SELECTS, src: "access_policy:pol-everyone", dst: "everyone:everyone", key: include }
+  - { type: SELECTS, src: "access_policy:pol-group", dst: "access_group:grp-all", key: include }
+  - { type: SELECTS, src: "access_group:grp-all", dst: "everyone:everyone", key: include }
+  - { type: SELECTS, src: "access_policy:pol-otp", dst: "identity_provider:idp-otp", key: include }
+expect:
+  - { fingerprint: "CF-010:access_policy:pol-everyone", severity: critical }
+  - { fingerprint: "CF-010:access_policy:pol-otp", severity: critical }
+  - { fingerprint: "CF-010:access_policy:pol-group", severity: critical }

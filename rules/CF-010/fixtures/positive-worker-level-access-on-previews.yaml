@@ -1,0 +1,43 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# Worker-level Access, previews only: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
+# Graph shape: docs/architecture/graph-contract.md, access_app target { kind: worker, script, scope }
+description: >
+  Worker-level Access on the previews of api admits everyone, and an old
+  version behind a version URL still binds the session KV namespace. The
+  same policy on the previews of web does not count: only web's deployed
+  version binds data, and previews-only Access does not cover it.
+nodes:
+  - { type: worker_script, id: api, name: api, props: { preview_urls: true } }
+  - { type: worker_version, id: api-new, props: { script_node_id: "worker_script:api" } }
+  - { type: worker_version, id: api-old, props: { script_node_id: "worker_script:api" } }
+  - { type: worker_preview_url, id: api-old-api.acme.workers.dev, name: api-old-api.acme.workers.dev, props: { script: api, kind: version, version_id: api-old, alias: null } }
+  - { type: kv_namespace, id: kv-sessions, name: sessions }
+  - { type: worker_script, id: web, name: web, props: { preview_urls: true } }
+  - { type: worker_version, id: web-1, props: { script_node_id: "worker_script:web" } }
+  - { type: d1_database, id: web-db, name: web }
+  - type: access_app
+    id: wa-api
+    name: api previews
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: api, scope: previews }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: wa-web
+    name: web previews
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: web, scope: previews }], session_duration: 24h, allowed_idps: [] }
+  - type: access_policy
+    id: pol-anyone
+    name: Anyone
+    props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-anyone-web
+    name: Anyone (web)
+    props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+edges:
+  - { type: DEPLOYS, src: "worker_script:api", dst: "worker_version:api-new", props: { percentage: 100 } }
+  - { type: ROUTES_TO, src: "worker_preview_url:api-old-api.acme.workers.dev", dst: "worker_version:api-old" }
+  - { type: BINDS, src: "worker_version:api-old", dst: "kv_namespace:kv-sessions", key: SESSIONS, props: { binding_type: kv_namespace } }
+  - { type: DEPLOYS, src: "worker_script:web", dst: "worker_version:web-1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:web-1", dst: "d1_database:web-db", key: DB, props: { binding_type: d1 } }
+  - { type: ALLOWS, src: "access_policy:pol-anyone", dst: "access_app:wa-api", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-anyone-web", dst: "access_app:wa-web", props: { precedence: 1 } }
+expect:
+  - { fingerprint: "CF-010:access_policy:pol-anyone", severity: critical }

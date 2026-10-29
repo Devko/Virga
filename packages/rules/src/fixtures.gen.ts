@@ -3908,6 +3908,1789 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-010",
+    "name": "negative-restricted-audience",
+    "description": "Every policy on the app in front of a Worker with a D1 binding narrows who may sign in, or is no Allow policy: Everyone with a required email domain, an IdP group, the corporate IdP as login method, a group of the corporate domain, a Bypass (CF-011), Service Auth and a Block.\n",
+    "nodes": [
+      {
+        "type": "identity_provider",
+        "id": "idp-otp",
+        "name": "One-time PIN",
+        "props": {
+          "idp_type": "onetimepin"
+        }
+      },
+      {
+        "type": "identity_provider",
+        "id": "idp-okta",
+        "name": "Okta",
+        "props": {
+          "idp_type": "okta"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "admin",
+        "name": "admin"
+      },
+      {
+        "type": "worker_version",
+        "id": "a1",
+        "props": {
+          "script_node_id": "worker_script:admin"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "admin.example.com",
+        "name": "admin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "admin.example.com",
+          "service": "admin",
+          "environment": null
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "users-db",
+        "name": "users"
+      },
+      {
+        "type": "access_app",
+        "id": "app-admin",
+        "name": "Admin",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "admin.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": [
+            "idp-okta"
+          ]
+        }
+      },
+      {
+        "type": "access_group",
+        "id": "grp-corp",
+        "name": "Corp",
+        "props": {
+          "include": [
+            {
+              "kind": "email_domain",
+              "value": "example.com"
+            }
+          ],
+          "require": [],
+          "exclude": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-domain",
+        "name": "Everyone at corp",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [
+            {
+              "kind": "email_domain",
+              "value": "example.com"
+            }
+          ],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-idp-group",
+        "name": "Admins",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "idp_group",
+              "value": {
+                "idp": "idp-okta",
+                "name": "admins"
+              }
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-okta",
+        "name": "Okta users",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "login_method",
+              "value": "idp-okta"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-group",
+        "name": "Corp group",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-corp"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-service",
+        "name": "Machines",
+        "props": {
+          "decision": "non_identity",
+          "include": [
+            {
+              "kind": "any_valid_service_token",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-block",
+        "name": "Block all",
+        "props": {
+          "decision": "deny",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:admin",
+        "dst": "worker_version:a1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:a1",
+        "dst": "d1_database:users-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:admin.example.com",
+        "dst": "worker_script:admin"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-domain",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-idp-group",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 2
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-okta",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 3
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-group",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 4
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 5
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-service",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 6
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-block",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 7
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-010",
+    "name": "negative-target-without-data",
+    "description": "An Allow-Everyone policy sits on apps whose targets reach no data store and no tunnel: a Worker with only a service binding, a wildcard that does not cover a two-label subdomain, a Worker whose D1 binding is in a version without traffic, a Pages domain whose binding belongs to the preview environment, and an app the policy was removed from.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "static",
+        "name": "static"
+      },
+      {
+        "type": "worker_version",
+        "id": "s1",
+        "props": {
+          "script_node_id": "worker_script:static"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "static.example.com",
+        "name": "static.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "static.example.com",
+          "service": "static",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "backend",
+        "name": "backend"
+      },
+      {
+        "type": "worker_script",
+        "id": "deep",
+        "name": "deep"
+      },
+      {
+        "type": "worker_version",
+        "id": "d1v",
+        "props": {
+          "script_node_id": "worker_script:deep"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "a.b.example.net",
+        "name": "a.b.example.net",
+        "props": {
+          "zone_id": "z2",
+          "hostname": "a.b.example.net",
+          "service": "deep",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "gradual",
+        "name": "gradual"
+      },
+      {
+        "type": "worker_version",
+        "id": "g-old",
+        "props": {
+          "script_node_id": "worker_script:gradual"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "g-new",
+        "props": {
+          "script_node_id": "worker_script:gradual"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-gradual",
+        "name": "gradual.example.org/*",
+        "props": {
+          "zone_id": "z3",
+          "pattern": "gradual.example.org/*",
+          "script": "gradual"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "site",
+        "name": "site",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "site.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "site.example.org",
+        "name": "site.example.org",
+        "props": {
+          "project": "site",
+          "status": "active"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "data",
+        "name": "data"
+      },
+      {
+        "type": "worker_version",
+        "id": "dv1",
+        "props": {
+          "script_node_id": "worker_script:data"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "data.example.org",
+        "name": "data.example.org",
+        "props": {
+          "zone_id": "z3",
+          "hostname": "data.example.org",
+          "service": "data",
+          "environment": null
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "db",
+        "name": "db"
+      },
+      {
+        "type": "access_app",
+        "id": "app-static",
+        "name": "Static",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "static.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-wild",
+        "name": "Wildcard",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.example.net",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-gradual",
+        "name": "Gradual",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "gradual.example.org",
+              "path": "/admin"
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-site",
+        "name": "Site",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "site.example.org",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-data",
+        "name": "Data",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "data.example.org",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Everyone",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:static",
+        "dst": "worker_version:s1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:s1",
+        "dst": "worker_script:backend",
+        "key": "BACKEND",
+        "props": {
+          "binding_type": "service"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:static.example.com",
+        "dst": "worker_script:static"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:deep",
+        "dst": "worker_version:d1v",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:d1v",
+        "dst": "d1_database:db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:a.b.example.net",
+        "dst": "worker_script:deep"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:gradual",
+        "dst": "worker_version:g-old",
+        "props": {
+          "percentage": 0
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:gradual",
+        "dst": "worker_version:g-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:g-old",
+        "dst": "d1_database:db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-gradual",
+        "dst": "worker_script:gradual"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:site.example.org",
+        "dst": "pages_project:site",
+        "props": {
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:site",
+        "dst": "d1_database:db",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:data",
+        "dst": "worker_version:dv1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:dv1",
+        "dst": "d1_database:db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:data.example.org",
+        "dst": "worker_script:data"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-static",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-wild",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-gradual",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-site",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-data",
+        "props": {
+          "precedence": 1
+        },
+        "deleted": true
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-010",
+    "name": "positive-open-policies-on-data-and-tunnels",
+    "description": "Three Allow policies admit anyone. pol-everyone includes Everyone and only requires an IP range; its app fronts a Worker with a D1 binding. pol-otp includes the One-time PIN login method; its app fronts a tunnel hostname. pol-group includes a group that includes Everyone; its app fronts the production domain of a Pages project with a KV binding.\n",
+    "nodes": [
+      {
+        "type": "identity_provider",
+        "id": "idp-otp",
+        "name": "One-time PIN",
+        "props": {
+          "idp_type": "onetimepin"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "admin",
+        "name": "admin"
+      },
+      {
+        "type": "worker_version",
+        "id": "a1",
+        "props": {
+          "script_node_id": "worker_script:admin"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "admin.example.com",
+        "name": "admin.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "admin.example.com",
+          "service": "admin",
+          "environment": null
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "users-db",
+        "name": "users"
+      },
+      {
+        "type": "tunnel",
+        "id": "t1",
+        "name": "monitoring",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "grafana.example.net",
+        "name": "grafana.example.net",
+        "props": {
+          "hostname": "grafana.example.net",
+          "path": "",
+          "service": "http://localhost:3000",
+          "origin_scheme": "http",
+          "tunnel_id": "t1"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "docs",
+        "name": "docs",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "docs.pages.dev",
+          "preview_deployments": "none"
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "docs.example.org",
+        "name": "docs.example.org",
+        "props": {
+          "project": "docs",
+          "status": "active"
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-docs",
+        "name": "docs-cache"
+      },
+      {
+        "type": "access_app",
+        "id": "app-admin",
+        "name": "Admin",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "admin.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-grafana",
+        "name": "Grafana",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "grafana.example.net",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-docs",
+        "name": "Docs",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "docs.example.org",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_group",
+        "id": "grp-all",
+        "name": "All users",
+        "props": {
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Everyone from the office",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [
+            {
+              "kind": "ip",
+              "value": "198.51.100.0/24"
+            }
+          ],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-otp",
+        "name": "Email login",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "login_method",
+              "value": "idp-otp"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-group",
+        "name": "All users group",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-all"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:admin",
+        "dst": "worker_version:a1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:a1",
+        "dst": "d1_database:users-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:admin.example.com",
+        "dst": "worker_script:admin"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:grafana.example.net",
+        "dst": "tunnel:t1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:docs.example.org",
+        "dst": "pages_project:docs",
+        "props": {
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "kv_namespace:kv-docs",
+        "key": "production:CACHE",
+        "props": {
+          "binding_type": "kv_namespace",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-admin",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-otp",
+        "dst": "access_app:app-grafana",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-group",
+        "dst": "access_app:app-docs",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "SELECTS",
+        "src": "access_policy:pol-everyone",
+        "dst": "everyone:everyone",
+        "key": "include"
+      },
+      {
+        "type": "SELECTS",
+        "src": "access_policy:pol-group",
+        "dst": "access_group:grp-all",
+        "key": "include"
+      },
+      {
+        "type": "SELECTS",
+        "src": "access_group:grp-all",
+        "dst": "everyone:everyone",
+        "key": "include"
+      },
+      {
+        "type": "SELECTS",
+        "src": "access_policy:pol-otp",
+        "dst": "identity_provider:idp-otp",
+        "key": "include"
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-010:access_policy:pol-everyone",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-010:access_policy:pol-otp",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-010:access_policy:pol-group",
+        "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-010",
+    "name": "positive-worker-level-access-on-previews",
+    "description": "Worker-level Access on the previews of api admits everyone, and an old version behind a version URL still binds the session KV namespace. The same policy on the previews of web does not count: only web's deployed version binds data, and previews-only Access does not cover it.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-new",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-old",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "api-old-api.acme.workers.dev",
+        "name": "api-old-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "api-old",
+          "alias": null
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-sessions",
+        "name": "sessions"
+      },
+      {
+        "type": "worker_script",
+        "id": "web",
+        "name": "web",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "web-1",
+        "props": {
+          "script_node_id": "worker_script:web"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "web-db",
+        "name": "web"
+      },
+      {
+        "type": "access_app",
+        "id": "wa-api",
+        "name": "api previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "api",
+              "scope": "previews"
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-web",
+        "name": "web previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "web",
+              "scope": "previews"
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-anyone",
+        "name": "Anyone",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-anyone-web",
+        "name": "Anyone (web)",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:api-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:api-old-api.acme.workers.dev",
+        "dst": "worker_version:api-old"
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:api-old",
+        "dst": "kv_namespace:kv-sessions",
+        "key": "SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:web",
+        "dst": "worker_version:web-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:web-1",
+        "dst": "d1_database:web-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-anyone",
+        "dst": "access_app:wa-api",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-anyone-web",
+        "dst": "access_app:wa-web",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-010:access_policy:pol-anyone",
+        "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-011",
+    "name": "negative-path-app-or-no-data",
+    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "shop",
+        "name": "shop"
+      },
+      {
+        "type": "worker_version",
+        "id": "shop-1",
+        "props": {
+          "script_node_id": "worker_script:shop"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "shop.example.com",
+        "name": "shop.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "shop.example.com",
+          "service": "shop",
+          "environment": null
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "shop-db",
+        "name": "shop"
+      },
+      {
+        "type": "worker_script",
+        "id": "landing",
+        "name": "landing"
+      },
+      {
+        "type": "worker_version",
+        "id": "landing-1",
+        "props": {
+          "script_node_id": "worker_script:landing"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "landing.acme.workers.dev",
+        "name": "landing.acme.workers.dev",
+        "props": {
+          "script": "landing"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "site",
+        "name": "site",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "site.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "site.pages.dev",
+        "name": "site.pages.dev",
+        "props": {
+          "project": "site",
+          "status": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-assets",
+        "name": "Shop assets",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "shop.example.com",
+              "path": "/assets"
+            },
+            {
+              "kind": "hostname",
+              "host": "shop.example.com",
+              "path": "/favicon.ico"
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-shop",
+        "name": "Shop",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "shop.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-landing",
+        "name": "Landing",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "landing.acme.workers.dev",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-site",
+        "name": "Site",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "site.pages.dev",
+              "path": ""
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-assets",
+        "name": "Public assets",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-landing",
+        "name": "Public landing",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-site",
+        "name": "Public site",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Everyone",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:shop",
+        "dst": "worker_version:shop-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:shop-1",
+        "dst": "d1_database:shop-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:shop.example.com",
+        "dst": "worker_script:shop"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:landing",
+        "dst": "worker_version:landing-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:landing.acme.workers.dev",
+        "dst": "worker_script:landing"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:site.pages.dev",
+        "dst": "pages_project:site",
+        "props": {
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:site",
+        "dst": "d1_database:shop-db",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-assets",
+        "dst": "access_app:app-assets",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:app-shop",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-landing",
+        "dst": "access_app:app-landing",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-site",
+        "dst": "access_app:app-site",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-011",
+    "name": "positive-bypass-on-data-and-tunnels",
+    "description": "pol-office bypasses Access for an IP range on a whole-host app in front of a Worker with a KV binding. pol-public bypasses for everyone on a wildcard app that covers a tunnel hostname. pol-worker bypasses on Worker-level Access of a Worker with a D1 binding.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api"
+      },
+      {
+        "type": "worker_version",
+        "id": "api-1",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-api",
+        "name": "api.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "api.example.com/*",
+          "script": "api"
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-tokens",
+        "name": "tokens"
+      },
+      {
+        "type": "tunnel",
+        "id": "t1",
+        "name": "lab",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "lab.example.net",
+        "name": "lab.example.net",
+        "props": {
+          "hostname": "lab.example.net",
+          "path": "",
+          "service": "http://localhost:8000",
+          "origin_scheme": "http",
+          "tunnel_id": "t1"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "billing",
+        "name": "billing"
+      },
+      {
+        "type": "worker_version",
+        "id": "billing-1",
+        "props": {
+          "script_node_id": "worker_script:billing"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "billing-db",
+        "name": "billing"
+      },
+      {
+        "type": "access_app",
+        "id": "app-api",
+        "name": "API",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "api.example.com",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-lab",
+        "name": "Lab",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.example.net",
+              "path": ""
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-billing",
+        "name": "billing (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "billing",
+              "scope": "all"
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-office",
+        "name": "Office bypass",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "ip",
+              "value": "198.51.100.0/24"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-public",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-worker",
+        "name": "Worker bypass",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:api-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:api-1",
+        "dst": "kv_namespace:kv-tokens",
+        "key": "TOKENS",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-api",
+        "dst": "worker_script:api"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:lab.example.net",
+        "dst": "tunnel:t1"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:billing",
+        "dst": "worker_version:billing-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:billing-1",
+        "dst": "d1_database:billing-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-office",
+        "dst": "access_app:app-api",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-public",
+        "dst": "access_app:app-lab",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-worker",
+        "dst": "access_app:wa-billing",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-011:access_policy:pol-office",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-011:access_policy:pol-public",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-011:access_policy:pol-worker",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-021",
     "name": "negative-custom-domain-behind-access",
     "description": "Access protects the only custom domain, including a path prefix that a path app decides separately; r2.dev is disabled, so the collector emits no node for it.\n",

@@ -1,0 +1,48 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/policies/methods/list/
+# (decision "bypass"; include rules such as { ip: { ip } } or { everyone: {} })
+# Order of execution (Bypass first): https://developers.cloudflare.com/cloudflare-one/access-controls/policies/
+# Graph shape: docs/architecture/graph-contract.md, access_app, access_policy, ALLOWS
+description: >
+  pol-office bypasses Access for an IP range on a whole-host app in front of
+  a Worker with a KV binding. pol-public bypasses for everyone on a wildcard
+  app that covers a tunnel hostname. pol-worker bypasses on Worker-level
+  Access of a Worker with a D1 binding.
+nodes:
+  - { type: worker_script, id: api, name: api }
+  - { type: worker_version, id: api-1, props: { script_node_id: "worker_script:api" } }
+  - { type: worker_route, id: r-api, name: "api.example.com/*", props: { zone_id: z1, pattern: "api.example.com/*", script: api } }
+  - { type: kv_namespace, id: kv-tokens, name: tokens }
+  - { type: tunnel, id: t1, name: lab, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: lab.example.net, name: lab.example.net, props: { hostname: lab.example.net, path: "", service: "http://localhost:8000", origin_scheme: http, tunnel_id: t1 } }
+  - { type: worker_script, id: billing, name: billing }
+  - { type: worker_version, id: billing-1, props: { script_node_id: "worker_script:billing" } }
+  - { type: d1_database, id: billing-db, name: billing }
+  - type: access_app
+    id: app-api
+    name: API
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: app-lab
+    name: Lab
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: wa-billing
+    name: billing (Worker)
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: billing, scope: all }], session_duration: 24h, allowed_idps: [] }
+  - { type: access_policy, id: pol-office, name: Office bypass, props: { decision: bypass, include: [{ kind: ip, value: 198.51.100.0/24 }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-public, name: Public, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-worker, name: Worker bypass, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:api", dst: "worker_version:api-1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:api-1", dst: "kv_namespace:kv-tokens", key: TOKENS, props: { binding_type: kv_namespace } }
+  - { type: ROUTES_TO, src: "worker_route:r-api", dst: "worker_script:api" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:lab.example.net", dst: "tunnel:t1" }
+  - { type: DEPLOYS, src: "worker_script:billing", dst: "worker_version:billing-1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:billing-1", dst: "d1_database:billing-db", key: DB, props: { binding_type: d1 } }
+  - { type: ALLOWS, src: "access_policy:pol-office", dst: "access_app:app-api", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-public", dst: "access_app:app-lab", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-worker", dst: "access_app:wa-billing", props: { precedence: 1 } }
+expect:
+  - { fingerprint: "CF-011:access_policy:pol-office", severity: high }
+  - { fingerprint: "CF-011:access_policy:pol-public", severity: high }
+  - { fingerprint: "CF-011:access_policy:pol-worker", severity: high }
