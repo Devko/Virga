@@ -25,3 +25,6 @@ coverage/
 !.vscode/extensions.json
 *.log
 worker-configuration.d.ts
+
+# Agent worktrees
+.claude/worktrees/
