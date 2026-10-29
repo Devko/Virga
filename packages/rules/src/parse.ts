@@ -2,10 +2,12 @@ import { parse as parseYaml } from "yaml";
 import { compileParams } from "./params.ts";
 import {
   type CompiledRule,
+  type FixtureExpectation,
   RULE_KINDS,
   RULE_SEVERITIES,
   type RuleFixture,
   type RuleMeta,
+  type RuleSeverity,
 } from "./types.ts";
 
 const FENCE = /^--\s*---\s*$/;
@@ -91,11 +93,45 @@ export function parseRule(source: string, file: string): CompiledRule {
   return { ...meta, sql: compiled.sql, paramOrder: compiled.order };
 }
 
+function parseExpectation(value: unknown, where: string): FixtureExpectation {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    fail(where, "must be a mapping");
+  }
+  const e = value as Record<string, unknown>;
+  for (const key of Object.keys(e)) {
+    if (!["fingerprint", "severity", "decided"].includes(key)) fail(where, `unknown key '${key}'`);
+  }
+  if (typeof e.fingerprint !== "string" || e.fingerprint.length === 0) {
+    fail(where, "fingerprint is required");
+  }
+  if (e.severity !== undefined && !RULE_SEVERITIES.includes(e.severity as never)) {
+    fail(where, "invalid severity");
+  }
+  if (e.decided !== undefined && typeof e.decided !== "boolean") {
+    fail(where, "decided must be true or false");
+  }
+  // An undecided row changes no finding, so its severity means nothing.
+  if (e.decided === false && e.severity !== undefined) {
+    fail(where, "an undecided row has no severity to expect");
+  }
+  return {
+    fingerprint: e.fingerprint,
+    ...(e.severity !== undefined ? { severity: e.severity as RuleSeverity } : {}),
+    ...(e.decided === false ? { decided: false as const } : {}),
+  };
+}
+
 export function parseFixture(source: string, rule: string, name: string): RuleFixture {
   const data = parseYaml(source) as Partial<RuleFixture> | null;
   const file = `${rule}/fixtures/${name}`;
   if (!data || typeof data !== "object") fail(file, "fixture must be a mapping");
   if (!Array.isArray(data.expect)) fail(file, "fixture needs an expect list (may be empty)");
+  const expect = (data.expect as unknown[]).map((entry, i) =>
+    parseExpectation(entry, `${file}: expect entry ${i + 1}`),
+  );
+  if (new Set(expect.map((e) => e.fingerprint)).size < expect.length) {
+    fail(file, "expect lists a fingerprint twice");
+  }
   return {
     rule,
     name,
@@ -106,6 +142,6 @@ export function parseFixture(source: string, rule: string, name: string): RuleFi
     exposure: data.exposure ?? [],
     vulns: data.vulns ?? [],
     signals: data.signals ?? [],
-    expect: data.expect,
+    expect,
   };
 }

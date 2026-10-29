@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRule } from "../src/parse.ts";
+import { parseFixture, parseRule } from "../src/parse.ts";
 
 const rule = (
   frontMatter: string,
@@ -41,5 +41,34 @@ describe("parseRule", () => {
     expect(() => parseRule(rule(valid, "DELETE FROM nodes WHERE 1 = :p"), "t")).toThrow(
       /SELECT or WITH/,
     );
+  });
+});
+
+describe("parseFixture", () => {
+  const fixture = (list: string) => parseFixture(`nodes: []\nexpect: ${list}\n`, "CF-999", "f");
+
+  it("reads hits and undecided rows, and keeps only decided: false", () => {
+    expect(
+      fixture(`
+  - { fingerprint: "CF-999:a", severity: high }
+  - { fingerprint: "CF-999:b", decided: true }
+  - { fingerprint: "CF-999:c", decided: false }`).expect,
+    ).toEqual([
+      { fingerprint: "CF-999:a", severity: "high" },
+      { fingerprint: "CF-999:b" },
+      { fingerprint: "CF-999:c", decided: false },
+    ]);
+  });
+
+  it.each([
+    ["[CF-999:a]", /expect entry 1: must be a mapping/],
+    ["[{ severity: high }]", /fingerprint is required/],
+    ["[{ fingerprint: CF-999:a, severity: severe }]", /invalid severity/],
+    ["[{ fingerprint: CF-999:a, decided: 0 }]", /decided must be true or false/],
+    ["[{ fingerprint: CF-999:a, decided: false, severity: low }]", /no severity to expect/],
+    ["[{ fingerprint: CF-999:a, undecided: true }]", /unknown key 'undecided'/],
+    ["[{ fingerprint: CF-999:a }, { fingerprint: CF-999:a, decided: false }]", /twice/],
+  ])("rejects %s", (list, message) => {
+    expect(() => fixture(list)).toThrow(message);
   });
 });

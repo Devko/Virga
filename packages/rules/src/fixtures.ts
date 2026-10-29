@@ -12,6 +12,7 @@ import {
   setSignals,
   upsertVulns,
 } from "@virga/graph";
+import { decidedOf } from "./evaluate.ts";
 import { runRule } from "./runtime.ts";
 import type { CompiledRule, RuleFixture, VulnSeverity } from "./types.ts";
 
@@ -91,29 +92,32 @@ export interface FixtureResult {
   actual: string[];
 }
 
-const describeHit = (fingerprint: string, severity?: string) =>
-  severity ? `${fingerprint} (${severity})` : fingerprint;
+function describeRow(fingerprint: string, severity: string | undefined, decided: boolean | null) {
+  if (decided === null) return `${fingerprint} (invalid decided)`;
+  if (!decided) return `${fingerprint} (undecided)`;
+  return severity ? `${fingerprint} (${severity})` : fingerprint;
+}
 
 /**
- * Runs the rule against a loaded fixture and compares fingerprints, and
- * severities where the fixture names one.
+ * Runs the rule against a loaded fixture and compares fingerprints, whether
+ * each row is decided, and severities where the fixture names one. A row
+ * the fixture does not expect shows its severity.
  */
 export function evaluateFixture(
   db: SqlRunner,
   rule: CompiledRule,
   fixture: RuleFixture,
 ): FixtureResult {
-  const hits = runRule(db, rule, fixture.params);
-  const bySeverity = new Map(hits.map((h) => [h.fingerprint, h.severity]));
-  const expected = fixture.expect.map((e) => describeHit(e.fingerprint, e.severity)).sort();
-  const actual = fixture.expect
-    .filter((e) => bySeverity.has(e.fingerprint))
-    .map((e) => describeHit(e.fingerprint, e.severity ? bySeverity.get(e.fingerprint) : undefined))
-    .concat(
-      hits
-        .filter((h) => !fixture.expect.some((e) => e.fingerprint === h.fingerprint))
-        .map((h) => describeHit(h.fingerprint, h.severity)),
-    )
+  const rows = runRule(db, rule, fixture.params);
+  const expected = fixture.expect
+    .map((e) => describeRow(e.fingerprint, e.severity, e.decided !== false))
+    .sort();
+  const actual = rows
+    .map((row) => {
+      const e = fixture.expect.find((x) => x.fingerprint === row.fingerprint);
+      const severity = e && !e.severity ? undefined : row.severity;
+      return describeRow(row.fingerprint, severity, decidedOf(row));
+    })
     .sort();
   return {
     passed: expected.length === actual.length && expected.every((e, i) => e === actual[i]),

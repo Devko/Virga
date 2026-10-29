@@ -29,6 +29,55 @@ describe("rule fixtures (Node SQLite)", () => {
   });
 });
 
+describe("evaluateFixture: decided rows", () => {
+  const rule: CompiledRule = {
+    id: "CF-999",
+    version: 1,
+    title: "Test",
+    severity: "low",
+    kind: "posture",
+    requires: [],
+    params: {},
+    enriches: null,
+    sql: `SELECT 'CF-999' AS rule_id, 'CF-999:' || id AS fingerprint, 'low' AS severity,
+                 id AS subject_id, props ->> '$.decided' AS decided
+          FROM nodes WHERE type = 'worker_script'`,
+    paramOrder: [],
+  };
+  const scenario = (decided: unknown, expect: RuleFixture["expect"]): RuleFixture => ({
+    rule: "CF-999",
+    name: "t",
+    nodes: [{ type: "worker_script", id: "a", props: { decided } }],
+    edges: [],
+    expect,
+  });
+  const fingerprint = "CF-999:worker_script:a";
+
+  it.each<[string, number, RuleFixture["expect"], boolean]>([
+    ["an undecided row", 0, [{ fingerprint, decided: false }], true],
+    ["a hit with decided = 1", 1, [{ fingerprint, severity: "low" }], true],
+    ["a hit where an undecided row is expected", 1, [{ fingerprint, decided: false }], false],
+    ["an undecided row where a hit is expected", 0, [{ fingerprint }], false],
+    ["an undecided row where none is expected", 0, [], false],
+  ])("compares %s", async (_, decided, expected, passed) => {
+    expect((await run(rule, scenario(decided, expected))).passed).toBe(passed);
+  });
+
+  it("names undecided and invalid rows in the result", async () => {
+    expect(await run(rule, scenario(0, []))).toMatchObject({
+      expected: [],
+      actual: [`${fingerprint} (undecided)`],
+    });
+    expect(await run(rule, scenario(1, [{ fingerprint, decided: false }]))).toMatchObject({
+      expected: [`${fingerprint} (undecided)`],
+      actual: [fingerprint],
+    });
+    expect((await run(rule, scenario(2, [{ fingerprint }]))).actual).toEqual([
+      `${fingerprint} (invalid decided)`,
+    ]);
+  });
+});
+
 describe("CF-001 fixtures catch the spec's original service binding bug", () => {
   it("fails a negative fixture when the 0 % filter on the hop is removed", async () => {
     const rule = ruleById("CF-001");
