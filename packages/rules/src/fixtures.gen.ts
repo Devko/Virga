@@ -2943,7 +2943,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-004",
     "name": "negative-protected-or-unknown",
-    "description": "Access protects the SSH hostname, Service Auth the API, and the evaluator could not decide the third hostname; unknown is never public.\n",
+    "description": "Access protects the SSH hostname and Service Auth the API. The evaluator could not decide a third hostname, which only answers with a status code: it would not qualify even if it were public, so it is not undecided either.\n",
     "nodes": [
       {
         "type": "tunnel",
@@ -2986,8 +2986,8 @@ export const FIXTURES: readonly RuleFixture[] = [
         "props": {
           "hostname": "odd.example.com",
           "path": "",
-          "service": "tcp://localhost:5432",
-          "origin_scheme": "tcp",
+          "service": "http_status:503",
+          "origin_scheme": "http_status",
           "tunnel_id": "t-1"
         }
       }
@@ -3187,6 +3187,121 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "fingerprint": "CF-004:tunnel_hostname:remote.example.com/desk",
         "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
+    "name": "undecided-unknown-exposure",
+    "description": "The evaluator could not decide the database hostname, nor the /internal path of a web app that Access protects otherwise. Either would qualify if it were public, so both rows are undecided. On a third hostname the evaluator could not decide /, but /api is public, which decides it.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "t-1",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "db.example.com",
+        "name": "db.example.com",
+        "props": {
+          "hostname": "db.example.com",
+          "path": "",
+          "service": "tcp://localhost:5432",
+          "origin_scheme": "tcp",
+          "tunnel_id": "t-1"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "web.example.com",
+        "name": "web.example.com",
+        "props": {
+          "hostname": "web.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "t-1"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "mixed.example.com",
+        "name": "mixed.example.com",
+        "props": {
+          "hostname": "mixed.example.com",
+          "path": "",
+          "service": "https://localhost:8443",
+          "origin_scheme": "https",
+          "tunnel_id": "t-1"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:db.example.com",
+        "dst": "tunnel:t-1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:web.example.com",
+        "dst": "tunnel:t-1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:mixed.example.com",
+        "dst": "tunnel:t-1"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:db.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:web.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:web.example.com",
+        "path": "/internal",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:mixed.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:mixed.example.com",
+        "path": "/api",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:db.example.com",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:web.example.com",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:mixed.example.com",
+        "severity": "high"
       }
     ]
   },
