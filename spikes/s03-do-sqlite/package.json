@@ -1,0 +1,12 @@
+{
+  "name": "@virga/spike-s03",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike S-03: graph schema, write path and CF-001 on production Durable Object SQLite",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@virga/graph": "workspace:*",
+    "@virga/rules": "workspace:*"
+  }
+}

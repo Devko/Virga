@@ -1,0 +1,9 @@
+{
+  // Throwaway spike Worker, see docs/spikes/S-04-worker-dependencies.md. Uses one runtime dependency
+  // (debug, which depends on ms) and one devDependency that is never imported.
+  "name": "virga-spike-s04",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false
+}

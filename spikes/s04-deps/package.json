@@ -1,0 +1,14 @@
+{
+  "name": "@virga/spike-s04",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike S-04: which packages reach package_dependencies and modules in the Versions API",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "debug": "4.4.3"
+  },
+  "devDependencies": {
+    "is-number": "7.0.0"
+  }
+}

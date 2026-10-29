@@ -4,7 +4,7 @@ An agentless, read-only security tool for Cloudflare accounts that runs entirely
 
 > *Virga* is rain that falls from a cloud but evaporates before it reaches the ground. The tool does the same with risk: it forms in the cloud and is caught before it hits anyone.
 
-**Status: concept phase.** There is no code yet. The design spec, its review and the implementation plan are in [`docs/`](docs/).
+**Status: phase 0.** The concept, its review and the implementation plan are in [`docs/`](docs/). The first code is the graph store, the rule compiler with the flagship rule CF-001, and the core Worker with its Durable Object. Nothing scans a real account yet.
 
 ## Documents
 
@@ -13,8 +13,9 @@ An agentless, read-only security tool for Cloudflare accounts that runs entirely
 | [Design spec](docs/concept/design-spec.md) | Goal, scope, architecture, data model, rules, security of the tool, roadmap, positioning |
 | [Analysis](docs/analysis.md) | Review of the spec: verified platform claims, inconsistencies, security additions, risks, open decisions |
 | [Implementation plan](docs/implementation-plan.md) | Phases with gates, spikes, rule rollout, deployment topology, repository layout, phase 1 backlog |
-| [Data model](docs/architecture/data-model.md) | Graph schema draft, write path, exposure semantics, rule file format, revised CF-001 |
-| [Schema draft](docs/architecture/schema-draft.sql) | SQLite DDL for the per-account graph |
+| [Data model](docs/architecture/data-model.md) | Graph schema, write path, exposure semantics, rule file format, revised CF-001 |
+| [Decisions](docs/decisions/) | Accepted decisions, starting with the working defaults |
+| [Spikes](docs/spikes/) | Results of the phase 0 spikes |
 
 ## Principles
 
@@ -37,6 +38,24 @@ flowchart LR
 ```
 
 One Durable Object per scanned account holds the graph. Collectors fill it. Evaluators compute exposure and effective access. Rules written as SQL turn graph paths into findings.
+
+## Development
+
+Requirements: Node.js 22.13 or later and pnpm (via `corepack enable`).
+
+```sh
+pnpm install
+pnpm ci            # lint, rule check, typecheck, tests
+pnpm rules:build   # after changing anything in rules/
+```
+
+| Path | Content |
+| --- | --- |
+| `packages/graph` | Schema, migrations, write path (batch upsert, history, sweep) |
+| `packages/rules` | Rule compiler, rule runtime, fixture runner |
+| `rules/` | One directory per rule: `rule.sql`, fixtures, fix proposals |
+| `apps/core` | Core Worker with the `AccountGraph` Durable Object |
+| `spikes/` | Throwaway code for phase 0 spikes |
 
 ## License
 

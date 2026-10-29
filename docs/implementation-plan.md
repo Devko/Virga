@@ -24,13 +24,15 @@ flowchart LR
 
 ### Phase 0: decisions and spikes
 
+Progress (2026-10-29): decisions recorded as working defaults ([0001](decisions/0001-working-defaults.md)); S-03 answered locally, S-02 and S-04 partly; results in [spikes/](spikes/). Backlog items 1 (scaffold), 6 (account graph object, without the read entrypoint) and 11 (rule compiler and fixture runner, without the findings lifecycle) are done ahead of phase 1.
+
 Not a product phase. It settles the open decisions and tests the assumptions that the design depends on before any code is built on them.
 
 | Spike | Question | Result needed |
 | --- | --- | --- |
 | S-01 | Workflows: `schedules` on the Workflow binding as the cron, instance ID format (at most 100 characters, pattern `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`), duplicate-ID behavior within the retention period, step and CPU limits in practice | Dispatcher design confirmed, chunk sizes set |
 | S-02 | API rate limit for account-owned tokens, the `Ratelimit` header, GraphQL limits | Rate budget object design and pacing values |
-| S-03 | Durable Object SQLite: run `schema-draft.sql`, the JSON batch upsert and CF-001 in a real object. Recursive CTEs, triggers, CPU time of a rule run on a synthetic graph of 20,000 nodes, cost of row writes | Schema v1, write strategy (D-05) |
+| S-03 | Durable Object SQLite: run the schema, the JSON batch upsert and CF-001 in a real object. Recursive CTEs, triggers, CPU time of a rule run on a synthetic graph of 20,000 nodes, cost of row writes | Schema v1, write strategy (D-05) |
 | S-04 | Workers Versions API (beta) with `include=modules`. Does `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) include devDependencies and transitive packages? Is there a size cap? Are source maps present with a current Wrangler? | Package source priority and confidence levels |
 | S-05 | Permission groups. Minimal read set per collector. Which product-level Metadata Read-Only roles (Workers, D1, KV, R2, Queues, Hyperdrive) can an account token select? Does Workers Metadata Read-Only cover scripts, settings, bindings, routes and deployments (one community report says deployments return 401)? | Token profiles (D-14), onboarding allowlist |
 | S-06 | Audit Logs v2 polling: cursor handling, volume of the tool's own `view` events per scan, server-side filter `actor_token_id.not` | Event poller design, cost of polling |
@@ -182,6 +184,7 @@ packages/
   shared/        types, crypto helpers, untrusted-string marking
 rules/           CF-xxx/rule.sql, fixtures/, fix/
 test-range/      Terraform for the seeded test account
+spikes/          throwaway code for phase 0 spikes
 scripts/         deploy and setup scripts
 docs/
 ```

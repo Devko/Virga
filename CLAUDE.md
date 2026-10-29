@@ -4,14 +4,15 @@ Guidance for agents working in this repository.
 
 ## Project
 
-Virga is an agentless, read-only CNAPP for Cloudflare accounts that runs on Cloudflare itself. It is in the concept phase; no code exists yet.
+Virga is an agentless, read-only CNAPP for Cloudflare accounts that runs on Cloudflare itself. It is in phase 0: the graph store, the rule compiler with CF-001, and the core Worker exist; collectors, broker and UI do not.
 
 Read before changing anything:
 
 - `docs/concept/design-spec.md`: the design spec, the source of intent. Do not edit its text; record deviations in `docs/analysis.md` or as decisions
 - `docs/analysis.md`: review, verified platform facts, open decisions D-01 to D-15
 - `docs/implementation-plan.md`: phases, gates, spikes S-01 to S-08, backlog, topology, layout
-- `docs/architecture/data-model.md` and `schema-draft.sql`: graph schema, write path, rule format
+- `docs/architecture/data-model.md`: graph schema, write path, rule format
+- `docs/decisions/` and `docs/spikes/`: accepted decisions and spike results
 
 ## Non-negotiables
 
@@ -32,9 +33,26 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 - Worker versions carry `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) in the Workers API (beta). It does not separate dev from production dependencies.
 - MCP: `createMcpHandler` from `agents/mcp/server`. `McpAgent` is deprecated.
 
+## Commands
+
+- `pnpm install`, then `pnpm ci` runs lint, `rules:check`, typecheck and all tests. Run it before every push.
+- `pnpm rules:build` after any change in `rules/`; it regenerates `packages/rules/src/*.gen.ts`, which are committed.
+- `pnpm format` applies Biome formatting.
+- `apps/core` tests run in workerd through `@cloudflare/vitest-plugin`; `packages/*` tests run in Node.
+
+## Code layout
+
+- `packages/graph`: schema (`src/schema.ts`), `SqlRunner` with Durable Object and Node adapters, write path. Runtime-agnostic: no `node:` imports outside `src/node.ts`.
+- `packages/rules`: parser and compiler (Node only: `parse.ts`, `compile.ts`, `cli.ts`), runtime (`runtime.ts`, `fixtures.ts`) used by the Worker.
+- `rules/CF-xxx/`: `rule.sql` with YAML front matter, `fixtures/positive-*.yaml` and `negative-*.yaml`, `fix/`.
+- `apps/core`: Worker and `AccountGraph` Durable Object. No routes, `workers_dev` and previews off.
+- `spikes/`: throwaway code; not product code.
+
 ## Conventions
 
 - English for code, comments and docs.
+- TypeScript with erasable syntax only (no enums, no namespaces, no parameter properties), so Node runs the sources directly. Import with `.ts` extensions.
+- Dependencies are pinned to exact versions that are at least two weeks old; GitHub Actions are pinned by commit SHA.
+- Schema changes are new entries in `MIGRATIONS`; never edit an applied migration.
 - Use the decision (D-xx) and spike (S-xx) IDs when work relates to them. Record decisions in `docs/decisions/` (ADR style, one file per decision).
 - Commits carry a DCO sign-off (`git commit -s`).
-- Toolchain and commands go here once the monorepo is scaffolded (backlog item 1 in the implementation plan).

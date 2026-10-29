@@ -1,0 +1,14 @@
+{
+  // Throwaway spike Worker, see docs/spikes/S-03-durable-object-sqlite.md.
+  // Not part of the product; it serves synthetic data only. Deploy it to a
+  // regular (Workers Paid) account and delete it after the run.
+  "name": "virga-spike-s03",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "SPIKE_GRAPH", "class_name": "SpikeGraph" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SpikeGraph"] }]
+}
