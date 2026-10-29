@@ -82,7 +82,7 @@ describe("ApiCaller.get", () => {
     const { calls } = mockCloudflare({});
     const paths = [
       `/accounts/${id}/workers/scripts`,
-      `/accounts/${id}/tokens`,
+      `/accounts/${id}/cfd_tunnel/f70ff985-a4ef-4643-bbbc-4a0ed4fc8415/token`,
       `/accounts/${id}/tokens/verify/extra`,
       `/accounts/${id}/tokens/../tokens/verify`,
       `/accounts/${id}/tokens/%2e%2e`,
