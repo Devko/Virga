@@ -37,4 +37,10 @@ export const IDENTITY_READS: readonly ReadRule[] = [
   { method: "GET", pattern: "/accounts/:account_id/tokens", usedBy: "tokens" },
   // members
   { method: "GET", pattern: "/accounts/:account_id/members", usedBy: "members" },
+  // insights
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/security-center/insights",
+    usedBy: "insights",
+  },
 ];
