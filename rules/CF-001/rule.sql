@@ -78,6 +78,7 @@ SELECT
     WHEN COALESCE(max(sg.value), 0) > 0 THEN 'critical'
     ELSE 'high'
   END                                      AS severity,
+  sv.script_id                             AS subject_id,
   sv.script_id                             AS worker,
   json_group_array(DISTINCT sv.version_id) AS versions,
   json_group_array(DISTINCT pe.host)       AS entry_points,

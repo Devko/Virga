@@ -1,0 +1,25 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get/
+# Service types: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/protocols/
+# Graph shape: docs/architecture/graph-contract.md, tunnel and tunnel_hostname
+description: >
+  Three published hostnames of one tunnel, all public. SSH and the bastion
+  jump host are critical; the HTTP app is high. Only the /api path of the
+  HTTP app is public, the rest sits behind Access.
+nodes:
+  - { type: tunnel, id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: ssh.example.com, name: ssh.example.com, props: { hostname: ssh.example.com, path: "", service: "ssh://localhost:22", origin_scheme: ssh, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa } }
+  - { type: tunnel_hostname, id: jump.example.com, name: jump.example.com, props: { hostname: jump.example.com, path: "", service: bastion, origin_scheme: other, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa } }
+  - { type: tunnel_hostname, id: app.example.com, name: app.example.com, props: { hostname: app.example.com, path: "", service: "http://localhost:8080", origin_scheme: http, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa } }
+edges:
+  - { type: ROUTES_TO, src: "tunnel_hostname:ssh.example.com", dst: "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:jump.example.com", dst: "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:app.example.com", dst: "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa" }
+exposure:
+  - { entry: "tunnel_hostname:ssh.example.com", decision: public, confidence: 2 }
+  - { entry: "tunnel_hostname:jump.example.com", decision: public, confidence: 1 }
+  - { entry: "tunnel_hostname:app.example.com", decision: access, confidence: 2 }
+  - { entry: "tunnel_hostname:app.example.com", path: /api, decision: public, confidence: 2 }
+expect:
+  - { fingerprint: "CF-004:tunnel_hostname:ssh.example.com", severity: critical }
+  - { fingerprint: "CF-004:tunnel_hostname:jump.example.com", severity: critical }
+  - { fingerprint: "CF-004:tunnel_hostname:app.example.com", severity: high }

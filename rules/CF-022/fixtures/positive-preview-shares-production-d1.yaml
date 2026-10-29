@@ -1,0 +1,32 @@
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# (deployment_configs.preview / .production with d1_databases, kv_namespaces, services, ...)
+# Graph shape: docs/architecture/graph-contract.md, pages_project, pages_preview, BINDS
+description: >
+  Previews are public and bind the production D1 database under another
+  name, plus the production backend Worker. The KV namespaces differ per
+  environment and are not part of the finding.
+nodes:
+  - { type: pages_project, id: shop, name: shop, props: { production_branch: main, subdomain: shop.pages.dev, preview_deployments: all } }
+  - { type: pages_domain, id: shop.pages.dev, name: shop.pages.dev, props: { project: shop, status: null } }
+  - { type: pages_domain, id: shop.example.com, name: shop.example.com, props: { project: shop, status: active } }
+  - { type: pages_preview, id: "*.shop.pages.dev", name: "*.shop.pages.dev", props: { project: shop } }
+  - { type: d1_database, id: 6ad1b1f7-58d6-4b30-9a1e-4cbf1b1f1f01, name: shop-prod }
+  - { type: kv_namespace, id: 0f2ac74b498b48028cb68387c421e279, name: sessions-prod }
+  - { type: kv_namespace, id: 9b1c4d8e2f3a4b5c6d7e8f9a0b1c2d3e, name: sessions-preview }
+  - { type: worker_script, id: shop-api, name: shop-api }
+edges:
+  - { type: ROUTES_TO, src: "pages_domain:shop.pages.dev", dst: "pages_project:shop", props: { environment: production } }
+  - { type: ROUTES_TO, src: "pages_domain:shop.example.com", dst: "pages_project:shop", props: { environment: production } }
+  - { type: ROUTES_TO, src: "pages_preview:*.shop.pages.dev", dst: "pages_project:shop", props: { environment: preview } }
+  - { type: BINDS, src: "pages_project:shop", dst: "d1_database:6ad1b1f7-58d6-4b30-9a1e-4cbf1b1f1f01", key: "production:DB", props: { binding_type: d1, environment: production } }
+  - { type: BINDS, src: "pages_project:shop", dst: "d1_database:6ad1b1f7-58d6-4b30-9a1e-4cbf1b1f1f01", key: "preview:PREVIEW_DB", props: { binding_type: d1, environment: preview } }
+  - { type: BINDS, src: "pages_project:shop", dst: "kv_namespace:0f2ac74b498b48028cb68387c421e279", key: "production:SESSIONS", props: { binding_type: kv_namespace, environment: production } }
+  - { type: BINDS, src: "pages_project:shop", dst: "kv_namespace:9b1c4d8e2f3a4b5c6d7e8f9a0b1c2d3e", key: "preview:SESSIONS", props: { binding_type: kv_namespace, environment: preview } }
+  - { type: BINDS, src: "pages_project:shop", dst: "worker_script:shop-api", key: "production:API", props: { binding_type: service, environment: production } }
+  - { type: BINDS, src: "pages_project:shop", dst: "worker_script:shop-api", key: "preview:API", props: { binding_type: service, environment: preview } }
+exposure:
+  - { entry: "pages_domain:shop.pages.dev", decision: public, confidence: 2 }
+  - { entry: "pages_domain:shop.example.com", decision: public, confidence: 2 }
+  - { entry: "pages_preview:*.shop.pages.dev", decision: public, confidence: 1 }
+expect:
+  - { fingerprint: "CF-022:pages_project:shop", severity: medium }

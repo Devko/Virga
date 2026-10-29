@@ -1,0 +1,16 @@
+# Source: https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/managed/methods/list/
+# (result: { bucketId, domain: "pub-<id>.r2.dev", enabled })
+# Graph shape: docs/architecture/graph-contract.md, r2_public_domain
+description: >
+  The managed r2.dev domain of the bucket is enabled. It is public whatever
+  the exposure table says, because Access cannot sit in front of r2.dev.
+nodes:
+  - { type: r2_bucket, id: invoices, name: invoices, props: { location: weur, jurisdiction: null, storage_class: Standard, creation_date: "2026-03-02T10:00:00.000Z" } }
+  - type: r2_public_domain
+    id: pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev
+    name: pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev
+    props: { bucket: invoices, kind: r2_dev, enabled: true, zone_id: null }
+edges:
+  - { type: ROUTES_TO, src: "r2_public_domain:pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev", dst: "r2_bucket:invoices" }
+expect:
+  - { fingerprint: "CF-021:r2_bucket:invoices", severity: high }

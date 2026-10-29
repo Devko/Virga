@@ -1,0 +1,21 @@
+# Source: https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/custom/methods/list/
+# (result.domains[]: { domain, enabled, zoneId, zoneName, status, ... })
+# Graph shape: docs/architecture/graph-contract.md, r2_public_domain and exposure
+description: >
+  The bucket has two enabled custom domains. Access protects one, the
+  exposure evaluator decides the other public, and a third, disabled domain
+  is no entry point at all.
+nodes:
+  - { type: r2_bucket, id: media, name: media }
+  - { type: r2_public_domain, id: media.example.com, name: media.example.com, props: { bucket: media, kind: custom, enabled: true, zone_id: 36ca64a6d92827b8a6b90be344bb1bfd } }
+  - { type: r2_public_domain, id: internal-media.example.com, name: internal-media.example.com, props: { bucket: media, kind: custom, enabled: true, zone_id: 36ca64a6d92827b8a6b90be344bb1bfd } }
+  - { type: r2_public_domain, id: old-media.example.com, name: old-media.example.com, props: { bucket: media, kind: custom, enabled: false, zone_id: 36ca64a6d92827b8a6b90be344bb1bfd } }
+edges:
+  - { type: ROUTES_TO, src: "r2_public_domain:media.example.com", dst: "r2_bucket:media" }
+  - { type: ROUTES_TO, src: "r2_public_domain:internal-media.example.com", dst: "r2_bucket:media" }
+  - { type: ROUTES_TO, src: "r2_public_domain:old-media.example.com", dst: "r2_bucket:media" }
+exposure:
+  - { entry: "r2_public_domain:media.example.com", decision: public, confidence: 2 }
+  - { entry: "r2_public_domain:internal-media.example.com", decision: access, confidence: 2 }
+expect:
+  - { fingerprint: "CF-021:r2_bucket:media", severity: high }

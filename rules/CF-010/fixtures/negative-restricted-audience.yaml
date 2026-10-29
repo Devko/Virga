@@ -1,0 +1,42 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/policies/methods/list/
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/identity_providers/methods/list/
+# Graph shape: docs/architecture/graph-contract.md, access_policy selectors
+description: >
+  Every policy on the app in front of a Worker with a D1 binding narrows who
+  may sign in, or is no Allow policy: Everyone with a required email domain,
+  an IdP group, the corporate IdP as login method, a group of the corporate
+  domain, a Bypass (CF-011), Service Auth and a Block.
+nodes:
+  - { type: identity_provider, id: idp-otp, name: One-time PIN, props: { idp_type: onetimepin } }
+  - { type: identity_provider, id: idp-okta, name: Okta, props: { idp_type: okta } }
+  - { type: worker_script, id: admin, name: admin }
+  - { type: worker_version, id: a1, props: { script_node_id: "worker_script:admin" } }
+  - { type: worker_custom_domain, id: admin.example.com, name: admin.example.com, props: { zone_id: z1, hostname: admin.example.com, service: admin, environment: null } }
+  - { type: d1_database, id: users-db, name: users }
+  - type: access_app
+    id: app-admin
+    name: Admin
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "" }], session_duration: 24h, allowed_idps: [idp-okta] }
+  - type: access_group
+    id: grp-corp
+    name: Corp
+    props: { include: [{ kind: email_domain, value: example.com }], require: [], exclude: [] }
+  - { type: access_policy, id: pol-domain, name: Everyone at corp, props: { decision: allow, include: [{ kind: everyone, value: null }], require: [{ kind: email_domain, value: example.com }], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-idp-group, name: Admins, props: { decision: allow, include: [{ kind: idp_group, value: { idp: idp-okta, name: admins } }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-okta, name: Okta users, props: { decision: allow, include: [{ kind: login_method, value: idp-okta }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-group, name: Corp group, props: { decision: allow, include: [{ kind: group, value: grp-corp }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-bypass, name: Public, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-service, name: Machines, props: { decision: non_identity, include: [{ kind: any_valid_service_token, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-block, name: Block all, props: { decision: deny, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:admin", dst: "worker_version:a1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:a1", dst: "d1_database:users-db", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:admin.example.com", dst: "worker_script:admin" }
+  - { type: ALLOWS, src: "access_policy:pol-domain", dst: "access_app:app-admin", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-idp-group", dst: "access_app:app-admin", props: { precedence: 2 } }
+  - { type: ALLOWS, src: "access_policy:pol-okta", dst: "access_app:app-admin", props: { precedence: 3 } }
+  - { type: ALLOWS, src: "access_policy:pol-group", dst: "access_app:app-admin", props: { precedence: 4 } }
+  - { type: ALLOWS, src: "access_policy:pol-bypass", dst: "access_app:app-admin", props: { precedence: 5 } }
+  - { type: ALLOWS, src: "access_policy:pol-service", dst: "access_app:app-admin", props: { precedence: 6 } }
+  - { type: ALLOWS, src: "access_policy:pol-block", dst: "access_app:app-admin", props: { precedence: 7 } }
+expect: []

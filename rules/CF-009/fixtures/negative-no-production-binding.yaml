@@ -1,0 +1,42 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, DEPLOYS, BINDS, invocations_30d signal
+description: >
+  Evaluated on 2026-10-29; all three Workers are idle and old. One binds only
+  its own KV namespace. One binds the shared database only from a version
+  with 0 % of traffic. One binds a bucket that only a Pages preview
+  environment and another idle Worker use. A store bound only by idle
+  workloads is not in production use.
+params: { now_ms: 1793232000000 }
+nodes:
+  - { type: worker_script, id: busy, name: busy, props: { created_on: "2025-01-01T00:00:00.000Z" } }
+  - { type: worker_version, id: b1, props: { script_node_id: "worker_script:busy" } }
+  - { type: worker_script, id: lonely, name: lonely, props: { created_on: "2025-01-01T00:00:00.000Z" } }
+  - { type: worker_version, id: l1, props: { script_node_id: "worker_script:lonely" } }
+  - { type: worker_script, id: gradual, name: gradual, props: { created_on: "2025-01-01T00:00:00.000Z" } }
+  - { type: worker_version, id: g-old, props: { script_node_id: "worker_script:gradual" } }
+  - { type: worker_version, id: g-new, props: { script_node_id: "worker_script:gradual" } }
+  - { type: worker_script, id: preview-sync, name: preview-sync, props: { created_on: "2025-01-01T00:00:00.000Z" } }
+  - { type: worker_version, id: ps1, props: { script_node_id: "worker_script:preview-sync" } }
+  - { type: pages_project, id: site, name: site, props: { production_branch: main, subdomain: site.pages.dev, preview_deployments: all } }
+  - { type: d1_database, id: orders, name: orders }
+  - { type: kv_namespace, id: kv-lonely, name: lonely-cache }
+  - { type: r2_bucket, id: preview-assets, name: preview-assets }
+edges:
+  - { type: DEPLOYS, src: "worker_script:busy", dst: "worker_version:b1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:b1", dst: "d1_database:orders", key: DB, props: { binding_type: d1 } }
+  - { type: DEPLOYS, src: "worker_script:lonely", dst: "worker_version:l1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:l1", dst: "kv_namespace:kv-lonely", key: CACHE, props: { binding_type: kv_namespace } }
+  - { type: DEPLOYS, src: "worker_script:gradual", dst: "worker_version:g-old", props: { percentage: 0 } }
+  - { type: DEPLOYS, src: "worker_script:gradual", dst: "worker_version:g-new", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:g-old", dst: "d1_database:orders", key: DB, props: { binding_type: d1 } }
+  - { type: DEPLOYS, src: "worker_script:preview-sync", dst: "worker_version:ps1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:ps1", dst: "r2_bucket:preview-assets", key: ASSETS, props: { binding_type: r2_bucket } }
+  - { type: BINDS, src: "worker_version:l1", dst: "r2_bucket:preview-assets", key: ASSETS, props: { binding_type: r2_bucket } }
+  - { type: BINDS, src: "pages_project:site", dst: "r2_bucket:preview-assets", key: "preview:ASSETS", props: { binding_type: r2_bucket, environment: preview } }
+signals:
+  - { node: "worker_script:busy", name: invocations_30d, value: 50 }
+  - { node: "worker_script:lonely", name: invocations_30d, value: 0 }
+  - { node: "worker_script:gradual", name: invocations_30d, value: 0 }
+  - { node: "worker_script:preview-sync", name: invocations_30d, value: 0 }
+expect: []

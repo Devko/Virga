@@ -1,0 +1,41 @@
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/list/ (created_on)
+# Traffic: https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/ (workersInvocationsAdaptive)
+# Graph shape: docs/architecture/graph-contract.md, worker_script, DEPLOYS, BINDS, invocations_30d signal
+description: >
+  Evaluated on 2026-10-29. old-export has had no invocations for 30 days but
+  still binds the D1 database that the busy shop-api uses. nightly-sync has
+  no traffic signal at all, which means no invocations, and binds the R2
+  bucket of a Pages production deployment. The busy Worker itself is not
+  idle, and its public route does not matter here.
+params: { now_ms: 1793232000000 }
+nodes:
+  - { type: worker_script, id: old-export, name: old-export, props: { created_on: "2025-03-01T10:00:00.000Z", modified_on: "2025-03-02T10:00:00.000Z", workers_dev: false, preview_urls: false } }
+  - { type: worker_version, id: oe1, props: { script_node_id: "worker_script:old-export" } }
+  - { type: worker_script, id: shop-api, name: shop-api, props: { created_on: "2025-01-01T00:00:00.000Z", workers_dev: false, preview_urls: false } }
+  - { type: worker_version, id: sa1, props: { script_node_id: "worker_script:shop-api" } }
+  - { type: worker_route, id: r-shop, name: "shop.example.com/api/*", props: { zone_id: z1, pattern: "shop.example.com/api/*", script: shop-api } }
+  - { type: worker_script, id: nightly-sync, name: nightly-sync, props: { created_on: "2025-06-01T00:00:00.000Z", workers_dev: false, preview_urls: false } }
+  - { type: worker_version, id: ns1, props: { script_node_id: "worker_script:nightly-sync" } }
+  - { type: pages_project, id: storefront, name: storefront, props: { production_branch: main, subdomain: storefront.pages.dev, preview_deployments: none } }
+  - { type: d1_database, id: 7b2c-orders, name: orders }
+  - { type: kv_namespace, id: kv-export-cache, name: export-cache }
+  - { type: r2_bucket, id: assets, name: assets }
+edges:
+  - { type: DEPLOYS, src: "worker_script:old-export", dst: "worker_version:oe1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:oe1", dst: "d1_database:7b2c-orders", key: DB, props: { binding_type: d1 } }
+  - { type: BINDS, src: "worker_version:oe1", dst: "kv_namespace:kv-export-cache", key: CACHE, props: { binding_type: kv_namespace } }
+  - { type: DEPLOYS, src: "worker_script:shop-api", dst: "worker_version:sa1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:sa1", dst: "d1_database:7b2c-orders", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_route:r-shop", dst: "worker_script:shop-api" }
+  - { type: DEPLOYS, src: "worker_script:nightly-sync", dst: "worker_version:ns1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:ns1", dst: "r2_bucket:assets", key: ASSETS, props: { binding_type: r2_bucket } }
+  - { type: BINDS, src: "pages_project:storefront", dst: "r2_bucket:assets", key: "production:ASSETS", props: { binding_type: r2_bucket, environment: production } }
+exposure:
+  - { entry: "worker_route:r-shop", decision: public, confidence: 2 }
+signals:
+  - { node: "worker_script:old-export", name: invocations_30d, value: 0 }
+  - { node: "worker_script:shop-api", name: invocations_30d, value: 120000 }
+expect:
+  - { fingerprint: "CF-009:worker_script:old-export", severity: low }
+  - { fingerprint: "CF-009:worker_script:nightly-sync", severity: low }

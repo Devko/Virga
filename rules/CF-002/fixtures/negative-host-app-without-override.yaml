@@ -1,0 +1,61 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# Wildcards cover one label: https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
+# Graph shape: docs/architecture/graph-contract.md, access_app targets, access_policy, ALLOWS
+description: >
+  plain has a bypass host app but no Worker-level Access to override. deep
+  has Worker-level Access, and the wildcard app that admits everyone does not
+  cover its two-label subdomain. strict has Worker-level Access and a host
+  app whose only policy is limited to an email domain.
+nodes:
+  - { type: worker_script, id: plain, name: plain }
+  - { type: worker_custom_domain, id: plain.example.com, name: plain.example.com, props: { zone_id: z1, hostname: plain.example.com, service: plain, environment: null } }
+  - { type: worker_script, id: deep, name: deep }
+  - { type: worker_custom_domain, id: a.b.example.com, name: a.b.example.com, props: { zone_id: z1, hostname: a.b.example.com, service: deep, environment: null } }
+  - { type: worker_script, id: strict, name: strict }
+  - { type: worker_custom_domain, id: strict.example.org, name: strict.example.org, props: { zone_id: z2, hostname: strict.example.org, service: strict, environment: null } }
+  - type: access_app
+    id: ha-plain
+    name: plain bypass
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: plain.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: wa-deep
+    name: deep (Worker)
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: deep, scope: all }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: ha-wildcard
+    name: Everything one level under example.com
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: wa-strict
+    name: strict (Worker)
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: strict, scope: all }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: ha-strict
+    name: strict host
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: strict.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_policy
+    id: pol-bypass
+    name: Public
+    props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-everyone
+    name: Anyone
+    props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+  - type: access_policy
+    id: pol-corp
+    name: Corp
+    props: { decision: allow, include: [{ kind: email_domain, value: example.com }], require: [], exclude: [], session_duration: null }
+edges:
+  - { type: ROUTES_TO, src: "worker_custom_domain:plain.example.com", dst: "worker_script:plain" }
+  - { type: ROUTES_TO, src: "worker_custom_domain:a.b.example.com", dst: "worker_script:deep" }
+  - { type: ROUTES_TO, src: "worker_custom_domain:strict.example.org", dst: "worker_script:strict" }
+  - { type: ALLOWS, src: "access_policy:pol-bypass", dst: "access_app:ha-plain", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:wa-deep", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:ha-wildcard", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:wa-strict", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:ha-strict", props: { precedence: 1 } }
+exposure:
+  - { entry: "worker_custom_domain:plain.example.com", decision: public, confidence: 2 }
+  - { entry: "worker_custom_domain:a.b.example.com", decision: access, confidence: 2 }
+  - { entry: "worker_custom_domain:strict.example.org", decision: access, confidence: 2 }
+expect: []

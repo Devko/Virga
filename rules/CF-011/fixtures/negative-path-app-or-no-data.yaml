@@ -1,0 +1,52 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# App paths: https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
+# Graph shape: docs/architecture/graph-contract.md, access_app targets, access_policy, BINDS
+description: >
+  Bypass policies that do not qualify: one on a path app for the public
+  assets of a Worker with data (the recommended split), one on an app in
+  front of a Worker without data store bindings, one on a Pages domain whose
+  data binding belongs to the preview environment. An Allow policy for
+  Everyone on the data Worker is CF-010's concern, not this rule's.
+nodes:
+  - { type: worker_script, id: shop, name: shop }
+  - { type: worker_version, id: shop-1, props: { script_node_id: "worker_script:shop" } }
+  - { type: worker_custom_domain, id: shop.example.com, name: shop.example.com, props: { zone_id: z1, hostname: shop.example.com, service: shop, environment: null } }
+  - { type: d1_database, id: shop-db, name: shop }
+  - { type: worker_script, id: landing, name: landing }
+  - { type: worker_version, id: landing-1, props: { script_node_id: "worker_script:landing" } }
+  - { type: workers_dev, id: landing.acme.workers.dev, name: landing.acme.workers.dev, props: { script: landing } }
+  - { type: pages_project, id: site, name: site, props: { production_branch: main, subdomain: site.pages.dev, preview_deployments: all } }
+  - { type: pages_domain, id: site.pages.dev, name: site.pages.dev, props: { project: site, status: null } }
+  - type: access_app
+    id: app-assets
+    name: Shop assets
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: /assets }, { kind: hostname, host: shop.example.com, path: /favicon.ico }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-shop
+    name: Shop
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-landing
+    name: Landing
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: landing.acme.workers.dev, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-site
+    name: Site
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: site.pages.dev, path: "" }], session_duration: null, allowed_idps: [] }
+  - { type: access_policy, id: pol-assets, name: Public assets, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-landing, name: Public landing, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-site, name: Public site, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-everyone, name: Everyone, props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:shop", dst: "worker_version:shop-1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:shop-1", dst: "d1_database:shop-db", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:shop.example.com", dst: "worker_script:shop" }
+  - { type: DEPLOYS, src: "worker_script:landing", dst: "worker_version:landing-1", props: { percentage: 100 } }
+  - { type: ROUTES_TO, src: "workers_dev:landing.acme.workers.dev", dst: "worker_script:landing" }
+  - { type: ROUTES_TO, src: "pages_domain:site.pages.dev", dst: "pages_project:site", props: { environment: production } }
+  - { type: BINDS, src: "pages_project:site", dst: "d1_database:shop-db", key: "preview:DB", props: { binding_type: d1, environment: preview } }
+  - { type: ALLOWS, src: "access_policy:pol-assets", dst: "access_app:app-assets", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-shop", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-landing", dst: "access_app:app-landing", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-site", dst: "access_app:app-site", props: { precedence: 1 } }
+expect: []

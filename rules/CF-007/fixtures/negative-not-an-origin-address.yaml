@@ -1,0 +1,27 @@
+# Source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/
+# Cloudflare ranges: https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6
+# Placeholders: https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/#originless-setups
+# Mesh range: https://developers.cloudflare.com/mesh/guides/connect-client-devices/ (100.96.0.0/12)
+# Graph shape: docs/architecture/graph-contract.md, dns_record
+description: >
+  Proxied and unproxied records share addresses that no one can reach as an
+  origin: Cloudflare's ranges (including the last address of 104.24.0.0/14
+  and the /29 2a06:98c0::/29), the originless placeholders, the Mesh range,
+  private and loopback addresses.
+nodes:
+  - { type: dns_record, id: p1, name: a.example.com, props: { zone_id: z1, type: A, content: 104.27.255.255, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u1, name: a-direct.example.com, props: { zone_id: z1, type: A, content: 104.27.255.255, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p2, name: b.example.com, props: { zone_id: z1, type: AAAA, content: "2a06:98c7::1", proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u2, name: b-direct.example.com, props: { zone_id: z1, type: AAAA, content: "2a06:98c7::1", proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p3, name: c.example.com, props: { zone_id: z1, type: A, content: 192.0.2.0, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u3, name: c-direct.example.com, props: { zone_id: z1, type: A, content: 192.0.2.0, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p4, name: d.example.com, props: { zone_id: z1, type: AAAA, content: "100::", proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u4, name: d-direct.example.com, props: { zone_id: z1, type: AAAA, content: "100::", proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p5, name: e.example.com, props: { zone_id: z1, type: A, content: 100.96.0.12, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u5, name: e-direct.example.com, props: { zone_id: z1, type: A, content: 100.96.0.12, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p6, name: f.example.com, props: { zone_id: z1, type: A, content: 10.1.2.3, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u6, name: f-direct.example.com, props: { zone_id: z1, type: A, content: 10.1.2.3, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p7, name: g.example.com, props: { zone_id: z1, type: AAAA, content: "::1", proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u7, name: g-direct.example.com, props: { zone_id: z1, type: AAAA, content: "::1", proxied: false, ttl: 300 } }
+edges: []
+expect: []

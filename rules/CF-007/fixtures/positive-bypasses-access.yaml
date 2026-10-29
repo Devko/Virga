@@ -1,0 +1,29 @@
+# Source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# Wildcards cover one label: https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
+# Graph shape: docs/architecture/graph-contract.md, dns_record and access_app targets
+description: >
+  Access protects app.example.com through an exact target and
+  wiki.example.com through *.example.com; unproxied records reach both
+  origins directly (high). The wildcard does not cover a.b.example.com, so
+  that bypass stays medium.
+nodes:
+  - { type: dns_record, id: rec-app, name: app.example.com, props: { zone_id: z1, type: A, content: 198.51.100.7, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: rec-app-direct, name: app-direct.example.com, props: { zone_id: z1, type: A, content: 198.51.100.7, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: rec-wiki, name: Wiki.example.com, props: { zone_id: z1, type: A, content: 198.51.100.8, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: rec-wiki-direct, name: wiki-origin.example.com, props: { zone_id: z1, type: A, content: 198.51.100.8, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: rec-deep, name: a.b.example.com, props: { zone_id: z1, type: A, content: 198.51.100.9, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: rec-deep-direct, name: deep-origin.example.com, props: { zone_id: z1, type: A, content: 198.51.100.9, proxied: false, ttl: 300 } }
+  - type: access_app
+    id: app-1
+    name: App
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: app.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: app-2
+    name: Intranet
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: 24h, allowed_idps: [] }
+edges: []
+expect:
+  - { fingerprint: "CF-007:dns_record:rec-app-direct", severity: high }
+  - { fingerprint: "CF-007:dns_record:rec-wiki-direct", severity: high }
+  - { fingerprint: "CF-007:dns_record:rec-deep-direct", severity: medium }

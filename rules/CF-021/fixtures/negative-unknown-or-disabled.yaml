@@ -1,0 +1,21 @@
+# Source: https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/custom/methods/list/
+# Source: https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/managed/methods/list/
+# Graph shape: docs/architecture/graph-contract.md, r2_public_domain and exposure
+description: >
+  Unknown is not public: the evaluator could not decide the custom domain of
+  one bucket. The other bucket's custom domain is disabled, and a stale
+  r2.dev node says enabled false.
+nodes:
+  - { type: r2_bucket, id: reports, name: reports }
+  - { type: r2_public_domain, id: reports.example.com, name: reports.example.com, props: { bucket: reports, kind: custom, enabled: true, zone_id: null } }
+  - { type: r2_bucket, id: archive, name: archive }
+  - { type: r2_public_domain, id: archive.example.com, name: archive.example.com, props: { bucket: archive, kind: custom, enabled: false, zone_id: null } }
+  - { type: r2_public_domain, id: pub-aa.r2.dev, name: pub-aa.r2.dev, props: { bucket: archive, kind: r2_dev, enabled: false, zone_id: null } }
+edges:
+  - { type: ROUTES_TO, src: "r2_public_domain:reports.example.com", dst: "r2_bucket:reports" }
+  - { type: ROUTES_TO, src: "r2_public_domain:archive.example.com", dst: "r2_bucket:archive" }
+  - { type: ROUTES_TO, src: "r2_public_domain:pub-aa.r2.dev", dst: "r2_bucket:archive" }
+exposure:
+  - { entry: "r2_public_domain:reports.example.com", decision: unknown, confidence: 0 }
+  - { entry: "r2_public_domain:archive.example.com", decision: public, confidence: 2 }
+expect: []

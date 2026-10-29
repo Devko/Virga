@@ -1,0 +1,24 @@
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, pages_project and BINDS
+description: >
+  Public previews, but every preview binding points to a resource of its
+  own. A second project shares its database between environments but has
+  preview deployments turned off, so the collector emits no preview node.
+nodes:
+  - { type: pages_project, id: shop, name: shop, props: { production_branch: main, subdomain: shop.pages.dev, preview_deployments: all } }
+  - { type: pages_preview, id: "*.shop.pages.dev", name: "*.shop.pages.dev", props: { project: shop } }
+  - { type: d1_database, id: db-prod, name: prod }
+  - { type: d1_database, id: db-staging, name: staging }
+  - { type: pages_project, id: docs, name: docs, props: { production_branch: main, subdomain: docs.pages.dev, preview_deployments: none } }
+  - { type: pages_domain, id: docs.pages.dev, name: docs.pages.dev, props: { project: docs, status: null } }
+edges:
+  - { type: ROUTES_TO, src: "pages_preview:*.shop.pages.dev", dst: "pages_project:shop", props: { environment: preview } }
+  - { type: BINDS, src: "pages_project:shop", dst: "d1_database:db-prod", key: "production:DB", props: { binding_type: d1, environment: production } }
+  - { type: BINDS, src: "pages_project:shop", dst: "d1_database:db-staging", key: "preview:DB", props: { binding_type: d1, environment: preview } }
+  - { type: ROUTES_TO, src: "pages_domain:docs.pages.dev", dst: "pages_project:docs", props: { environment: production } }
+  - { type: BINDS, src: "pages_project:docs", dst: "d1_database:db-prod", key: "production:DB", props: { binding_type: d1, environment: production } }
+  - { type: BINDS, src: "pages_project:docs", dst: "d1_database:db-prod", key: "preview:DB", props: { binding_type: d1, environment: preview } }
+exposure:
+  - { entry: "pages_preview:*.shop.pages.dev", decision: public, confidence: 1 }
+  - { entry: "pages_domain:docs.pages.dev", decision: public, confidence: 2 }
+expect: []

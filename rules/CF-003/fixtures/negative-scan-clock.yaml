@@ -1,0 +1,20 @@
+# Source: https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, account_token
+description: >
+  Without a now_ms override, time runs from the fixture scan's start at
+  epoch 1 ms. This token expires 59 days after it, so it is not long-lived.
+nodes:
+  - type: account_token
+    id: c0000000000000000000000000000001
+    name: short-by-scan-clock
+    props:
+      status: active
+      issued_on: "1970-01-01T00:00:00Z"
+      modified_on: null
+      expires_on: "1970-03-01T00:00:00Z"
+      not_before: null
+      ip_condition: null
+      policies:
+        - { effect: allow, permission_groups: [{ id: pg-1, name: Workers Scripts Write }], resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" } }
+edges: []
+expect: []

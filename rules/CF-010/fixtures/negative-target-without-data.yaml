@@ -1,0 +1,73 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# Wildcards cover one label: https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
+# Graph shape: docs/architecture/graph-contract.md, access_app targets, BINDS, DEPLOYS
+description: >
+  An Allow-Everyone policy sits on apps whose targets reach no data store
+  and no tunnel: a Worker with only a service binding, a wildcard that does
+  not cover a two-label subdomain, a Worker whose D1 binding is in a version
+  without traffic, a Pages domain whose binding belongs to the preview
+  environment, and an app the policy was removed from.
+nodes:
+  - { type: worker_script, id: static, name: static }
+  - { type: worker_version, id: s1, props: { script_node_id: "worker_script:static" } }
+  - { type: worker_custom_domain, id: static.example.com, name: static.example.com, props: { zone_id: z1, hostname: static.example.com, service: static, environment: null } }
+  - { type: worker_script, id: backend, name: backend }
+  - { type: worker_script, id: deep, name: deep }
+  - { type: worker_version, id: d1v, props: { script_node_id: "worker_script:deep" } }
+  - { type: worker_custom_domain, id: a.b.example.net, name: a.b.example.net, props: { zone_id: z2, hostname: a.b.example.net, service: deep, environment: null } }
+  - { type: worker_script, id: gradual, name: gradual }
+  - { type: worker_version, id: g-old, props: { script_node_id: "worker_script:gradual" } }
+  - { type: worker_version, id: g-new, props: { script_node_id: "worker_script:gradual" } }
+  - { type: worker_route, id: r-gradual, name: "gradual.example.org/*", props: { zone_id: z3, pattern: "gradual.example.org/*", script: gradual } }
+  - { type: pages_project, id: site, name: site, props: { production_branch: main, subdomain: site.pages.dev, preview_deployments: all } }
+  - { type: pages_domain, id: site.example.org, name: site.example.org, props: { project: site, status: active } }
+  - { type: worker_script, id: data, name: data }
+  - { type: worker_version, id: dv1, props: { script_node_id: "worker_script:data" } }
+  - { type: worker_custom_domain, id: data.example.org, name: data.example.org, props: { zone_id: z3, hostname: data.example.org, service: data, environment: null } }
+  - { type: d1_database, id: db, name: db }
+  - type: access_app
+    id: app-static
+    name: Static
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: static.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-wild
+    name: Wildcard
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-gradual
+    name: Gradual
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: gradual.example.org, path: /admin }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-site
+    name: Site
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: site.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: app-data
+    name: Data
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: data.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+  - type: access_policy
+    id: pol-everyone
+    name: Everyone
+    props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null }
+edges:
+  - { type: DEPLOYS, src: "worker_script:static", dst: "worker_version:s1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:s1", dst: "worker_script:backend", key: BACKEND, props: { binding_type: service } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:static.example.com", dst: "worker_script:static" }
+  - { type: DEPLOYS, src: "worker_script:deep", dst: "worker_version:d1v", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:d1v", dst: "d1_database:db", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:a.b.example.net", dst: "worker_script:deep" }
+  - { type: DEPLOYS, src: "worker_script:gradual", dst: "worker_version:g-old", props: { percentage: 0 } }
+  - { type: DEPLOYS, src: "worker_script:gradual", dst: "worker_version:g-new", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:g-old", dst: "d1_database:db", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_route:r-gradual", dst: "worker_script:gradual" }
+  - { type: ROUTES_TO, src: "pages_domain:site.example.org", dst: "pages_project:site", props: { environment: production } }
+  - { type: BINDS, src: "pages_project:site", dst: "d1_database:db", key: "preview:DB", props: { binding_type: d1, environment: preview } }
+  - { type: DEPLOYS, src: "worker_script:data", dst: "worker_version:dv1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:dv1", dst: "d1_database:db", key: DB, props: { binding_type: d1 } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:data.example.org", dst: "worker_script:data" }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-static", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-wild", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-gradual", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-site", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-data", props: { precedence: 1 }, deleted: true }
+expect: []

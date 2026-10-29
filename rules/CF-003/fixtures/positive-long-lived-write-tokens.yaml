@@ -1,0 +1,97 @@
+# Source: https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/get/
+# (policies[].effect, permission_groups[].name, resources as map[string] or map[map[string]],
+#  condition.request_ip.in / not_in, expires_on, issued_on, last_used_on, status)
+# Resource syntax: https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/
+# Permission names: https://developers.cloudflare.com/fundamentals/api/reference/permissions/
+# Graph shape: docs/architecture/graph-contract.md, account_token and the last_used_on signal
+description: >
+  Evaluated on 2026-10-29. Five active, unrestricted tokens with risky write
+  permissions: one without expiry (high); one whose DNS grant covers all
+  zones of the account (critical); one with the dashboard name of an Access
+  permission, unused for 120 days (critical); one never used since it was
+  issued in May (critical); one with only a not_in IP list (high).
+params: { now_ms: 1793232000000 }
+nodes:
+  - type: account_token
+    id: 0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f
+    name: deploy-ci
+    props:
+      status: active
+      issued_on: "2026-01-10T09:00:00Z"
+      modified_on: "2026-01-10T09:00:00Z"
+      expires_on: null
+      not_before: null
+      ip_condition: null
+      policies:
+        - effect: allow
+          permission_groups: [{ id: pg-1, name: Workers Scripts Write }, { id: pg-2, name: Account Settings Read }]
+          resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" }
+  - type: account_token
+    id: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d
+    name: dns-bot
+    props:
+      status: active
+      issued_on: "2026-06-01T00:00:00Z"
+      modified_on: "2026-06-01T00:00:00Z"
+      expires_on: "2027-06-01T00:00:00Z"
+      not_before: null
+      ip_condition: null
+      policies:
+        - effect: allow
+          permission_groups: [{ id: pg-3, name: DNS Write }, { id: pg-4, name: Zone Read }]
+          resources:
+            "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": { "com.cloudflare.api.account.zone.*": "*" }
+  - type: account_token
+    id: 2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e
+    name: access-admin
+    props:
+      status: active
+      issued_on: "2026-02-01T00:00:00Z"
+      modified_on: "2026-02-01T00:00:00Z"
+      expires_on: "2027-10-01T00:00:00Z"
+      not_before: null
+      ip_condition: null
+      policies:
+        - effect: allow
+          permission_groups: [{ id: pg-5, name: "Access: Apps and Policies Edit" }]
+          resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" }
+  - type: account_token
+    id: 3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f
+    name: logpush
+    props:
+      status: active
+      issued_on: "2026-05-01T00:00:00Z"
+      modified_on: "2026-05-01T00:00:00Z"
+      expires_on: null
+      not_before: null
+      ip_condition: null
+      policies:
+        - effect: allow
+          permission_groups: [{ id: pg-6, name: Logs Write }]
+          resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" }
+  - type: account_token
+    id: 4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90
+    name: secrets-sync
+    props:
+      status: active
+      issued_on: "2026-09-01T00:00:00Z"
+      modified_on: "2026-09-01T00:00:00Z"
+      expires_on: null
+      not_before: null
+      ip_condition: { in: [], not_in: ["203.0.113.0/24"] }
+      policies:
+        - effect: allow
+          permission_groups: [{ id: pg-7, name: Secrets Store Write }]
+          resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" }
+edges: []
+signals:
+  - { node: "account_token:0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f", name: last_used_on, value: 1793145600000 }
+  - { node: "account_token:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", name: last_used_on, value: 1793145600000 }
+  - { node: "account_token:2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e", name: last_used_on, value: 1782864000000 }
+  - { node: "account_token:4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90", name: last_used_on, value: 1793145600000 }
+expect:
+  - { fingerprint: "CF-003:account_token:0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f", severity: high }
+  - { fingerprint: "CF-003:account_token:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", severity: critical }
+  - { fingerprint: "CF-003:account_token:2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e", severity: critical }
+  - { fingerprint: "CF-003:account_token:3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", severity: critical }
+  - { fingerprint: "CF-003:account_token:4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90", severity: high }

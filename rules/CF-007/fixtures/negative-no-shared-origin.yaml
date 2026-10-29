@@ -1,0 +1,21 @@
+# Source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/
+# Graph shape: docs/architecture/graph-contract.md, dns_record
+description: >
+  No unproxied record shares an address with a proxied one: different
+  addresses, both records proxied, both unproxied, an unknown proxy status,
+  a CNAME, and malformed content that only looks like an address.
+nodes:
+  - { type: dns_record, id: p1, name: a.example.com, props: { zone_id: z1, type: A, content: 203.0.113.10, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u1, name: a-direct.example.com, props: { zone_id: z1, type: A, content: 203.0.113.11, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p2, name: b.example.com, props: { zone_id: z1, type: A, content: 203.0.113.20, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: p2b, name: b2.example.com, props: { zone_id: z1, type: A, content: 203.0.113.20, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u3, name: c.example.com, props: { zone_id: z1, type: A, content: 203.0.113.30, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: u3b, name: c2.example.com, props: { zone_id: z1, type: A, content: 203.0.113.30, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p4, name: d.example.com, props: { zone_id: z1, type: A, content: 203.0.113.40, proxied: null, ttl: 1 } }
+  - { type: dns_record, id: u4, name: d-direct.example.com, props: { zone_id: z1, type: A, content: 203.0.113.40, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p5, name: e.example.com, props: { zone_id: z1, type: A, content: 203.0.113.50, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u5, name: e-alias.example.com, props: { zone_id: z1, type: CNAME, content: 203.0.113.50, proxied: false, ttl: 300 } }
+  - { type: dns_record, id: p6, name: f.example.com, props: { zone_id: z1, type: A, content: 203.0.113.060, proxied: true, ttl: 1 } }
+  - { type: dns_record, id: u6, name: f-direct.example.com, props: { zone_id: z1, type: A, content: 203.0.113.060, proxied: false, ttl: 300 } }
+edges: []
+expect: []
