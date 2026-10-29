@@ -28,14 +28,14 @@ Not a product phase. It settles the open decisions and tests the assumptions tha
 
 | Spike | Question | Result needed |
 | --- | --- | --- |
-| S-01 | Workflows: `schedules` on the Workflow binding as the cron, instance ID format (at most 100 characters; `:` and `.` are probably not allowed), duplicate-ID behavior within the retention period, step and CPU limits in practice | Dispatcher design confirmed, chunk sizes set |
+| S-01 | Workflows: `schedules` on the Workflow binding as the cron, instance ID format (at most 100 characters, pattern `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`), duplicate-ID behavior within the retention period, step and CPU limits in practice | Dispatcher design confirmed, chunk sizes set |
 | S-02 | API rate limit for account-owned tokens, the `Ratelimit` header, GraphQL limits | Rate budget object design and pacing values |
 | S-03 | Durable Object SQLite: run `schema-draft.sql`, the JSON batch upsert and CF-001 in a real object. Recursive CTEs, triggers, CPU time of a rule run on a synthetic graph of 20,000 nodes, cost of row writes | Schema v1, write strategy (D-05) |
-| S-04 | Workers Versions API with `include=modules`. Field name and shape of the dependency metadata that Wrangler 4.110+ uploads (the spec calls it `package_dependencies`; unconfirmed). Direct dependencies only? devDependencies included? Cap of 200 entries? Source maps present with Wrangler 4.150+? | Package source priority and confidence levels |
-| S-05 | Permission groups. Minimal read set per collector. Does the new Workers Metadata Read-Only role cover scripts, settings, bindings, routes and deployments (one report says deployments return 401)? | Token profiles (D-14), onboarding allowlist |
+| S-04 | Workers Versions API (beta) with `include=modules`. Does `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) include devDependencies and transitive packages? Is there a size cap? Are source maps present with a current Wrangler? | Package source priority and confidence levels |
+| S-05 | Permission groups. Minimal read set per collector. Which product-level Metadata Read-Only roles (Workers, D1, KV, R2, Queues, Hyperdrive) can an account token select? Does Workers Metadata Read-Only cover scripts, settings, bindings, routes and deployments (one community report says deployments return 401)? | Token profiles (D-14), onboarding allowlist |
 | S-06 | Audit Logs v2 polling: cursor handling, volume of the tool's own `view` events per scan, server-side filter `actor_token_id.not` | Event poller design, cost of polling |
 | S-07 | Containers: `enableInternet = false`, outbound handlers, permission for registry pull credentials | Phase 2 scanner design, or a separate optional token |
-| S-08 | Worker-level Access with JWT validation for the UI; Access or OAuth in front of the MCP server | Web Worker auth design |
+| S-08 | Worker-level Access for the UI: `ctx.access` identity plus JWT validation as a second check; Access or OAuth in front of the MCP server | Web Worker auth design |
 
 **Gate:** decisions D-01 to D-15 recorded; spikes S-01 to S-06 and S-08 answered (S-07 may run into phase 1); test range account exists.
 
@@ -146,7 +146,7 @@ Not a product phase. It settles the open decisions and tests the assumptions tha
 | CF-005 | 2 | Containers, images, vulns, exposure | Needs the Worker → Durable Object → container path |
 | CF-006 | 2 | Workers code, exposure, storage | "Recognizable authentication" and the MCP signature need code |
 | CF-008 | 2 | Container instances | Spec defers it; depends on digests |
-| CF-012 to CF-018 | 3 | Zero Trust collectors and evaluator | CF-016 needs posture results over time |
+| CF-012 to CF-018 | 3 | Zero Trust collectors and evaluator | CF-016 needs posture results over time; Cloudflare keeps them 30 days, longer needs Logpush |
 | CF-019 | 3 | Members, Audit Logs v2 | |
 | CF-020 | 3 | Access logins | 90 days need Logpush or Enterprise retention |
 | CF-023 | 3 | Audit Logs v2 events | Detection rule over `events`, not graph state |
@@ -190,21 +190,21 @@ docs/
 
 ## Token profiles and permissions
 
-The spec defines two profiles. Permission group names below are candidates. Spike S-05 checks them against the permission groups API before the onboarding allowlist is written.
+The spec defines two profiles. Names come from the API token permissions reference and, for the granular Workers and product roles, from the Workers authorization docs (checked 2026-10-29). Spike S-05 checks them against the permission groups API before the onboarding allowlist is written.
 
 | Resource class | Candidate permission group (read) | Profile |
 | --- | --- | --- |
 | Zones, DNS, zone settings | Zone Read, DNS Read, Zone Settings Read | Inventory |
-| Rulesets, WAF | Account and zone ruleset or firewall read groups | Inventory |
-| Workers scripts, routes, settings, deployments | Workers Metadata Read-Only (granular role since 2026-09-15), Workers Routes Read | Inventory. Not Workers Scripts Read: it downloads code |
+| Rulesets, WAF | Account Rulesets Read, Account WAF Read, Zone WAF Read, Firewall Services Read | Inventory |
+| Workers scripts, routes, settings, deployments | Workers Metadata Read-Only (granular role since 2026-09-15), Workers Routes Read | Inventory. Not Workers Scripts Read: it now maps to Content Read-Only and reads code |
 | Worker bundles (code) | Workers Content Read-Only or Workers Scripts Read | Workload scan |
-| R2, Queues, Hyperdrive, Pages, Secrets Store | Workers R2 Storage Read, Queues Read, Hyperdrive Read, Pages Read, Secrets Store Read | Inventory |
-| D1, KV | D1 Read, Workers KV Storage Read | Optional. D1 Read runs queries and KV Read returns values. Without them, names come from the Worker bindings (D-14) |
-| Containers | Containers read group; registry credentials permission unknown (S-07) | Workload scan |
-| Access, Gateway, devices, tunnels, routes | Access: Apps and Policies Read; Access: Organizations, Identity Providers, and Groups Read; Access: Service Tokens Read; Zero Trust Read; Cloudflare Tunnel Read | Inventory |
+| Queues, Hyperdrive, Pages, Secrets Store | Queues Read, Hyperdrive Read, Pages Metadata Read, Secrets Store read (name to confirm) | Inventory |
+| D1, KV, R2 | Product-level Metadata Read-Only if account tokens offer it (S-05); otherwise D1 Read, Workers KV Storage Read, Workers R2 Storage Read | Inventory with Metadata Read-Only. The Read groups reach data and stay optional; without them, names come from the Worker bindings (D-14) |
+| Containers | Containers Read; registry credentials permission undocumented (S-07) | Workload scan |
+| Access, Gateway, devices, tunnels, routes | Access: Apps and Policies Read; Access: Organizations, Identity Providers, and Groups Read; Access: Service Tokens Read; Zero Trust Read; Cloudflare Tunnel Read; Cloudflare One Networks Read | Inventory |
 | Account tokens, members, audit logs | Account API Tokens Read (also needed for the onboarding self-check), Account Settings Read | Inventory |
 | Traffic | Account Analytics Read | Inventory |
-| Security Insights | Security Center read group | Inventory |
+| Security Insights | Account Security Center Insights | Inventory |
 
 ## Testing strategy
 

@@ -62,7 +62,7 @@ Type keys used by collectors, rules and fixtures. The list is the spec's table, 
 | `PROTECTED_BY` | entry point or Worker → Access app or ruleset | | `level` (`host`, `path`, `worker`) |
 | `BINDS` | Worker version → data store, container, Worker | binding name | `binding_type` |
 | `DEPLOYS` | Worker script → version | | `percentage` |
-| `CONTAINS` | Worker version or image → package | | `confidence`, `source` (`wrangler_metadata`, `sourcemap`, `banner`, `sbom`) |
+| `CONTAINS` | Worker version or image → package | | `confidence`, `source` (`package_dependencies`, `sourcemap`, `banner`, `sbom`) |
 | `RUNS` | container app → image | | `digest` |
 | `EGRESS` | container app → host or `internet` | | |
 | `CAN` | identity → resource | permission group | `scope` |

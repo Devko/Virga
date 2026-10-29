@@ -26,9 +26,10 @@ Read before changing anything:
 These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 
 - Durable Object SQL documents only positional `?` parameters and allows at most 100 per statement. Send batches as one JSON parameter and expand them with `json_each`. Use `transactionSync()`, not `BEGIN`/`COMMIT`.
-- Workflow step results are at most 1 MiB, so steps write to the graph and return counters. Instance IDs are at most 100 characters; avoid `:` and `.`.
+- Workflow step results are at most 1 MiB, so steps write to the graph and return counters. Instance IDs are at most 100 characters and must match `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`.
 - The API allows 1,200 REST requests per 5 minutes per token, and exceeding it blocks the token for 5 minutes. GraphQL has a separate limit of 300 queries per 5 minutes.
-- The inventory token profile uses the Workers Metadata Read-Only role. Workers Scripts Read downloads code; D1 Read and KV Read reach data.
+- The inventory token profile uses the Workers Metadata Read-Only role. Workers Scripts Read reads code; D1 Read and KV Read reach data.
+- Worker versions carry `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) in the Workers API (beta). It does not separate dev from production dependencies.
 - MCP: `createMcpHandler` from `agents/mcp/server`. `McpAgent` is deprecated.
 
 ## Conventions
