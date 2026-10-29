@@ -1,4 +1,4 @@
-import { GraphBuilder, isObject, listByPage, sortedUnique, str } from "../platform/util.ts";
+import { bool, GraphBuilder, isObject, listByPage, sortedUnique, str } from "../platform/util.ts";
 import type { Collector } from "../types.ts";
 import { displayName, fitsId } from "./util.ts";
 
@@ -10,7 +10,7 @@ interface CfMember {
   id?: string;
   email?: string;
   status?: string;
-  user?: { email?: string };
+  user?: { email?: string; two_factor_authentication_enabled?: boolean };
   roles?: unknown;
   policies?: unknown;
 }
@@ -55,6 +55,8 @@ export const membersCollector: Collector<never> = {
         status: str(member.status),
         roles: memberRoles,
         super_admin: memberRoles.includes(SUPER_ADMIN_ROLE),
+        // Dashboard login only; the API documents that it does not apply to API authentication.
+        two_factor_enabled: bool(member.user?.two_factor_authentication_enabled),
       });
     }
     return g.output();
