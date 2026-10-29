@@ -44,6 +44,19 @@ export const PLATFORM_READS: readonly ReadRule[] = [
     usedBy: "workers",
   },
   { method: "GET", pattern: "/accounts/:account_id/queues", usedBy: "workers" },
+  // pages
+  { method: "GET", pattern: "/accounts/:account_id/pages/projects", usedBy: "pages" },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/pages/projects/:project_name",
+    usedBy: "pages",
+  },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/pages/projects/:project_name/domains",
+    usedBy: "pages",
+  },
+  { method: "GET", pattern: "/accounts/:account_id/queues", usedBy: "pages" },
   // storage
   { method: "GET", pattern: "/accounts/:account_id/r2/buckets", usedBy: "storage" },
   {

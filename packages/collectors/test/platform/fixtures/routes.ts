@@ -4,6 +4,7 @@
 import type { CfQuery } from "@virga/cf-api";
 import { envelope, type FixtureRoute } from "@virga/cf-api/testing";
 import { recordA, recordCname, recordTxt } from "./dns.ts";
+import { directUploadProject, gitProject, gitProjectDomains, noPreviewProject } from "./pages.ts";
 import {
   bucketBare,
   bucketExample,
@@ -106,6 +107,27 @@ export const workersRoutes: Routes = {
   [`${account}/queues`]: queuesRoute,
   [`/zones/${ZONE_A}/workers/routes`]: envelope([routeWithScript, routeWithoutScript]),
   [`/zones/${ZONE_B}/workers/routes`]: envelope([]),
+};
+
+const projects = `${account}/pages/projects`;
+
+/** The project list comes in two pages. */
+export const pagesRoutes: Routes = {
+  [projects]: (q: CfQuery) =>
+    Number(q.page) === 1
+      ? envelope([gitProject, noPreviewProject], { count: 2, page: 1, total_pages: 2 })
+      : envelope([directUploadProject], { count: 1, page: 2, total_pages: 2 }),
+  [`${projects}/this-is-my-project-01`]: envelope(gitProject),
+  [`${projects}/docs`]: envelope(noPreviewProject),
+  [`${projects}/landing`]: envelope(directUploadProject),
+  [`${projects}/this-is-my-project-01/domains`]: envelope(gitProjectDomains, {
+    count: 2,
+    page: 1,
+    total_pages: 1,
+  }),
+  [`${projects}/docs/domains`]: envelope([], { count: 0, page: 1, total_pages: 1 }),
+  [`${projects}/landing/domains`]: envelope([], { count: 0, page: 1, total_pages: 1 }),
+  [`${account}/queues`]: queuesRoute,
 };
 
 export const storageRoutes: Routes = {
