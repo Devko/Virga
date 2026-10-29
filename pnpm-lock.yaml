@@ -37,6 +37,23 @@ importers:
         specifier: 4.151.0
         version: 4.151.0(@types/node@22.20.5)
 
+  packages/cf-api: {}
+
+  packages/collectors:
+    dependencies:
+      '@virga/cf-api':
+        specifier: workspace:*
+        version: link:../cf-api
+      '@virga/graph':
+        specifier: workspace:*
+        version: link:../graph
+
+  packages/exposure:
+    dependencies:
+      '@virga/graph':
+        specifier: workspace:*
+        version: link:../graph
+
   packages/graph: {}
 
   packages/rules:

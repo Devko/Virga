@@ -1,0 +1,19 @@
+{
+  "name": "@virga/collectors",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Collectors: fetch Cloudflare configuration and normalize it into graph batches",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@virga/cf-api": "workspace:*",
+    "@virga/graph": "workspace:*"
+  }
+}

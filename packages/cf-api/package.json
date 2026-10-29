@@ -1,0 +1,16 @@
+{
+  "name": "@virga/cf-api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Read-only Cloudflare API client contract: transport, reader, errors, allowlist",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  }
+}

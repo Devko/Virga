@@ -129,3 +129,17 @@ describe("sweep", () => {
     ]);
   });
 });
+
+describe("replaceInsights", () => {
+  it("upserts current insights and tombstones the rest", async () => {
+    const { replaceInsights } = await import("../src/index.ts");
+    const row = (id: string) => ({ id, type: "t", severity: "high", subjectId: null, payload: {} });
+    replaceInsights(db, [row("i1"), row("i2")], 1);
+    replaceInsights(db, [row("i2")], 2);
+    const rows = db.query("SELECT id, first_seen, deleted_at FROM insights ORDER BY id");
+    expect(rows).toEqual([
+      { id: "i1", first_seen: 1, deleted_at: 2 },
+      { id: "i2", first_seen: 1, deleted_at: null },
+    ]);
+  });
+});

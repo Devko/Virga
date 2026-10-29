@@ -1,0 +1,18 @@
+{
+  "name": "@virga/exposure",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Exposure evaluator: effective reachability per entry point and path prefix",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@virga/graph": "workspace:*"
+  }
+}

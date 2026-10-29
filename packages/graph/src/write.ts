@@ -406,3 +406,43 @@ export function setSignals(db: SqlRunner, rows: readonly SignalRow[], at = Date.
     }
   });
 }
+
+export interface InsightRow {
+  id: string;
+  type: string;
+  severity: string | null;
+  /** Node the insight is about, if the collector could resolve it. */
+  subjectId: string | null;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Makes the insights table match the given complete set: upserts every row
+ * and tombstones insights that are no longer reported. Call only with the
+ * full result of a complete collector run.
+ */
+export function replaceInsights(db: SqlRunner, rows: readonly InsightRow[], at = Date.now()): void {
+  const data = rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    severity: r.severity,
+    subject_id: r.subjectId,
+    payload: JSON.stringify(r.payload),
+  }));
+  db.transaction(() => {
+    db.run("UPDATE insights SET deleted_at = ? WHERE deleted_at IS NULL", at);
+    for (const json of jsonChunks(data)) {
+      db.run(
+        `INSERT INTO insights (id, type, severity, subject_id, payload, first_seen)
+         SELECT j.value ->> '$.id', j.value ->> '$.type', j.value ->> '$.severity',
+                j.value ->> '$.subject_id', j.value ->> '$.payload', ?
+         FROM json_each(?) AS j WHERE true
+         ON CONFLICT (id) DO UPDATE SET
+           type = excluded.type, severity = excluded.severity, subject_id = excluded.subject_id,
+           payload = excluded.payload, deleted_at = NULL`,
+        at,
+        json,
+      );
+    }
+  });
+}

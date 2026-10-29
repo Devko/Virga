@@ -13,6 +13,8 @@ Read before changing anything:
 - `docs/implementation-plan.md`: phases, gates, spikes S-01 to S-08, backlog, topology, layout
 - `docs/architecture/data-model.md`: graph schema, write path, rule format
 - `docs/decisions/` and `docs/spikes/`: accepted decisions and spike results
+- `docs/architecture/graph-contract.md`: what collectors emit and what evaluators and rules may read; change it before the code
+- `docs/team/work-packages.md`: work packages, owned paths and integration order
 
 ## Non-negotiables
 
@@ -43,6 +45,9 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 ## Code layout
 
 - `packages/graph`: schema (`src/schema.ts`), `SqlRunner` with Durable Object and Node adapters, write path. Runtime-agnostic: no `node:` imports outside `src/node.ts`.
+- `packages/cf-api`: read client contract (transport, reader, typed errors, pagination), broker RPC interface, read allowlist (`src/allowlist/`), fixture transport for tests (`@virga/cf-api/testing`).
+- `packages/collectors`: `Collector` interface and registry; `src/platform/` and `src/identity/` hold the collectors.
+- `packages/exposure`: exposure evaluator.
 - `packages/rules`: parser and compiler (Node only: `parse.ts`, `compile.ts`, `cli.ts`), runtime (`runtime.ts`, `fixtures.ts`) used by the Worker.
 - `rules/CF-xxx/`: `rule.sql` with YAML front matter, `fixtures/positive-*.yaml` and `negative-*.yaml`, `fix/`.
 - `apps/core`: Worker and `AccountGraph` Durable Object. No routes, `workers_dev` and previews off.
