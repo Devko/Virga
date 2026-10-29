@@ -21,6 +21,7 @@ import {
 import { exampleIssue, insightsRoute } from "./insights.ts";
 import { MEMBERS, membersRoute } from "./members.ts";
 import { TOKENS, tokensRoute } from "./tokens.ts";
+import { workersListRoute } from "./traffic.ts";
 import { BLOG, blogConfig, LEGACY, legacyConfig, TUNNELS, tunnelsRoute } from "./tunnels.ts";
 
 const workersList = (q: CfQuery) =>
@@ -54,3 +55,5 @@ export const membersRoutes: Routes = { [`${BASE}/members`]: membersRoute(MEMBERS
 export const insightsRoutes: Routes = {
   [`${BASE}/security-center/insights`]: insightsRoute([exampleIssue]),
 };
+
+export const trafficRoutes: Routes = { [`${BASE}/workers/workers`]: workersListRoute };

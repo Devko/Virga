@@ -3,6 +3,7 @@ import type { ReadRule } from "./types.ts";
 /**
  * Reads used by the identity collectors (access, tunnels, tokens, members,
  * insights, traffic). Owned by the identity collectors work package.
+ * The traffic collector's GraphQL query is allowed in core.ts.
  *
  * Deliberately absent: tunnel and Mesh node tokens
  * (`/cfd_tunnel/:tunnel_id/token`, `/warp_connector/:tunnel_id/token`),
@@ -43,4 +44,6 @@ export const IDENTITY_READS: readonly ReadRule[] = [
     pattern: "/accounts/:account_id/security-center/insights",
     usedBy: "insights",
   },
+  // traffic
+  { method: "GET", pattern: "/accounts/:account_id/workers/workers", usedBy: "traffic" },
 ];
