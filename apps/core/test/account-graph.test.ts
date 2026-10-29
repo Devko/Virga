@@ -79,6 +79,8 @@ describe("scan steps in AccountGraph", () => {
       { id: "s1", status: "failed" },
       { id: "s3", status: "running" },
     ]);
+    // The instance of the dead scan comes back, e.g. restarted by hand: refused.
+    expect(await stub.beginScan("s1", "full", 1_000)).toEqual({ started: false, running: "s3" });
   });
 
   it("writes a collector chunk with its signals and insights", async () => {

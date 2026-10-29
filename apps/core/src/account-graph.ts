@@ -62,16 +62,18 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
   /**
    * Starts a scan. Idempotent for a retried step. Refuses while another scan
    * is running, because its sweep would tombstone what this one writes; a
-   * scan running longer than STALE_SCAN_MS is marked failed instead.
+   * scan running longer than STALE_SCAN_MS is marked failed instead, and is
+   * refused if its instance comes back (a restart).
    */
   beginScan(id: string, kind: "full" | "partial" | "event" = "full", at = Date.now()): BeginResult {
-    if (this.db.query("SELECT 1 FROM scans WHERE id = ?", id).length > 0) return { started: true };
     for (const other of this.db.query<{ id: string; started_at: number }>(
-      "SELECT id, started_at FROM scans WHERE status = 'running' ORDER BY started_at DESC",
+      "SELECT id, started_at FROM scans WHERE status = 'running' AND id != ? ORDER BY started_at DESC",
+      id,
     )) {
       if (other.started_at > at - STALE_SCAN_MS) return { started: false, running: other.id };
       finishScan(this.db, other.id, "failed", at);
     }
+    if (this.db.query("SELECT 1 FROM scans WHERE id = ?", id).length > 0) return { started: true };
     beginScan(this.db, { id, kind, at });
     return { started: true };
   }
