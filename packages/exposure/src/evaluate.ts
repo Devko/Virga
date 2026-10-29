@@ -49,7 +49,7 @@ interface App {
 
 type Candidate<T extends Target = Target> = { app: App; target: T };
 type HostnameTarget = Extract<Target, { kind: "hostname" }>;
-type WorkerTarget = Extract<Target, { kind: "worker" | "account" }>;
+type WorkerTarget = Extract<Target, { kind: "worker" | "all_workers" }>;
 
 const WORKER_ENTRIES = new Set([
   "worker_route",
@@ -276,13 +276,15 @@ function hostTokens(value: unknown, depth = 0, out: string[] = []): string[] {
 
 /**
  * Whether a target the evaluator cannot interpret might cover the entry
- * point. Only a target that clearly names another Worker or other hosts is
- * ruled out.
+ * point. Only a target that clearly names another Worker, Workers in general
+ * or other hosts is ruled out.
  */
 function couldApply(raw: unknown, entry: Entry, refs: Map<string, string>): boolean {
   if (isObject(raw)) {
     const type = str(raw.type);
     if (type === "private" || type === "via_mcp_server_portal") return false;
+    if (type === "all_workers") return entry.worker;
+    if (type === "all_preview_workers") return entry.preview;
     const ref = str(raw.worker_id) ?? str(raw.script);
     if (ref) {
       return servesWorker(entry, ref, refs) && (type !== "preview_worker" || entry.preview);
@@ -366,7 +368,9 @@ function decideHostname(
 /**
  * Worker-level Access applies where no hostname app does. A target for the
  * previews of one Worker beats one for all its traffic; a target for one
- * Worker beats one for every Worker in the account.
+ * Worker beats one for every Worker in the account, and on preview URLs an
+ * `all_preview_workers` target beats an `all_workers` one.
+ * developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
  * developers.cloudflare.com/workers/configuration/cloudflare-access/
  */
 function decideWorker(
@@ -377,9 +381,9 @@ function decideWorker(
   const tier = (kind: WorkerTarget["kind"], scope: WorkerTarget["scope"]) =>
     candidates.filter((c) => c.target.kind === kind && c.target.scope === scope);
   const tiers = entry.preview
-    ? [tier("worker", "previews"), tier("worker", "all"), tier("account", "previews")]
+    ? [tier("worker", "previews"), tier("worker", "all"), tier("all_workers", "previews")]
     : [tier("worker", "all")];
-  tiers.push(tier("account", "all"));
+  tiers.push(tier("all_workers", "all"));
   for (const group of tiers) {
     const first = group[0];
     if (!first) continue;
@@ -390,7 +394,7 @@ function decideWorker(
       return unknown(first.app.node.id, "Worker-level Access applications disagree");
     }
     if (winner.decision === "unknown") return { ...winner, confidence: 0 };
-    const account = first.target.kind === "account";
+    const account = first.target.kind === "all_workers";
     return {
       ...winner,
       confidence: account ? 1 : 2,
@@ -444,7 +448,7 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
         if (entry.worker && servesWorker(entry, target.script, refs)) {
           if (target.scope === "all" || entry.preview) workerCandidates.push({ app, target });
         }
-      } else if (target.kind === "account") {
+      } else if (target.kind === "all_workers") {
         if (entry.worker && (target.scope === "all" || entry.preview)) {
           workerCandidates.push({ app, target });
         }
@@ -479,16 +483,16 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
     ([a, x], [b, y]) => specificity(x) - specificity(y) || byText(a, b),
   );
   for (const [text, label] of ordered) {
-    const perHost = [...keys.values()].map(
-      (key): Result =>
-        decideHostname(hostCandidates, key, label) ??
+    const perHost = [...keys.values()].map((key): Result => {
+      const result = decideHostname(hostCandidates, key, label) ??
         decideWorker(workerCandidates, entry, label) ?? {
           decision: "public",
           confidence: 2,
           reasonId: null,
           reason: "no Access application covers this entry point",
-        },
-    );
+        };
+      return result;
+    });
     const result = combine(perHost);
     if (entry.approximate && labels.size > 1 && result.confidence > 1) result.confidence = 1;
     results.set(text, result);

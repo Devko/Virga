@@ -55,7 +55,7 @@ function withSlash(value: string): string {
   return value.startsWith("/") ? value : `/${value}`;
 }
 
-function wildcardPath(path: string, exact: (value: string) => PathSet): PathPattern {
+function wildcardPath(path: string, exact: (value: string) => PathPattern): PathPattern {
   if (path.length > LIMITS.name) return opaque("");
   const value = withSlash(path);
   const star = value.indexOf("*");
@@ -65,16 +65,31 @@ function wildcardPath(path: string, exact: (value: string) => PathSet): PathPatt
 }
 
 /**
- * An Access application path or destination override. Without a wildcard the
- * path covers itself and its subpaths; a trailing `*` makes it a prefix; a
- * wildcard elsewhere cannot be placed. Overrides without a wildcard cover the
- * exact path only, so reading them as segments errs towards public.
+ * An Access application path, as configured. Without a wildcard the path
+ * covers itself and its subpaths; a trailing `*` makes it a prefix, so
+ * `/alpha/*` covers `/alpha/one` but not `/alpha`, and `/*` covers the whole
+ * host; a wildcard elsewhere cannot be placed. The docs do not say whether
+ * `/alpha/` covers `/alpha`, so a trailing slash cannot be placed either.
  * developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
  */
 export function parseAccessPath(path: unknown): PathPattern {
   if (path === null || path === undefined || path === "") return ALL_PATHS;
   if (typeof path !== "string") return opaque("");
-  return wildcardPath(path.trim(), segment);
+  return wildcardPath(path.trim(), (value) =>
+    value.length > 1 && value.endsWith("/")
+      ? { kind: "opaque", hull: segment(value) }
+      : segment(value),
+  );
+}
+
+/**
+ * A destination override's `path_pattern`. Unlike application paths, an
+ * override without a wildcard matches that exact path only. Read as a
+ * segment, it also covers the subpaths, which errs toward `public`.
+ * developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+ */
+export function parseOverridePath(path: string): PathPattern {
+  return path === "" ? ALL_PATHS : wildcardPath(path.trim(), segment);
 }
 
 /**
