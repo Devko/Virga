@@ -36,8 +36,9 @@ export interface RuleRunSummary {
  * - Undecided rows change no finding (see below).
  * - Open findings of an evaluated rule whose fingerprint it no longer
  *   returns, decided or undecided, are resolved.
- * - Expired suppressions return to open; suppressed findings stay
- *   suppressed while the suppression lasts unless their severity rises.
+ * - Expired suppressions return to open on the next hit; suppressed
+ *   findings stay suppressed while the suppression lasts unless their
+ *   severity rises.
  * - One row per rule in `rule_runs`.
  *
  * Output contract. Every row a rule returns has

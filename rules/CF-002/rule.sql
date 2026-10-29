@@ -72,7 +72,8 @@ around_access AS (
   FROM judged a
   JOIN judged b ON b.script_id = a.script_id AND b.path = a.path AND b.entry_id <> a.entry_id
   WHERE a.pos = 1 AND b.pos = 1
-    AND a.decision IN ('access', 'service_auth', 'unknown') AND b.decision IN ('public', 'unknown')
+    AND a.decision IN ('access', 'service_auth', 'unknown')
+    AND b.decision IN ('public', 'unknown')
 ),
 worker_access AS (
   SELECT a.id AS app_id, 'worker_script:' || (t.value ->> '$.script') AS script_id
