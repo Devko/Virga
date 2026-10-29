@@ -16,7 +16,7 @@ These are owned by the integrator. Work packages build against them and do not e
 
 ## Packages for phase 1, round 1
 
-Status (2026-10-29): `broker` and `platform` are merged. `identity`, `exposure`, `rules` and `scan` are in progress; the first run of these four was lost when the container restarted.
+Status (2026-10-29): all six are merged. Integration fixes: the broker's refusal test used a path the tokens collector needs; CF-001 required `routes`, which is not a resource class. The compiler now rejects unknown inputs. Contract changes the packages asked for are folded into [graph-contract.md](../architecture/graph-contract.md); the parts marked "round 2" are not implemented yet.
 
 | WP | Scope | Owns | Done when |
 | --- | --- | --- | --- |

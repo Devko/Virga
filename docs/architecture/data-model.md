@@ -104,12 +104,16 @@ The TypeScript evaluator writes one row per entry point and path prefix with `re
 
 `reason_id` points to the deciding node (Access app, policy, ruleset), and `reason` is a short explanation for the UI.
 
-## Findings lifecycle (planned)
+## Findings lifecycle
+
+Implemented in [`packages/rules/src/evaluate.ts`](../../packages/rules/src/evaluate.ts); its doc comment is the detailed reference.
 
 - One row per fingerprint. Rules choose the fingerprint granularity: CF-001 uses one per Worker, so a new CVE updates the finding and does not open a second one (D-10).
 - `open` → `resolved` only when the rule ran with status `evaluated` and no longer returns the fingerprint. A rule that is `not_evaluated` never resolves anything.
 - A finding that comes back after `resolved` is reopened with its history intact.
-- Suppression always has `suppressed_until`, a reason and the actor. It expires on its own.
+- Suppression always has `suppressed_until`, a reason and the actor. It expires on its own. While it lasts, the accepted severity is kept and a higher severity ends it.
+- A rule whose query fails or breaks the output contract is `error` for that run and changes no finding; the rules after it still run.
+- Open gap: when an entry point's exposure turns `unknown`, a rule that needs `public` stops returning the finding, and an evaluated rule then resolves it. Round 2 adds an "undecided" outcome so such findings stay as they are.
 - Changing the rule version keeps the fingerprints unless the rule's meaning changes. In that case the rule gets a new ID.
 
 ## Rule files
@@ -142,7 +146,7 @@ Front matter at the top of `rule.sql`, parsed as YAML:
 -- ---
 ```
 
-Output contract: each row has `rule_id`, `fingerprint` and `severity`, plus evidence columns. List-valued evidence uses `json_group_array(DISTINCT …)`, not `group_concat`, because hostnames and names can contain commas.
+Output contract: each row has `rule_id`, `fingerprint` (starting with `<rule_id>:`), `severity` and `subject_id` (the node the finding is about), plus evidence columns. List-valued evidence uses `json_group_array(DISTINCT …)`, not `group_concat`, because hostnames and names can contain commas. Evidence lists are capped at 100 items and strings at 2,048 characters. Every node ID in an evidence list also lands in `finding_nodes`, with the column name as the role. Rules that depend on time read the `now_ms` parameter (the scan start).
 
 A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`, `src`, `dst`, `key`, `props`, optional `deleted`), `exposure`, `vulns` (severity by name, `kev`), `signals` and the `expect` list. Fixtures load through the regular write path, so every fixture also exercises the batch upsert.
 
@@ -152,9 +156,10 @@ A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`,
 2. replaces `:name` parameters with positional `?` and an ordered binding list, and rejects positional `?`, a second statement, and parameters that are undeclared or unused
 3. prepares the statement against the current schema in Node SQLite and checks the required output columns
 4. requires at least one positive and one negative fixture, and runs all of them
-5. writes `rules.gen.ts` and `fixtures.gen.ts`
+5. rejects `requires` entries that are neither a resource class nor a derived input (`exposure`, `packages`, `vulns`)
+6. writes `rules.gen.ts` and `fixtures.gen.ts`
 
-`pnpm rules:check` does the same and fails if the generated files are stale. The core Worker's tests run every fixture again in Durable Object SQLite, because it allows fewer SQL functions than Node does. Not yet implemented: checking `requires` against a registry of resource classes, which arrives with the collectors.
+`pnpm rules:check` does the same and fails if the generated files are stale. The core Worker's tests run every fixture again in Durable Object SQLite, because it allows fewer SQL functions than Node does. 
 
 ## CF-001, revised
 

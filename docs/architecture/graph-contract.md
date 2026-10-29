@@ -156,10 +156,18 @@ Emitted for the managed `r2.dev` domain only when it is enabled.
 
 `Target` is one of:
 
-- `{ kind: "hostname", host, path }`. `host` is lowercase and may start with `*.`; `path` is `""` when absent, else a path prefix without a trailing `/`.
-- `{ kind: "worker", script, scope }`. Worker-level Access; `scope` is `all` or `previews`.
+- `{ kind: "hostname", host, path, overrides }`.
+  - `host` is lowercase and may start with `*.`.
+  - `path` is the Access path as configured, wildcards included (`/admin`, `/alpha/*`, `/foo*`), or `""` when absent. Evaluators apply Access path semantics: `/alpha/*` does not cover `/alpha` itself.
+  - `overrides` lists the destination's overrides as `{ behavior, path_pattern }[]`, empty when there are none. `behavior: "public"` makes those paths reachable without Access.
+- `{ kind: "worker", script, scope, overrides }`. Worker-level Access.
+  - `script` is the script name, resolved from the API's `worker_id` through the Workers list. If it cannot be resolved, the collector emits `other` instead.
+  - `scope` is `all` or `previews`.
+- `{ kind: "all_workers", scope }`. Account-level Worker Access (API destinations `all_workers` and `all_preview_workers`). It ranks below Worker-level targets.
 - `{ kind: "private", cidr, hostname, port_range }`. Private destinations; used from phase 3.
-- `{ kind: "other", raw }`. Anything else, so evaluators can return `unknown`.
+- `{ kind: "other", raw }`. Anything the collector cannot normalize. A collector never drops a destination: a dropped destination would turn `unknown` into `public` or `access`.
+
+Round 1 status: the identity collector still emits `other` for overrides and for `all_workers` / `all_preview_workers`, and it strips a trailing `/*` from paths. The exposure evaluator reads both forms. Round 2 moves both to the shapes above.
 
 `access_policy` — native ID: policy ID; name: policy name.
 
@@ -179,11 +187,22 @@ Emitted for the managed `r2.dev` domain only when it is enabled.
 - `ip`, `geo`, `device_posture`, `certificate`, `common_name`
 - `other`
 
-`value` is `null` for `everyone` and `any_valid_service_token`.
+`value` is `null` for `everyone`, `any_valid_service_token` and `certificate`. For `idp_group`, `name` depends on the IdP:
+
+| IdP | `name` |
+| --- | --- |
+| SAML | `attribute=value` |
+| OIDC | `claim=value` |
+| GitHub | `org` or `org/team` |
+| Azure AD | group ID |
+| Google Workspace | group email |
+| Okta | group name |
+
+The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, `linked_app_token`, `user_risk_score` and `cloudflare_account_member` become `other`, with the raw rule capped in size.
 
 `access_group` — native ID: group ID. Props: `include`, `require`, `exclude` (`Selector[]`).
 
-`service_token` — native ID: token ID; name: token name. Props: `expires_at` (string \| null), `duration` (string \| null). Signal: `last_seen_at`.
+`service_token` — native ID: token ID; name: token name. Props: `expires_at` (string \| null), `duration` (string \| null), `enabled` (boolean, round 2). Signal: `last_seen_at` (epoch ms, `null` when never seen). Client IDs and secrets are never stored.
 
 `identity_provider` — native ID: IdP ID; name: IdP name. Props: `idp_type` (`onetimepin`, `azureAD`, `okta`, `github`, ...).
 
@@ -199,17 +218,18 @@ Emitted for the managed `r2.dev` domain only when it is enabled.
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
 
-`tunnel_hostname` — native ID: `<hostname><path>`; name: hostname.
+`tunnel_hostname` — native ID: `<hostname><path>` (round 2: `<tunnel_id>:<hostname><path>`, so two tunnels serving the same hostname stay apart); name: hostname.
 
 | Prop | Type | Meaning |
 | --- | --- | --- |
 | `hostname` | string | |
-| `path` | string | `""` when absent |
+| `path` | string | The cloudflared path regex as configured (it may lack a leading `/`); `""` when absent |
 | `service` | string | Origin as configured, for example `http://localhost:8080` or `ssh://localhost:22` |
 | `origin_scheme` | string | `http`, `https`, `ssh`, `rdp`, `tcp`, `smb`, `unix`, `http_status`, `other` |
 | `tunnel_id` | string | |
+| `access_required` | boolean | Round 2: cloudflared itself requires an Access JWT (`originRequest.access.required`) |
 
-Emitted from the remotely managed ingress configuration. Catch-all rules without a hostname are skipped.
+Emitted from the remotely managed ingress configuration. Catch-all rules without a hostname and rules shadowed by an earlier rule are skipped. Credentials in a service URL are removed. Locally managed tunnels yield `tunnel` nodes but no `tunnel_hostname`.
 
 ### tokens
 
@@ -221,10 +241,10 @@ Emitted from the remotely managed ingress configuration. Catch-all rules without
 | `issued_on`, `modified_on` | string \| null | |
 | `expires_on` | string \| null | `null` means no expiry |
 | `not_before` | string \| null | |
-| `policies` | `Policy[]` | `{ effect, permission_groups: { id, name }[], resources: Record<string, string> }` |
+| `policies` | `Policy[]` | `{ effect, permission_groups: { id, name }[], resources: Record<string, string> }`. Nested resource maps from the API (`account -> resource -> value`) are flattened to their inner entries |
 | `ip_condition` | `{ in, not_in }` \| null | Arrays of CIDRs |
 
-Signal: `last_used_on` (epoch ms).
+Signal: `last_used_on` (epoch ms, `null` when never used).
 
 ### members
 
@@ -235,10 +255,13 @@ Signal: `last_used_on` (epoch ms).
 | `status` | string | `accepted`, `pending` |
 | `roles` | string[] | Role names |
 | `super_admin` | boolean | Has the Super Administrator role |
+| `two_factor_enabled` | boolean \| null | Round 2 |
+
+`roles` holds the legacy role names plus the permission groups of allow policies.
 
 ### insights
 
-Rows in the `insights` table: `id`, `type` (API `issue_type`), `severity`, `subject_id` (node ID if the subject can be mapped, else `null`), and the payload with the original fields.
+Rows in the `insights` table: `id`, `type` (API `issue_type`), `severity`, `subject_id`, and the payload with the documented fields. `issue_type` has only a few category values, so rules match on `payload.issue_class` and `payload.subject`. `subject_id` is `null` in phase 1: the API documents no subject format that maps to a node.
 
 ### traffic
 
@@ -246,6 +269,8 @@ Signals on `worker_script` nodes:
 
 - `invocations_30d`: requests in the last 30 days, all triggers
 - `errors_30d`
+
+Every script in the Workers list gets both signals, `0` without traffic, because signals are never swept. The traffic collector therefore needs the Workers list (Workers Metadata Read-Only) as well as Account Analytics Read. An account the analytics API does not show is `no_permission`, never zero traffic.
 
 ## Edges
 
@@ -286,14 +311,49 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
    - `pages_domain`, `pages_preview`
    - `r2_public_domain` with `enabled: true`
    - `tunnel_hostname`
-2. **Matching.** Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one. A `worker` target covers every entry point of that Worker (`scope: previews` covers only `worker_preview_url`). Hostname and path apps take precedence over Worker-level Access.
+2. **Matching.**
+   - Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one.
+   - When host specificity and path length point to different apps, the result is `unknown`.
+   - A `worker` target covers every entry point of that Worker; `scope: previews` covers only `worker_preview_url`.
+   - `all_workers` covers every Worker below Worker-level targets.
+   - Hostname and path apps take precedence over Worker-level Access.
+   - Override paths with `behavior: "public"` are `public`.
 3. **Decision per covered prefix**, from the app's policies:
-   - A `bypass` policy whose include is `everyone` → `public`, with the reason.
-   - Only `non_identity` policies → `service_auth`.
-   - Otherwise → `access`. CF-010 judges how broad the allowed audience is, not the evaluator.
+   - A `bypass` policy whose include is `everyone` → `public`, with the reason, even when require rules (for example an IP range) narrow it. That can be a false positive for an office-IP bypass, but never a false "protected".
+   - Only `non_identity` policies → `service_auth`. A Service Auth policy with include `everyone` → `unknown`.
+   - Otherwise → `access`, including an app without any allow, bypass or Service Auth policy (deny by default). CF-010 judges how broad the allowed audience is, not the evaluator.
 4. **No matching app** → `public`.
 5. **Unsupported input** → `unknown`. That covers a target of kind `other`, a wildcard the evaluator cannot place, or missing coverage for `access` while the entry point exists.
 6. **Confidence:**
    - 2 when the decision follows from complete data with exact matching
    - 1 with wildcard matching
    - 0 when a coverage gap is involved
+7. **`path_prefix`** in exposure rows:
+
+   | Value | Covers |
+   | --- | --- |
+   | `/` | The whole host |
+   | `/admin` | That path and everything below `/admin/` |
+   | `/api*` | Every path that starts with `/api` |
+   | `/api/*` | Everything below `/api/` |
+
+   A route's base row uses the route's own path (for example `/api/*`), so not every entry point has a `/` row.
+
+Known limits of v1, all of which err toward reporting exposure:
+
+- Route shadowing is not modeled (a more specific route to another Worker, a route without a script, a Custom Domain on the same host).
+- Zone-level Access apps are not collected.
+- Tunnel path regexes are read approximately.
+
+## Scan semantics
+
+What the scan records, and what rules and the evaluator may rely on:
+
+- **Coverage per class and scan:**
+  - `complete`: all chunks were written
+  - `partial`: some chunks were written before one failed; collection of a class stops at the first failed chunk
+  - `no_permission`: the API answered 401 or 403
+  - `error`: anything else
+- **Sweep** runs only for `complete` classes.
+- **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
+- **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
