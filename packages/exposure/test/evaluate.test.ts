@@ -422,6 +422,38 @@ const cases: Case[] = [
       [TH("ssh.example.com", "tun-2"), "/", "public", 2, null],
     ],
   },
+  {
+    name: "a tunnel hostname whose cloudflared requires an Access token is never public",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("bare.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("open.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("staff.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("ci.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("web.example.com", "", "http://localhost:8080", required);
+      bypassApp(g, "open", [host("open.example.com")]);
+      allowApp(g, "staff", [host("staff.example.com")]);
+      g.app("ci", [host("ci.example.com")], [g.policy("ci-token", "non_identity", [TOKEN])]);
+      allowApp(g, "web", [host("web.example.com", "", [publicPath("/health")])]);
+    },
+    expect: [
+      [TH("bare.example.com"), "/", "access", 1, TH("bare.example.com")],
+      [TH("ci.example.com"), "/", "service_auth", 2, APP("ci")],
+      [TH("open.example.com"), "/", "access", 1, TH("open.example.com")],
+      [TH("staff.example.com"), "/", "access", 2, APP("staff")],
+      [TH("web.example.com"), "/", "access", 2, APP("web")],
+      [TH("web.example.com"), "/health", "access", 1, TH("web.example.com")],
+    ],
+  },
+  {
+    name: "a tunnel hostname that requires an Access token stays unknown where Access is undecided",
+    build: (g) => {
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { accessRequired: true });
+      allowApp(g, "a1", [host("ssh.example.com")]);
+      bypassApp(g, "a2", [host("ssh.example.com")]);
+    },
+    expect: [[TH("ssh.example.com"), "/", "unknown", 0, APP("a1")]],
+  },
 
   // Worker-level Access
   {

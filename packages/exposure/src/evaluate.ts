@@ -37,6 +37,8 @@ interface Entry {
   preview: boolean;
   /** Served by a Worker, so Worker-level Access can apply. */
   worker: boolean;
+  /** A tunnel hostname whose cloudflared requires an Access token (`access_required`). */
+  originAccess: boolean;
 }
 
 type Built = { entry: Entry } | { problem: string } | null;
@@ -188,6 +190,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
   let hosts: HostPattern[] | null;
   let path = ALL_PATHS;
   let approximate = false;
+  let originAccess = false;
 
   switch (node.type) {
     case "worker_route": {
@@ -235,6 +238,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       const tunnelPath = parseTunnelPath(typeof p.path === "string" ? p.path : "");
       path = tunnelPath.set;
       approximate = tunnelPath.approximate;
+      originAccess = p.access_required === true;
       break;
     }
     default:
@@ -250,6 +254,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       scripts,
       preview: node.type === "worker_preview_url",
       worker: scripts.size > 0,
+      originAccess,
     },
   };
 }
@@ -404,6 +409,27 @@ function decideWorker(
   return null;
 }
 
+/**
+ * cloudflared validates the Access token of every request to a tunnel
+ * hostname with `access_required` and rejects requests without one. Access
+ * issues that token only when an Allow or Service Auth policy admits the
+ * request; Bypass enforces nothing. Such a hostname is therefore never
+ * `public`: where Access alone would leave it public, it is `access`, decided
+ * by the tunnel hostname. The audience tags cloudflared checks are not
+ * collected, so the decision has at most medium confidence. `access`,
+ * `service_auth` and `unknown` stay as they are.
+ * developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
+ */
+function withOriginAccess(result: Result, entryId: string): Result {
+  if (result.decision !== "public") return result;
+  return {
+    decision: "access",
+    confidence: Math.min(result.confidence, 1) as Confidence,
+    reasonId: entryId,
+    reason: "cloudflared requires an Access token before it forwards requests to the origin",
+  };
+}
+
 const EXPOSURE_RANK: Record<ExposureDecision, number> = {
   public: 0,
   unknown: 1,
@@ -491,7 +517,7 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
           reasonId: null,
           reason: "no Access application covers this entry point",
         };
-      return result;
+      return entry.originAccess ? withOriginAccess(result, entry.node.id) : result;
     });
     const result = combine(perHost);
     if (entry.approximate && labels.size > 1 && result.confidence > 1) result.confidence = 1;
