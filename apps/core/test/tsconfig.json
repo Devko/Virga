@@ -1,6 +1,8 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    // esnext.disposable: `await using` for Workflow introspectors.
+    "lib": ["es2023", "esnext.disposable"],
     "types": ["@cloudflare/vitest-plugin/types"]
   },
   "include": ["./**/*.ts", "../src", "../worker-configuration.d.ts"]
