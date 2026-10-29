@@ -12,6 +12,9 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
+    "@virga/cf-api": "workspace:*",
+    "@virga/collectors": "workspace:*",
+    "@virga/exposure": "workspace:*",
     "@virga/graph": "workspace:*",
     "@virga/rules": "workspace:*"
   },

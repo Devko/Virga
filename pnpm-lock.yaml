@@ -36,6 +36,15 @@ importers:
 
   apps/core:
     dependencies:
+      '@virga/cf-api':
+        specifier: workspace:*
+        version: link:../../packages/cf-api
+      '@virga/collectors':
+        specifier: workspace:*
+        version: link:../../packages/collectors
+      '@virga/exposure':
+        specifier: workspace:*
+        version: link:../../packages/exposure
       '@virga/graph':
         specifier: workspace:*
         version: link:../../packages/graph
