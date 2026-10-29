@@ -893,6 +893,215 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-001",
+    "name": "undecided-unknown-entry-point",
+    "description": "Three vulnerable Workers with data access. The evaluator could not decide the only route of u, so u would qualify if the route were public: the row is undecided. m has the same kind of route plus a public workers.dev, which decides it. The unknown route of n serves a version without a data store, so n would not qualify either way.\n",
+    "nodes": [
+      {
+        "type": "worker_route",
+        "id": "r-u",
+        "name": "u.example.com/*"
+      },
+      {
+        "type": "worker_script",
+        "id": "u",
+        "name": "u"
+      },
+      {
+        "type": "worker_version",
+        "id": "u1",
+        "props": {
+          "script_node_id": "worker_script:u"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-m",
+        "name": "m.example.com/*"
+      },
+      {
+        "type": "workers_dev",
+        "id": "m.acme.workers.dev",
+        "name": "m.acme.workers.dev",
+        "props": {
+          "script": "m"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "m",
+        "name": "m"
+      },
+      {
+        "type": "worker_version",
+        "id": "m1",
+        "props": {
+          "script_node_id": "worker_script:m"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-n",
+        "name": "n.example.com/*"
+      },
+      {
+        "type": "worker_script",
+        "id": "n",
+        "name": "n"
+      },
+      {
+        "type": "worker_version",
+        "id": "n1",
+        "props": {
+          "script_node_id": "worker_script:n"
+        }
+      },
+      {
+        "type": "package",
+        "id": "pkg:npm/lodash@4.17.20",
+        "name": "lodash"
+      },
+      {
+        "type": "kv_namespace",
+        "id": "k1",
+        "name": "sessions"
+      },
+      {
+        "type": "d1_database",
+        "id": "main",
+        "name": "main"
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-u",
+        "dst": "worker_script:u"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:u",
+        "dst": "worker_version:u1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "CONTAINS",
+        "src": "worker_version:u1",
+        "dst": "package:pkg:npm/lodash@4.17.20",
+        "props": {
+          "confidence": 2
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:u1",
+        "dst": "kv_namespace:k1",
+        "key": "SESSIONS"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-m",
+        "dst": "worker_script:m"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:m.acme.workers.dev",
+        "dst": "worker_script:m"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:m",
+        "dst": "worker_version:m1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "CONTAINS",
+        "src": "worker_version:m1",
+        "dst": "package:pkg:npm/lodash@4.17.20",
+        "props": {
+          "confidence": 2
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:m1",
+        "dst": "d1_database:main",
+        "key": "DB"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-n",
+        "dst": "worker_script:n"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:n",
+        "dst": "worker_version:n1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "CONTAINS",
+        "src": "worker_version:n1",
+        "dst": "package:pkg:npm/lodash@4.17.20",
+        "props": {
+          "confidence": 2
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_route:r-u",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_route:r-u",
+        "path": "/admin",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-m",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "workers_dev:m.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-n",
+        "decision": "unknown",
+        "confidence": 0
+      }
+    ],
+    "vulns": [
+      {
+        "package": "package:pkg:npm/lodash@4.17.20",
+        "id": "GHSA-test-crit",
+        "severity": "critical"
+      }
+    ],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-001:worker_script:u",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-001:worker_script:m",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-002",
     "name": "negative-consistent-protection",
     "description": "admin is protected on every entry point; a removed route that was public is tombstoned. site keeps /admin behind Access on both of its hosts and is public elsewhere on both, so no protected path is public anywhere.\n",

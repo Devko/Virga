@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-001
--- version: 1
+-- version: 2
 -- title: Public Worker with an exploitable critical vulnerability and access to data
 -- severity: critical
 -- kind: toxic
@@ -15,12 +15,17 @@
 -- at least :min_conf confidence, and it reaches a data store or Secrets Store
 -- secret directly or through one service binding. Traffic raises severity; it is
 -- not a condition. The WAF virtual patch modifier runs after the query (D-13).
+--
+-- Unknown is a result: when only entry points with exposure `unknown` serve
+-- such a version, the Worker would qualify if one of them were public, so the
+-- row is undecided (decided = 0) and lists those entry points. One public
+-- entry point decides the Worker.
 WITH
-public_entry AS (
-  SELECT x.entry_id, COALESCE(n.name, n.native_id) AS host, x.confidence
+exposed_entry AS (
+  SELECT x.entry_id, COALESCE(n.name, n.native_id) AS host, x.decision, x.confidence
   FROM exposure x
   JOIN nodes n ON n.id = x.entry_id AND n.deleted_at IS NULL
-  WHERE x.decision = 'public'
+  WHERE x.decision IN ('public', 'unknown')
 ),
 served AS (
   -- route, Custom Domain, workers.dev -> versions with traffic in the deployment
@@ -69,25 +74,34 @@ data_access AS (
   JOIN nodes t2 ON t2.id = b2.dst AND t2.deleted_at IS NULL
   WHERE b1.type = 'BINDS' AND b1.deleted_at IS NULL
     AND t2.type IN (SELECT store_type FROM store_types)
+),
+qualifying AS (
+  SELECT sv.script_id, sv.version_id, pe.host, pe.decision, pe.confidence, vu.vuln_id, vu.kev,
+         da.store_id,
+         max(pe.decision = 'public') OVER (PARTITION BY sv.script_id) AS decided
+  FROM exposed_entry pe
+  JOIN served sv      ON sv.entry_id = pe.entry_id
+  JOIN vuln vu        ON vu.version_id = sv.version_id
+  JOIN data_access da ON da.version_id = sv.version_id
 )
 SELECT
   'CF-001'                                 AS rule_id,
-  'CF-001:' || sv.script_id                AS fingerprint,
+  'CF-001:' || q.script_id                 AS fingerprint,
   CASE
-    WHEN max(vu.kev) = 1 THEN 'critical'
+    WHEN max(q.kev) = 1 THEN 'critical'
     WHEN COALESCE(max(sg.value), 0) > 0 THEN 'critical'
     ELSE 'high'
   END                                      AS severity,
-  sv.script_id                             AS subject_id,
-  sv.script_id                             AS worker,
-  json_group_array(DISTINCT sv.version_id) AS versions,
-  json_group_array(DISTINCT pe.host)       AS entry_points,
-  json_group_array(DISTINCT vu.vuln_id)    AS vulnerabilities,
-  json_group_array(DISTINCT da.store_id)   AS data_stores,
-  min(pe.confidence)                       AS exposure_confidence
-FROM public_entry pe
-JOIN served sv      ON sv.entry_id = pe.entry_id
-JOIN vuln vu        ON vu.version_id = sv.version_id
-JOIN data_access da ON da.version_id = sv.version_id
-LEFT JOIN signals sg ON sg.node_id = sv.script_id AND sg.name = 'invocations_30d'
-GROUP BY sv.script_id
+  q.script_id                              AS subject_id,
+  max(q.decided)                           AS decided,
+  q.script_id                              AS worker,
+  json_group_array(DISTINCT q.version_id)  AS versions,
+  json_group_array(DISTINCT q.host)        AS entry_points,
+  json_group_array(DISTINCT q.vuln_id)     AS vulnerabilities,
+  json_group_array(DISTINCT q.store_id)    AS data_stores,
+  min(q.confidence)                        AS exposure_confidence
+FROM qualifying q
+LEFT JOIN signals sg ON sg.node_id = q.script_id AND sg.name = 'invocations_30d'
+-- the public paths decide a Worker; the unknown ones only when there is none
+WHERE q.decision = 'public' OR q.decided = 0
+GROUP BY q.script_id
