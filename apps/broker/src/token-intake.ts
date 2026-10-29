@@ -133,9 +133,10 @@ export class TokenIntake extends WorkerEntrypoint<BrokerEnv> {
       return rejected(accountId, "not_account_token", "an account API token (cfat_) is required");
     }
     try {
+      // Fails before the token goes anywhere if the vault cannot store it.
+      const master = await loadMasterKey(this.env);
       const check = await writeCheck(this.env, accountId, token, profile);
       if (!check.ok || check.tokenId === null) return { ...check, stored: false, removed: false };
-      const master = await loadMasterKey(this.env);
       await putToken(this.env.VAULT, master, {
         accountId,
         tokenId: check.tokenId,

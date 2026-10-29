@@ -1,5 +1,7 @@
+import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
+import { TokenIntake } from "../src/token-intake.ts";
 import { getEntry } from "../src/vault.ts";
 import {
   ACCOUNT_ID,
@@ -95,6 +97,17 @@ describe("TokenIntake.store", () => {
     cloudflare({}, { [VERIFY]: () => json(503, cfError(1000, "unavailable")) });
     const result = await intake.store(ACCOUNT_ID, TEST_TOKEN, "inventory");
     expect(result).toMatchObject({ ok: false, stored: false, retryable: true });
+  });
+
+  it("does not send the token anywhere when no master key is configured", async () => {
+    const { calls } = cloudflare();
+    const { MASTER_KEY_STORE: _, ...withoutKey } = env;
+    const bare = new TokenIntake(createExecutionContext(), withoutKey);
+    const result = await bare.store(ACCOUNT_ID, TEST_TOKEN, "inventory");
+    expect(result).toMatchObject({ ok: false, stored: false, retryable: true });
+    expect(result.reasons[0]?.code).toBe("broker_error");
+    expect(result.reasons[0]?.message).toContain("no master key configured");
+    expect(calls).toHaveLength(0);
   });
 
   it.each([
