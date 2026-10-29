@@ -11,5 +11,14 @@
   "durable_objects": {
     "bindings": [{ "name": "ACCOUNT_GRAPH", "class_name": "AccountGraph" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountGraph"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountGraph"] }],
+  // The account index. Separate from the broker's vault (D-08).
+  // database_id is left out so that `wrangler deploy` provisions it.
+  "d1_databases": [
+    {
+      "binding": "INDEX",
+      "database_name": "virga-index",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
