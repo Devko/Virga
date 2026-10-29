@@ -4,7 +4,7 @@
 -- title: Public Worker with an exploitable critical vulnerability and access to data
 -- severity: critical
 -- kind: toxic
--- requires: [workers, routes, packages, vulns, storage, exposure]
+-- requires: [workers, packages, vulns, storage, exposure, access]
 -- params:
 --   sev_min: 4   # 4 = critical
 --   min_conf: 1  # 1 = medium

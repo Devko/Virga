@@ -71,6 +71,9 @@ importers:
 
   packages/rules:
     dependencies:
+      '@virga/collectors':
+        specifier: workspace:*
+        version: link:../collectors
       '@virga/graph':
         specifier: workspace:*
         version: link:../graph

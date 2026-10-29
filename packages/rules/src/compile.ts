@@ -1,12 +1,16 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { RESOURCE_CLASSES } from "@virga/collectors";
 import { migrate } from "@virga/graph";
 import { openNodeDatabase } from "@virga/graph/node";
 import { evaluateFixture, loadFixture } from "./fixtures.ts";
 import { parseFixture, parseRule } from "./parse.ts";
 import type { CompiledRule, RuleFixture } from "./types.ts";
 
-const REQUIRED_COLUMNS = ["rule_id", "fingerprint", "severity"];
+const REQUIRED_COLUMNS = ["rule_id", "fingerprint", "severity", "subject_id"];
+
+/** Inputs a rule may require: resource classes plus inputs derived by scan steps. */
+const KNOWN_INPUTS = new Set<string>([...RESOURCE_CLASSES, "exposure", "packages", "vulns"]);
 
 export interface CompileResult {
   rules: CompiledRule[];
@@ -31,6 +35,10 @@ export async function compileRules(rulesDir: string): Promise<CompileResult> {
       rule = parseRule(readFileSync(join(rulesDir, dir, "rule.sql"), "utf8"), `${dir}/rule.sql`);
       if (rule.id !== dir)
         throw new Error(`${dir}/rule.sql: id ${rule.id} does not match directory`);
+      for (const input of rule.requires) {
+        if (!KNOWN_INPUTS.has(input))
+          throw new Error(`${dir}/rule.sql: unknown input '${input}' in requires`);
+      }
       checkAgainstSchema(rule);
     } catch (error) {
       errors.push((error as Error).message);

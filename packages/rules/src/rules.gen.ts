@@ -10,11 +10,11 @@ export const RULES: readonly CompiledRule[] = [
     "kind": "toxic",
     "requires": [
       "workers",
-      "routes",
       "packages",
       "vulns",
       "storage",
-      "exposure"
+      "exposure",
+      "access"
     ],
     "params": {
       "sev_min": 4,
