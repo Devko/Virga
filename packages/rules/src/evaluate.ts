@@ -48,7 +48,7 @@ export interface RuleRunSummary {
  * scanned account belongs inside such an array, so a name that happens to
  * look like JSON is never mistaken for one. Lists keep at most 100 items and
  * strings at most 2,048 characters; `_truncated` maps each shortened list to
- * its full length.
+ * its full length. Evidence still larger than 256 KB makes the run an `error`.
  *
  * `finding_nodes` holds `subject_id` with role `subject`, plus every node ID
  * of an evidence list whose items are all node IDs (nulls ignored), with the
