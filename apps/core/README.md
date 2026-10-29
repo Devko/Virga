@@ -1,0 +1,43 @@
+# @virga/core
+
+The core Worker: one `AccountGraph` Durable Object per scanned account, the scan and dispatch Workflows, the account index, and read-only RPC for the web Worker. It has no routes, `workers.dev` and preview URLs are off, and the default `fetch` handler answers 404.
+
+## Bindings
+
+| Binding | What |
+| --- | --- |
+| `ACCOUNT_GRAPH` | `AccountGraph`, named by account ID |
+| `SCAN_WORKFLOW` | `ScanWorkflow` (`virga-scan`), params `{ accountId }` |
+| `DISPATCH_WORKFLOW` | `DispatchWorkflow` (`virga-dispatch`), `schedules: ["17 * * * *"]` (UTC) |
+| `INDEX` | D1 `virga-index`: `accounts` and `scan_runs` ([migrations/0001_index.sql](migrations/0001_index.sql)) |
+| `BROKER` | Service binding to `virga-broker`, entrypoint `ApiCaller`; the only way to the Cloudflare API |
+
+## Scan
+
+`ScanWorkflow` wires the bindings into `runScan` ([src/scan/run.ts](src/scan/run.ts)); the logic takes its dependencies (step, graph, index, reader, collectors) as arguments so tests run it with a fake step. Every effect is a step, and every step returns counters only: collectors write to the graph object, never into Workflow state.
+
+1. `begin`: `AccountGraph.beginScan` (idempotent; refuses while another scan of the account runs, and marks one older than 12 hours failed) and a `running` row in `scan_runs`.
+2. For each collector, ordered by `after`:
+   - `plan:<class>` returns the chunks, the only step result with data (at most 512 KiB).
+   - `collect:<class>:<n>` runs `collect` with a reader over `brokerTransport(env.BROKER, accountId)` and writes the output with `AccountGraph.writeChunk` (nodes and edges, signals, and insights only from a single-chunk class).
+   - `coverage:<class>`: all chunks ok is `complete`. `NoPermissionError` is `no_permission` without retries. Calls the broker refuses, 404s and invalid output are `error` without retries. Anything else is retried (3 times, waiting out the broker's `retryAfter` on 429) and then `error`, or `partial` if earlier chunks were written. Collection of a class stops at the first failed chunk.
+3. `sweep:<class>` for each `complete` class only.
+4. `exposure`: `AccountGraph.computeExposure` runs the evaluator, replaces `exposure` and records coverage `exposure`.
+5. `rules`: `AccountGraph.evaluateRules` runs the findings lifecycle over `RULES`.
+6. `finish`: ends the scan in the graph and writes `scan_runs` (status and summary) and `accounts.last_scan_at`.
+
+The scan is `complete` when every class and exposure are complete, `partial` when rules ran on incomplete input, `failed` when rules did not run, and `skipped` when another scan was running. Evaluator failures are results, not retried exceptions.
+
+## Dispatch
+
+`DispatchWorkflow` runs on its schedule and starts the scans that are due: active accounts whose last scan started at least `cadence_hours` UTC hour slots ago, without a running scan. Each step `dispatch:<n>` selects 100 accounts and calls `createBatch`. Instance IDs are `scan-<accountId>-<yyyymmddhh>`, so a retried step or a second dispatch in the same hour skips existing instances (code 10405) instead of starting a scan twice.
+
+## Entrypoints
+
+`GraphReader` (read-only, for the web Worker): `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account.
+
+`Admin`: `addAccount({ id, name, cadenceHours, profile })` and `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running.
+
+## Tests
+
+`pnpm --filter @virga/core test` runs in workerd with `@cloudflare/vitest-plugin`. [test/worker.ts](test/worker.ts) is the test entry module: the Worker's exports plus `FixtureBroker`, which answers `BROKER` calls from fixtures, and `TestScanWorkflow`, the production Workflow with stub collectors. Workflow tests use the plugin's Workflow introspection.
