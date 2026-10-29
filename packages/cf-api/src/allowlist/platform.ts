@@ -14,6 +14,36 @@ export const PLATFORM_READS: readonly ReadRule[] = [
   // dns
   { method: "GET", pattern: "/zones", usedBy: "dns" },
   { method: "GET", pattern: "/zones/:zone_id/dns_records", usedBy: "dns" },
+  // workers
+  { method: "GET", pattern: "/zones", usedBy: "workers" },
+  { method: "GET", pattern: "/zones/:zone_id/workers/routes", usedBy: "workers" },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/workers/scripts/:script_name/subdomain",
+    usedBy: "workers",
+  },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/workers/scripts/:script_name/deployments",
+    usedBy: "workers",
+  },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/workers/scripts/:script_name/versions",
+    usedBy: "workers",
+  },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/workers/scripts/:script_name/versions/:version_id",
+    usedBy: "workers",
+  },
+  { method: "GET", pattern: "/accounts/:account_id/workers/workers", usedBy: "workers" },
+  {
+    method: "GET",
+    pattern: "/accounts/:account_id/workers/durable_objects/namespaces",
+    usedBy: "workers",
+  },
+  { method: "GET", pattern: "/accounts/:account_id/queues", usedBy: "workers" },
   // storage
   { method: "GET", pattern: "/accounts/:account_id/r2/buckets", usedBy: "storage" },
   {

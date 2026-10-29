@@ -21,6 +21,25 @@ import {
   secretExample,
   storeExample,
 } from "./storage.ts";
+import {
+  apiDeployments,
+  apiWorker,
+  legacySubdomain,
+  legacyWorker,
+  myDeployments,
+  myVersionList,
+  myWorker,
+  routeWithoutScript,
+  routeWithScript,
+  V_API_1,
+  V_MY_1,
+  V_MY_2,
+  V_MY_3,
+  versionApi1,
+  versionMy1,
+  versionMy2,
+  versionMy3,
+} from "./workers.ts";
 import { ZONE_A, ZONE_B, zonesRoute } from "./zones.ts";
 
 export type Routes = Record<string, FixtureRoute>;
@@ -63,6 +82,30 @@ export const dnsRoutes: Routes = {
     total_count: 1,
     total_pages: 1,
   }),
+};
+
+const scripts = `${account}/workers/scripts`;
+
+/** The Workers API (beta) list comes in two pages. */
+export const workersRoutes: Routes = {
+  "/zones": zonesRoute(),
+  [`${account}/workers/workers`]: (q: CfQuery) =>
+    Number(q.page) === 1
+      ? envelope([myWorker, apiWorker], { count: 2, page: 1, per_page: 100, total_pages: 2 })
+      : envelope([legacyWorker], { count: 1, page: 2, per_page: 100, total_pages: 2 }),
+  [`${scripts}/legacy-worker/subdomain`]: envelope(legacySubdomain),
+  [`${scripts}/my-worker/deployments`]: envelope(myDeployments),
+  [`${scripts}/api-worker/deployments`]: envelope(apiDeployments),
+  [`${scripts}/legacy-worker/deployments`]: envelope({ deployments: [] }),
+  [`${scripts}/my-worker/versions`]: envelope(myVersionList),
+  [`${scripts}/my-worker/versions/${V_MY_1}`]: envelope(versionMy1),
+  [`${scripts}/my-worker/versions/${V_MY_2}`]: envelope(versionMy2),
+  [`${scripts}/my-worker/versions/${V_MY_3}`]: envelope(versionMy3),
+  [`${scripts}/api-worker/versions/${V_API_1}`]: envelope(versionApi1),
+  [`${account}/workers/durable_objects/namespaces`]: doNamespacesRoute,
+  [`${account}/queues`]: queuesRoute,
+  [`/zones/${ZONE_A}/workers/routes`]: envelope([routeWithScript, routeWithoutScript]),
+  [`/zones/${ZONE_B}/workers/routes`]: envelope([]),
 };
 
 export const storageRoutes: Routes = {
