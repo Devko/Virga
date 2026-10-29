@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "virga-web",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // AsyncLocalStorage for the MCP handler (agents/mcp/server); nothing else from Node.
+  "compatibility_flags": ["nodejs_als"],
+  // No routes: the operator adds a Custom Domain and puts Worker-level Access
+  // in front (docs/implementation-plan.md, deployment topology).
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "assets": {
+    // The SPA build output (`pnpm build`, vite.config.ts).
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    // Every request, assets included, passes the Worker's own Access check first.
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application"
+  },
+  "vars": {
+    // Both are refused until set: every request then answers 403.
+    // https://<team-name>.cloudflareaccess.com
+    "ACCESS_TEAM_DOMAIN": "https://<team-name>.cloudflareaccess.com",
+    // Application Audience (AUD) tag of the Access application in front of this Worker.
+    "ACCESS_AUD": "<ACCESS_AUD>",
+    // Comma-separated emails that may onboard accounts and start scans.
+    "ADMIN_EMAILS": "",
+    // Workers with static assets do not receive ctx.access (Workers docs,
+    // "ctx.access limitations"), so the signed Access JWT is the check that
+    // always runs. "true" also refuses requests without ctx.access (S-08).
+    "REQUIRE_ACCESS_CONTEXT": "false"
+  },
+  "services": [
+    { "binding": "CORE_READ", "service": "virga-core", "entrypoint": "GraphReader" },
+    { "binding": "CORE_ADMIN", "service": "virga-core", "entrypoint": "Admin" },
+    // Stores and checks tokens; the web Worker never holds one beyond the onboarding request.
+    { "binding": "BROKER_INTAKE", "service": "virga-broker", "entrypoint": "TokenIntake" }
+  ]
+}
