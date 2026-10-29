@@ -4,7 +4,7 @@ Guidance for agents working in this repository.
 
 ## Project
 
-Virga is an agentless, read-only CNAPP for Cloudflare accounts that runs on Cloudflare itself. It is in phase 0: the graph store, the rule compiler with CF-001, and the core Worker exist; collectors, broker and UI do not.
+Virga is an agentless, read-only CNAPP for Cloudflare accounts that runs on Cloudflare itself. Phase 1 is under way as work packages (`docs/team/work-packages.md`). Merged so far: graph store, rule compiler with CF-001, core Worker, credential broker, platform collectors. No UI yet; nothing has scanned a real account.
 
 Read before changing anything:
 
@@ -50,6 +50,7 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 - `packages/exposure`: exposure evaluator.
 - `packages/rules`: parser and compiler (Node only: `parse.ts`, `compile.ts`, `cli.ts`), runtime (`runtime.ts`, `fixtures.ts`) used by the Worker.
 - `rules/CF-xxx/`: `rule.sql` with YAML front matter, `fixtures/positive-*.yaml` and `negative-*.yaml`, `fix/`.
+- `apps/broker`: credential broker Worker: token vault, onboarding write check, `ApiCaller` with allowlist, rate budget. The only code that holds tokens.
 - `apps/core`: Worker and `AccountGraph` Durable Object. No routes, `workers_dev` and previews off.
 - `spikes/`: throwaway code; not product code.
 

@@ -4,7 +4,7 @@ An agentless, read-only security tool for Cloudflare accounts that runs entirely
 
 > *Virga* is rain that falls from a cloud but evaporates before it reaches the ground. The tool does the same with risk: it forms in the cloud and is caught before it hits anyone.
 
-**Status: phase 0.** The concept, its review and the implementation plan are in [`docs/`](docs/). The first code is the graph store, the rule compiler with the flagship rule CF-001, and the core Worker with its Durable Object. Nothing scans a real account yet.
+**Status: phase 1 in progress.** The concept, its review and the implementation plan are in [`docs/`](docs/). Built so far: the graph store, the rule compiler with the flagship rule CF-001, the core Worker with its Durable Object, the credential broker and the platform collectors. Nothing scans a real account yet.
 
 ## Documents
 
@@ -16,6 +16,8 @@ An agentless, read-only security tool for Cloudflare accounts that runs entirely
 | [Data model](docs/architecture/data-model.md) | Graph schema, write path, exposure semantics, rule file format, revised CF-001 |
 | [Decisions](docs/decisions/) | Accepted decisions, starting with the working defaults |
 | [Spikes](docs/spikes/) | Results of the phase 0 spikes |
+| [Graph contract](docs/architecture/graph-contract.md) | What collectors emit and what rules and evaluators read |
+| [Work packages](docs/team/work-packages.md) | How development is split across the agent team |
 
 ## Principles
 
@@ -52,8 +54,12 @@ pnpm rules:build   # after changing anything in rules/
 | Path | Content |
 | --- | --- |
 | `packages/graph` | Schema, migrations, write path (batch upsert, history, sweep) |
+| `packages/cf-api` | Read-only Cloudflare API client contract, read allowlist, test transport |
+| `packages/collectors` | Collectors that turn API responses into graph nodes and edges |
+| `packages/exposure` | Exposure evaluator |
 | `packages/rules` | Rule compiler, rule runtime, fixture runner |
 | `rules/` | One directory per rule: `rule.sql`, fixtures, fix proposals |
+| `apps/broker` | Credential broker: token vault, onboarding write check, read allowlist, rate budget |
 | `apps/core` | Core Worker with the `AccountGraph` Durable Object |
 | `spikes/` | Throwaway code for phase 0 spikes |
 

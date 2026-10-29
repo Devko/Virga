@@ -16,6 +16,8 @@ These are owned by the integrator. Work packages build against them and do not e
 
 ## Packages for phase 1, round 1
 
+Status (2026-10-29): `broker` and `platform` are merged. `identity`, `exposure`, `rules` and `scan` are in progress; the first run of these four was lost when the container restarted.
+
 | WP | Scope | Owns | Done when |
 | --- | --- | --- | --- |
 | `broker` | Credential broker Worker: token vault (AES-256-GCM envelope encryption), onboarding write check, `ApiCaller` with allowlist, rate budget Durable Object | `apps/broker/**`, `packages/cf-api/src/allowlist/core.ts` | Tests prove that a write-capable or long-lived token is rejected, calls off the allowlist and to other accounts are refused, tokens never appear in responses or logs, and the rate budget pauses before the quota runs out |
