@@ -1,0 +1,12 @@
+# Source: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/protocols/
+# (HTTP_STATUS "responds to all requests with a fixed HTTP status code", e.g. http_status:404)
+# Graph shape: docs/architecture/graph-contract.md, tunnel_hostname
+description: A public hostname whose ingress rule only answers with a fixed status code.
+nodes:
+  - { type: tunnel, id: t-1, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: gone.example.com, name: gone.example.com, props: { hostname: gone.example.com, path: "", service: "http_status:404", origin_scheme: http_status, tunnel_id: t-1 } }
+edges:
+  - { type: ROUTES_TO, src: "tunnel_hostname:gone.example.com", dst: "tunnel:t-1" }
+exposure:
+  - { entry: "tunnel_hostname:gone.example.com", decision: public, confidence: 2 }
+expect: []

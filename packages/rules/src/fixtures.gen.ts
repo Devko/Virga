@@ -893,6 +893,979 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-004",
+    "name": "negative-http-status-origin",
+    "description": "A public hostname whose ingress rule only answers with a fixed status code.",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "t-1",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "gone.example.com",
+        "name": "gone.example.com",
+        "props": {
+          "hostname": "gone.example.com",
+          "path": "",
+          "service": "http_status:404",
+          "origin_scheme": "http_status",
+          "tunnel_id": "t-1"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:gone.example.com",
+        "dst": "tunnel:t-1"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:gone.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-004",
+    "name": "negative-protected-or-unknown",
+    "description": "Access protects the SSH hostname, Service Auth the API, and the evaluator could not decide the third hostname; unknown is never public.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "t-1",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "ssh.example.com",
+        "name": "ssh.example.com",
+        "props": {
+          "hostname": "ssh.example.com",
+          "path": "",
+          "service": "ssh://localhost:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "t-1"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "api.example.com",
+        "name": "api.example.com",
+        "props": {
+          "hostname": "api.example.com",
+          "path": "",
+          "service": "https://localhost:8443",
+          "origin_scheme": "https",
+          "tunnel_id": "t-1"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "odd.example.com",
+        "name": "odd.example.com",
+        "props": {
+          "hostname": "odd.example.com",
+          "path": "",
+          "service": "tcp://localhost:5432",
+          "origin_scheme": "tcp",
+          "tunnel_id": "t-1"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:ssh.example.com",
+        "dst": "tunnel:t-1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:api.example.com",
+        "dst": "tunnel:t-1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:odd.example.com",
+        "dst": "tunnel:t-1"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:ssh.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:api.example.com",
+        "decision": "service_auth",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:odd.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-004",
+    "name": "positive-public-tunnel-hostnames",
+    "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "ssh.example.com",
+        "name": "ssh.example.com",
+        "props": {
+          "hostname": "ssh.example.com",
+          "path": "",
+          "service": "ssh://localhost:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "jump.example.com",
+        "name": "jump.example.com",
+        "props": {
+          "hostname": "jump.example.com",
+          "path": "",
+          "service": "bastion",
+          "origin_scheme": "other",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "app.example.com",
+        "name": "app.example.com",
+        "props": {
+          "hostname": "app.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:ssh.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:jump.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:app.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:ssh.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:jump.example.com",
+        "decision": "public",
+        "confidence": 1
+      },
+      {
+        "entry": "tunnel_hostname:app.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:app.example.com",
+        "path": "/api",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:ssh.example.com",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:jump.example.com",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:app.example.com",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
+    "name": "positive-rdp-on-path",
+    "description": "An ingress rule with a path routes RDP. The hostname node is keyed by hostname and path; exposure is public.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "t-2",
+        "name": "dc",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "down",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "remote.example.com/desk",
+        "name": "remote.example.com",
+        "props": {
+          "hostname": "remote.example.com",
+          "path": "/desk",
+          "service": "rdp://10.0.0.5:3389",
+          "origin_scheme": "rdp",
+          "tunnel_id": "t-2"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:remote.example.com/desk",
+        "dst": "tunnel:t-2"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:remote.example.com/desk",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:remote.example.com/desk",
+        "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-021",
+    "name": "negative-custom-domain-behind-access",
+    "description": "Access protects the only custom domain, including a path prefix that a path app decides separately; r2.dev is disabled, so the collector emits no node for it.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "media",
+        "name": "media"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "media.example.com",
+        "name": "media.example.com",
+        "props": {
+          "bucket": "media",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:media.example.com",
+        "dst": "r2_bucket:media"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "path": "/partners",
+        "decision": "service_auth",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-021",
+    "name": "negative-unknown-or-disabled",
+    "description": "Unknown is not public: the evaluator could not decide the custom domain of one bucket. The other bucket's custom domain is disabled, and a stale r2.dev node says enabled false.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "reports",
+        "name": "reports"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "reports.example.com",
+        "name": "reports.example.com",
+        "props": {
+          "bucket": "reports",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "archive",
+        "name": "archive"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "archive.example.com",
+        "name": "archive.example.com",
+        "props": {
+          "bucket": "archive",
+          "kind": "custom",
+          "enabled": false,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "pub-aa.r2.dev",
+        "name": "pub-aa.r2.dev",
+        "props": {
+          "bucket": "archive",
+          "kind": "r2_dev",
+          "enabled": false,
+          "zone_id": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:reports.example.com",
+        "dst": "r2_bucket:reports"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:archive.example.com",
+        "dst": "r2_bucket:archive"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:pub-aa.r2.dev",
+        "dst": "r2_bucket:archive"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:reports.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:archive.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-021",
+    "name": "positive-custom-domain-without-access",
+    "description": "The bucket has two enabled custom domains. Access protects one, the exposure evaluator decides the other public, and a third, disabled domain is no entry point at all.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "media",
+        "name": "media"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "media.example.com",
+        "name": "media.example.com",
+        "props": {
+          "bucket": "media",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "internal-media.example.com",
+        "name": "internal-media.example.com",
+        "props": {
+          "bucket": "media",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "old-media.example.com",
+        "name": "old-media.example.com",
+        "props": {
+          "bucket": "media",
+          "kind": "custom",
+          "enabled": false,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:media.example.com",
+        "dst": "r2_bucket:media"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:internal-media.example.com",
+        "dst": "r2_bucket:media"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:old-media.example.com",
+        "dst": "r2_bucket:media"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "r2_public_domain:internal-media.example.com",
+        "decision": "access",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-021:r2_bucket:media",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-021",
+    "name": "positive-r2-dev-enabled",
+    "description": "The managed r2.dev domain of the bucket is enabled. It is public whatever the exposure table says, because Access cannot sit in front of r2.dev.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "invoices",
+        "name": "invoices",
+        "props": {
+          "location": "weur",
+          "jurisdiction": null,
+          "storage_class": "Standard",
+          "creation_date": "2026-03-02T10:00:00.000Z"
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "name": "pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "props": {
+          "bucket": "invoices",
+          "kind": "r2_dev",
+          "enabled": true,
+          "zone_id": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "dst": "r2_bucket:invoices"
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-021:r2_bucket:invoices",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-022",
+    "name": "negative-previews-behind-access",
+    "description": "Previews share the production database, but an Access app covers the preview wildcard. Unknown exposure on a second project does not count as public either.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.shop.pages.dev",
+        "name": "*.shop.pages.dev",
+        "props": {
+          "project": "shop"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "blog",
+        "name": "blog",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "blog.pages.dev",
+          "preview_deployments": "custom"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.blog.pages.dev",
+        "name": "*.blog.pages.dev",
+        "props": {
+          "project": "blog"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "db-prod",
+        "name": "prod"
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.shop.pages.dev",
+        "dst": "pages_project:shop",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.blog.pages.dev",
+        "dst": "pages_project:blog",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:blog",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:blog",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "pages_preview:*.shop.pages.dev",
+        "decision": "access",
+        "confidence": 1
+      },
+      {
+        "entry": "pages_preview:*.blog.pages.dev",
+        "decision": "unknown",
+        "confidence": 0
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-022",
+    "name": "negative-separate-preview-bindings",
+    "description": "Public previews, but every preview binding points to a resource of its own. A second project shares its database between environments but has preview deployments turned off, so the collector emits no preview node.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.shop.pages.dev",
+        "name": "*.shop.pages.dev",
+        "props": {
+          "project": "shop"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "db-prod",
+        "name": "prod"
+      },
+      {
+        "type": "d1_database",
+        "id": "db-staging",
+        "name": "staging"
+      },
+      {
+        "type": "pages_project",
+        "id": "docs",
+        "name": "docs",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "docs.pages.dev",
+          "preview_deployments": "none"
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "docs.pages.dev",
+        "name": "docs.pages.dev",
+        "props": {
+          "project": "docs",
+          "status": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.shop.pages.dev",
+        "dst": "pages_project:shop",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "d1_database:db-staging",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:docs.pages.dev",
+        "dst": "pages_project:docs",
+        "props": {
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "pages_preview:*.shop.pages.dev",
+        "decision": "public",
+        "confidence": 1
+      },
+      {
+        "entry": "pages_domain:docs.pages.dev",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-022",
+    "name": "positive-preview-shares-production-d1",
+    "description": "Previews are public and bind the production D1 database under another name, plus the production backend Worker. The KV namespaces differ per environment and are not part of the finding.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "shop.pages.dev",
+        "name": "shop.pages.dev",
+        "props": {
+          "project": "shop",
+          "status": null
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "shop.example.com",
+        "name": "shop.example.com",
+        "props": {
+          "project": "shop",
+          "status": "active"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.shop.pages.dev",
+        "name": "*.shop.pages.dev",
+        "props": {
+          "project": "shop"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "6ad1b1f7-58d6-4b30-9a1e-4cbf1b1f1f01",
+        "name": "shop-prod"
+      },
+      {
+        "type": "kv_namespace",
+        "id": "0f2ac74b498b48028cb68387c421e279",
+        "name": "sessions-prod"
+      },
+      {
+        "type": "kv_namespace",
+        "id": "9b1c4d8e2f3a4b5c6d7e8f9a0b1c2d3e",
+        "name": "sessions-preview"
+      },
+      {
+        "type": "worker_script",
+        "id": "shop-api",
+        "name": "shop-api"
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:shop.pages.dev",
+        "dst": "pages_project:shop",
+        "props": {
+          "environment": "production"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:shop.example.com",
+        "dst": "pages_project:shop",
+        "props": {
+          "environment": "production"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.shop.pages.dev",
+        "dst": "pages_project:shop",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "d1_database:6ad1b1f7-58d6-4b30-9a1e-4cbf1b1f1f01",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "d1_database:6ad1b1f7-58d6-4b30-9a1e-4cbf1b1f1f01",
+        "key": "preview:PREVIEW_DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "kv_namespace:0f2ac74b498b48028cb68387c421e279",
+        "key": "production:SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "kv_namespace:9b1c4d8e2f3a4b5c6d7e8f9a0b1c2d3e",
+        "key": "preview:SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "worker_script:shop-api",
+        "key": "production:API",
+        "props": {
+          "binding_type": "service",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:shop",
+        "dst": "worker_script:shop-api",
+        "key": "preview:API",
+        "props": {
+          "binding_type": "service",
+          "environment": "preview"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "pages_domain:shop.pages.dev",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "pages_domain:shop.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "pages_preview:*.shop.pages.dev",
+        "decision": "public",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-022:pages_project:shop",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
     "rule": "CF-024",
     "name": "negative-no-plain-text-vars",
     "description": "A version without plain-text variables, and one whose list is missing.",

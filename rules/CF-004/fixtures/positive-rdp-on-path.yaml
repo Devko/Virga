@@ -1,0 +1,15 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get/
+# Service types: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/protocols/
+# Graph shape: docs/architecture/graph-contract.md, tunnel_hostname (native ID <hostname><path>)
+description: >
+  An ingress rule with a path routes RDP. The hostname node is keyed by
+  hostname and path; exposure is public.
+nodes:
+  - { type: tunnel, id: t-2, name: dc, props: { tunnel_type: cfd_tunnel, status: down, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: remote.example.com/desk, name: remote.example.com, props: { hostname: remote.example.com, path: /desk, service: "rdp://10.0.0.5:3389", origin_scheme: rdp, tunnel_id: t-2 } }
+edges:
+  - { type: ROUTES_TO, src: "tunnel_hostname:remote.example.com/desk", dst: "tunnel:t-2" }
+exposure:
+  - { entry: "tunnel_hostname:remote.example.com/desk", decision: public, confidence: 2 }
+expect:
+  - { fingerprint: "CF-004:tunnel_hostname:remote.example.com/desk", severity: critical }

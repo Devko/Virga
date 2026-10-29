@@ -28,6 +28,54 @@ export const RULES: readonly CompiledRule[] = [
     ]
   },
   {
+    "id": "CF-004",
+    "version": 1,
+    "title": "Published tunnel hostname reachable without Access",
+    "severity": "high",
+    "kind": "posture",
+    "requires": [
+      "tunnels",
+      "access",
+      "exposure"
+    ],
+    "params": {},
+    "enriches": null,
+    "sql": "-- A public hostname in the remotely managed ingress of a Cloudflare Tunnel\n-- that the exposure evaluator decides `public` on at least one path prefix.\n-- Critical when the origin is not HTTP: SSH, RDP, SMB, arbitrary TCP, or the\n-- bastion mode, which lets cloudflared reach any local address. `http_status`\n-- origins answer with a fixed status code and expose nothing. `unknown`\n-- exposure never counts; Access is required for the same reason as in CF-021.\n-- One finding per tunnel hostname.\n--\n-- The spec has this rule reference the Security Insight \"Unprotected\n-- Cloudflare Tunnels\" instead of duplicating it. `enriches` stays null for\n-- now: the insights table types insights by API issue_type, a category such\n-- as `exposed_infrastructure`, and the API reference documents no\n-- issue_class for that insight.\nWITH hostname AS (\n  SELECT h.id AS hostname_id,\n         h.props ->> '$.origin_scheme' AS scheme,\n         h.props ->> '$.service'       AS service,\n         r.dst                         AS tunnel_id\n  FROM nodes h\n  LEFT JOIN edges r ON r.src = h.id AND r.type = 'ROUTES_TO' AND r.deleted_at IS NULL\n  WHERE h.type = 'tunnel_hostname' AND h.deleted_at IS NULL\n    AND COALESCE(h.props ->> '$.origin_scheme', '') <> 'http_status'\n)\nSELECT\n  'CF-004'                                   AS rule_id,\n  'CF-004:' || h.hostname_id                 AS fingerprint,\n  CASE\n    WHEN h.scheme IN ('ssh', 'rdp', 'smb', 'tcp') OR h.service = 'bastion' THEN 'critical'\n    ELSE 'high'\n  END                                        AS severity,\n  h.hostname_id                              AS subject_id,\n  h.scheme                                   AS origin_scheme,\n  json_group_array(DISTINCT x.path_prefix)   AS public_paths,\n  json_group_array(DISTINCT h.tunnel_id) FILTER (WHERE h.tunnel_id IS NOT NULL) AS tunnels,\n  min(x.confidence)                          AS exposure_confidence\nFROM hostname h\nJOIN exposure x ON x.entry_id = h.hostname_id AND x.decision = 'public'\nGROUP BY h.hostname_id",
+    "paramOrder": []
+  },
+  {
+    "id": "CF-021",
+    "version": 1,
+    "title": "R2 bucket public through r2.dev or a custom domain without Access",
+    "severity": "high",
+    "kind": "posture",
+    "requires": [
+      "storage",
+      "access",
+      "exposure"
+    ],
+    "params": {},
+    "enriches": null,
+    "sql": "-- A bucket is public when its managed r2.dev domain is enabled, which Access\n-- cannot protect, or when the exposure evaluator decides one of its enabled\n-- custom domains `public` on any path prefix. `unknown` never counts. Access\n-- is required because without its coverage every custom domain is `unknown`,\n-- and an evaluated run would then resolve findings it cannot judge. One\n-- finding per bucket.\nWITH\ndomain AS (\n  SELECT d.id AS domain_id, d.name AS host, d.props ->> '$.kind' AS kind, r.dst AS bucket_id\n  FROM nodes d\n  JOIN edges r ON r.src = d.id AND r.type = 'ROUTES_TO' AND r.deleted_at IS NULL\n  JOIN nodes b ON b.id = r.dst AND b.type = 'r2_bucket' AND b.deleted_at IS NULL\n  WHERE d.type = 'r2_public_domain' AND d.deleted_at IS NULL\n    AND d.props ->> '$.enabled' = 1\n),\npublic_domain AS (\n  SELECT domain_id, host, kind, bucket_id, NULL AS confidence\n  FROM domain\n  WHERE kind = 'r2_dev'\n  UNION\n  SELECT dm.domain_id, dm.host, dm.kind, dm.bucket_id, x.confidence\n  FROM domain dm\n  JOIN exposure x ON x.entry_id = dm.domain_id AND x.decision = 'public'\n  WHERE dm.kind = 'custom'\n)\nSELECT\n  'CF-021'                                 AS rule_id,\n  'CF-021:' || bucket_id                   AS fingerprint,\n  'high'                                   AS severity,\n  bucket_id                                AS subject_id,\n  json_group_array(DISTINCT host)          AS domains,\n  json_group_array(DISTINCT domain_id)     AS domain_ids,\n  max(kind = 'r2_dev')                     AS r2_dev_enabled,\n  min(confidence)                          AS exposure_confidence\nFROM public_domain\nGROUP BY bucket_id",
+    "paramOrder": []
+  },
+  {
+    "id": "CF-022",
+    "version": 1,
+    "title": "Pages project with public preview deployments and bindings to production",
+    "severity": "medium",
+    "kind": "posture",
+    "requires": [
+      "pages",
+      "access",
+      "exposure"
+    ],
+    "params": {},
+    "enriches": null,
+    "sql": "-- Preview deployments run the code of any branch. A project qualifies when the\n-- exposure evaluator decides its preview wildcard (`*.<project>.pages.dev`)\n-- `public` on any path prefix, and its preview environment binds a resource\n-- that its production environment binds too: a data store, queue, or a\n-- Worker through a service binding. Comparing binding targets needs only the\n-- Pages edges, so the target nodes are not read. `unknown` exposure never\n-- counts; Access is required for the same reason as in CF-021. One finding\n-- per project.\nWITH\npreview AS (\n  SELECT r.dst AS project_id, e.name AS host, x.confidence\n  FROM nodes e\n  JOIN edges r ON r.src = e.id AND r.type = 'ROUTES_TO' AND r.deleted_at IS NULL\n  JOIN nodes p ON p.id = r.dst AND p.type = 'pages_project' AND p.deleted_at IS NULL\n  JOIN exposure x ON x.entry_id = e.id AND x.decision = 'public'\n  WHERE e.type = 'pages_preview' AND e.deleted_at IS NULL\n),\nshared AS (\n  -- keys are `<environment>:<binding name>`\n  SELECT pv.src AS project_id, pv.dst AS target_id,\n         substr(pv.key, length('preview:') + 1) AS binding\n  FROM edges pv\n  JOIN edges pr ON pr.src = pv.src AND pr.dst = pv.dst AND pr.type = 'BINDS'\n               AND pr.deleted_at IS NULL AND pr.props ->> '$.environment' = 'production'\n  WHERE pv.type = 'BINDS' AND pv.deleted_at IS NULL\n    AND pv.props ->> '$.environment' = 'preview'\n)\nSELECT\n  'CF-022'                                AS rule_id,\n  'CF-022:' || pv.project_id              AS fingerprint,\n  'medium'                                AS severity,\n  pv.project_id                           AS subject_id,\n  json_group_array(DISTINCT pv.host)      AS previews,\n  json_group_array(DISTINCT sh.binding)   AS preview_bindings,\n  json_group_array(DISTINCT sh.target_id) AS production_targets,\n  min(pv.confidence)                      AS exposure_confidence\nFROM preview pv\nJOIN shared sh ON sh.project_id = pv.project_id\nGROUP BY pv.project_id",
+    "paramOrder": []
+  },
+  {
     "id": "CF-024",
     "version": 1,
     "title": "Secret in a plain-text variable instead of a secret binding",

@@ -1,0 +1,15 @@
+# Source: https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/custom/methods/list/
+# Graph shape: docs/architecture/graph-contract.md, r2_public_domain and exposure
+description: >
+  Access protects the only custom domain, including a path prefix that a
+  path app decides separately; r2.dev is disabled, so the collector emits no
+  node for it.
+nodes:
+  - { type: r2_bucket, id: media, name: media }
+  - { type: r2_public_domain, id: media.example.com, name: media.example.com, props: { bucket: media, kind: custom, enabled: true, zone_id: 36ca64a6d92827b8a6b90be344bb1bfd } }
+edges:
+  - { type: ROUTES_TO, src: "r2_public_domain:media.example.com", dst: "r2_bucket:media" }
+exposure:
+  - { entry: "r2_public_domain:media.example.com", decision: access, confidence: 2 }
+  - { entry: "r2_public_domain:media.example.com", path: /partners, decision: service_auth, confidence: 2 }
+expect: []
