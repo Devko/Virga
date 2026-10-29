@@ -6579,7 +6579,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-021",
     "name": "negative-unknown-or-disabled",
-    "description": "Unknown is not public: the evaluator could not decide the custom domain of one bucket. The other bucket's custom domain is disabled, and a stale r2.dev node says enabled false.\n",
+    "description": "Unknown only matters on an entry point: the evaluator could not decide a custom domain of one bucket, but the domain is disabled. The other bucket's custom domain is disabled, and a stale r2.dev node says enabled false.\n",
     "nodes": [
       {
         "type": "r2_bucket",
@@ -6593,7 +6593,7 @@ export const FIXTURES: readonly RuleFixture[] = [
         "props": {
           "bucket": "reports",
           "kind": "custom",
-          "enabled": true,
+          "enabled": false,
           "zone_id": null
         }
       },
@@ -6781,6 +6781,184 @@ export const FIXTURES: readonly RuleFixture[] = [
     "expect": [
       {
         "fingerprint": "CF-021:r2_bucket:invoices",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-021",
+    "name": "undecided-unknown-custom-domain",
+    "description": "The evaluator could not decide the only custom domain of reports, nor the /files prefix of a media domain that Access protects otherwise. Either would make the bucket public, so both rows are undecided. logs has an unknown custom domain too, but its r2.dev domain is enabled; photos has one, but another of its custom domains is public. Both are decided.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "reports",
+        "name": "reports"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "reports.example.com",
+        "name": "reports.example.com",
+        "props": {
+          "bucket": "reports",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "media",
+        "name": "media"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "media.example.com",
+        "name": "media.example.com",
+        "props": {
+          "bucket": "media",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "logs",
+        "name": "logs"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "logs.example.com",
+        "name": "logs.example.com",
+        "props": {
+          "bucket": "logs",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "name": "pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "props": {
+          "bucket": "logs",
+          "kind": "r2_dev",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "photos",
+        "name": "photos"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "photos.example.com",
+        "name": "photos.example.com",
+        "props": {
+          "bucket": "photos",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "cdn.example.com",
+        "name": "cdn.example.com",
+        "props": {
+          "bucket": "photos",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:reports.example.com",
+        "dst": "r2_bucket:reports"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:media.example.com",
+        "dst": "r2_bucket:media"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:logs.example.com",
+        "dst": "r2_bucket:logs"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "dst": "r2_bucket:logs"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:photos.example.com",
+        "dst": "r2_bucket:photos"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:cdn.example.com",
+        "dst": "r2_bucket:photos"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:reports.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "path": "/files",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:logs.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:photos.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:cdn.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-021:r2_bucket:reports",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:media",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:logs",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:photos",
         "severity": "high"
       }
     ]

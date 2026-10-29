@@ -2,12 +2,13 @@
 # Source: https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/managed/methods/list/
 # Graph shape: docs/architecture/graph-contract.md, r2_public_domain and exposure
 description: >
-  Unknown is not public: the evaluator could not decide the custom domain of
-  one bucket. The other bucket's custom domain is disabled, and a stale
-  r2.dev node says enabled false.
+  Unknown only matters on an entry point: the evaluator could not decide a
+  custom domain of one bucket, but the domain is disabled. The other
+  bucket's custom domain is disabled, and a stale r2.dev node says enabled
+  false.
 nodes:
   - { type: r2_bucket, id: reports, name: reports }
-  - { type: r2_public_domain, id: reports.example.com, name: reports.example.com, props: { bucket: reports, kind: custom, enabled: true, zone_id: null } }
+  - { type: r2_public_domain, id: reports.example.com, name: reports.example.com, props: { bucket: reports, kind: custom, enabled: false, zone_id: null } }
   - { type: r2_bucket, id: archive, name: archive }
   - { type: r2_public_domain, id: archive.example.com, name: archive.example.com, props: { bucket: archive, kind: custom, enabled: false, zone_id: null } }
   - { type: r2_public_domain, id: pub-aa.r2.dev, name: pub-aa.r2.dev, props: { bucket: archive, kind: r2_dev, enabled: false, zone_id: null } }
