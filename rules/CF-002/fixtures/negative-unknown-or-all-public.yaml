@@ -2,9 +2,11 @@
 # Graph shape: docs/architecture/graph-contract.md, worker entry points and exposure
 description: >
   blog is public on every entry point, which is not a protection gap (CF-006
-  judges public Workers). tool is protected on its domain, but the evaluator
-  could not decide workers.dev and has no row for the version URL; unknown
-  is never public.
+  judges public Workers). tool is protected on its domain and has no row for
+  its version URL, which compares with nothing. solo has a single entry
+  point, which the evaluator could not decide: with nothing to compare it
+  with, it would not be a gap either way. The undecided fixture covers an
+  unknown entry point next to a protected one.
 nodes:
   - { type: worker_script, id: blog, name: blog }
   - { type: worker_route, id: r-blog, name: "blog.example.com/*", props: { zone_id: z1, pattern: "blog.example.com/*", script: blog } }
@@ -12,17 +14,18 @@ nodes:
   - { type: worker_script, id: tool, name: tool }
   - { type: worker_version, id: t1, props: { script_node_id: "worker_script:tool" } }
   - { type: worker_custom_domain, id: tool.example.com, name: tool.example.com, props: { zone_id: z1, hostname: tool.example.com, service: tool, environment: null } }
-  - { type: workers_dev, id: tool.acme.workers.dev, name: tool.acme.workers.dev, props: { script: tool } }
   - { type: worker_preview_url, id: t1-tool.acme.workers.dev, name: t1-tool.acme.workers.dev, props: { script: tool, kind: version, version_id: t1, alias: null } }
+  - { type: worker_script, id: solo, name: solo }
+  - { type: workers_dev, id: solo.acme.workers.dev, name: solo.acme.workers.dev, props: { script: solo } }
 edges:
   - { type: ROUTES_TO, src: "worker_route:r-blog", dst: "worker_script:blog" }
   - { type: ROUTES_TO, src: "workers_dev:blog.acme.workers.dev", dst: "worker_script:blog" }
   - { type: ROUTES_TO, src: "worker_custom_domain:tool.example.com", dst: "worker_script:tool" }
-  - { type: ROUTES_TO, src: "workers_dev:tool.acme.workers.dev", dst: "worker_script:tool" }
   - { type: ROUTES_TO, src: "worker_preview_url:t1-tool.acme.workers.dev", dst: "worker_version:t1" }
+  - { type: ROUTES_TO, src: "workers_dev:solo.acme.workers.dev", dst: "worker_script:solo" }
 exposure:
   - { entry: "worker_route:r-blog", decision: public, confidence: 2 }
   - { entry: "workers_dev:blog.acme.workers.dev", decision: public, confidence: 2 }
   - { entry: "worker_custom_domain:tool.example.com", decision: access, confidence: 2 }
-  - { entry: "workers_dev:tool.acme.workers.dev", decision: unknown, confidence: 0 }
+  - { entry: "workers_dev:solo.acme.workers.dev", decision: unknown, confidence: 0 }
 expect: []
