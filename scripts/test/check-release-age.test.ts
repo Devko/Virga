@@ -1451,7 +1451,7 @@ describe("R8-01: config dependencies are refused", () => {
     for (const pnpm of ["configDependencies", [], null]) {
       await refusedBy(root(pnpm), /^error: package\.json pnpm is not an object/);
     }
-    expect(await runMain(root({ overrides: {} }))).toEqual(PASSES);
+    expect(await runMain(root({}))).toEqual(PASSES);
   });
 
   it("R8-01: refuses settings that make pnpm read another lockfile or run code", async () => {
@@ -1517,6 +1517,75 @@ describe("R8-01: config dependencies are refused", () => {
     const settings = parseWorkspace(readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"));
     expect(settings.get("packages")).toContain("apps/*");
     expect(settings.get("minimumReleaseAge")).toBe("20160");
+  });
+});
+
+describe("TM-29: package.json holds no pnpm settings the check does not know", () => {
+  const root = (fields: Record<string, unknown>) =>
+    checkout({ "package.json": manifest({ packageManager: "pnpm@10.28.0", ...fields }) });
+  const NONE =
+    "; the project sets no pnpm field in package.json, so the check accepts none; extend it before adding one";
+
+  it("TM-29: refuses each pnpm field in package.json, with its reason", async () => {
+    const BUILDS = "changes which packages may run install scripts";
+    const OTHER =
+      "is not a field the check accepts; pnpm settings here can change what pnpm installs or runs";
+    const cases: [string, unknown, string][] = [
+      ["overrides", { yaml: "2.9.1" }, ": replaces versions anywhere in the dependency graph"],
+      [
+        "patchedDependencies",
+        { "yaml@2.8.0": "patches/yaml.patch" },
+        ": applies patch files to installed packages",
+      ],
+      [
+        "packageExtensions",
+        { "yaml@*": { dependencies: { "left-pad": "1.3.0" } } },
+        ": adds dependencies to the manifests of installed packages",
+      ],
+      ["neverBuiltDependencies", [], ": lets every package it does not list run install scripts"],
+      ["onlyBuiltDependencies", ["esbuild"], `: ${BUILDS}`],
+      ["onlyBuiltDependenciesFile", "builds.json", `: ${BUILDS}`],
+      ["ignoredBuiltDependencies", ["esbuild"], `: ${BUILDS}`],
+      [
+        "executionEnv",
+        { nodeVersion: "23.0.0" },
+        ": makes pnpm download a Node\\.js runtime and run scripts with it",
+      ],
+      ["allowedDeprecatedVersions", { request: "*" }, ` ${OTHER}`],
+      ["supportedArchitectures", { os: ["current"] }, ` ${OTHER}`],
+    ];
+    for (const [field, value, reason] of cases) {
+      await refusedBy(
+        root({ pnpm: { [field]: value } }),
+        new RegExp(`^error: package\\.json pnpm\\.${field}${reason}.*${NONE}$`),
+      );
+    }
+  });
+
+  it("TM-29: refuses resolutions, which pnpm reads as overrides", async () => {
+    await refusedBy(
+      root({ resolutions: { yaml: "2.9.1" } }),
+      new RegExp(
+        `^error: package\\.json resolutions: pnpm reads it as overrides, which replace versions anywhere in the dependency graph${NONE}$`,
+      ),
+    );
+  });
+
+  it("TM-29: accepts an empty pnpm field, and none", async () => {
+    expect(await runMain(root({ pnpm: {} }))).toEqual(PASSES);
+    expect(await runMain(root({}))).toEqual(PASSES);
+  });
+
+  it("TM-29: refuses a pnpm field in an app's package.json", async () => {
+    await refusedBy(
+      checkout({
+        "apps/web/package.json": manifest({
+          name: "@virga/web",
+          pnpm: { executionEnv: { nodeVersion: "23.0.0" } },
+        }),
+      }),
+      /^error: apps\/web\/package\.json has a pnpm field; pnpm takes its settings from the root package\.json, where the check reads them, and executionEnv from each project/,
+    );
   });
 });
 

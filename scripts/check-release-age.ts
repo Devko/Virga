@@ -789,11 +789,46 @@ function pnpmPin(field: PackageManagerPin["field"], value: string): PackageManag
 }
 
 /**
+ * The fields of the pnpm field in package.json the check accepts: none, since
+ * the project sets none (TM-29). Extend the check, with a reason per field,
+ * before adding one.
+ */
+const PNPM_FIELDS: ReadonlySet<string> = new Set();
+
+const BUILDS =
+  "changes which packages may run install scripts, which the project lists in pnpm-workspace.yaml (onlyBuiltDependencies)";
+
+/** Why the check refuses a field of the pnpm field in package.json. */
+const PNPM_FIELD_PROBLEMS: Readonly<Record<string, string>> = {
+  configDependencies:
+    "pnpm installs config dependencies outside the lockfile, and runs pnpm-plugin-* ones on every command, so the check cannot date them",
+  overrides:
+    "replaces versions anywhere in the dependency graph, with any specifier, a tarball or git source among them",
+  patchedDependencies:
+    "applies patch files to installed packages, so their code is not the bytes the check compared",
+  packageExtensions: "adds dependencies to the manifests of installed packages",
+  neverBuiltDependencies: "lets every package it does not list run install scripts",
+  onlyBuiltDependencies: BUILDS,
+  onlyBuiltDependenciesFile: BUILDS,
+  ignoredBuiltDependencies: BUILDS,
+  executionEnv:
+    "makes pnpm download a Node.js runtime and run scripts with it, which the check does not date",
+};
+
+const NO_PNPM_FIELDS =
+  "the project sets no pnpm field in package.json, so the check accepts none; extend it before adding one";
+
+/** A key for messages: as written if it is a plain name, else quoted and cut short. */
+const fieldName = (key: string) => (/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(key) ? key : preview(key));
+
+/**
  * The pnpm versions package.json pins (R6-04): packageManager, which
  * pnpm/action-setup in CI and corepack follow and which therefore must name
  * an exact pnpm version, and devEngines.packageManager if present. Refuses
- * config dependencies in the pnpm field (R8-01), which pnpm installs outside
- * the lockfile.
+ * every field of the pnpm field the check does not know (R8-01, TM-29):
+ * config dependencies, which pnpm installs outside the lockfile, and
+ * settings that change what pnpm installs or runs. Refuses resolutions too,
+ * which pnpm reads as overrides.
  */
 export function parsePackageManager(text: string): PackageManagerPin[] {
   let manifest: unknown;
@@ -810,11 +845,20 @@ export function parsePackageManager(text: string): PackageManagerPin[] {
         "package.json pnpm is not an object, so the check cannot tell which settings pnpm reads from it",
       );
     }
-    if (Object.hasOwn(pnpm, "configDependencies")) {
+    for (const field of Object.keys(pnpm)) {
+      if (PNPM_FIELDS.has(field)) continue;
+      const problem = Object.hasOwn(PNPM_FIELD_PROBLEMS, field)
+        ? `: ${PNPM_FIELD_PROBLEMS[field]}`
+        : " is not a field the check accepts; pnpm settings here can change what pnpm installs or runs";
       throw new PackageJsonError(
-        "package.json pnpm.configDependencies: pnpm installs config dependencies outside the lockfile, and runs pnpm-plugin-* ones on every command, so the check cannot date them; the project declares none",
+        `package.json pnpm.${fieldName(field)}${problem}; ${NO_PNPM_FIELDS}`,
       );
     }
+  }
+  if (Object.hasOwn(manifest, "resolutions")) {
+    throw new PackageJsonError(
+      `package.json resolutions: pnpm reads it as overrides, which replace versions anywhere in the dependency graph; ${NO_PNPM_FIELDS}`,
+    );
   }
   if (typeof packageManager !== "string") {
     throw new PackageJsonError(
@@ -896,6 +940,11 @@ function checkNestedManifest(path: string, shown: string): void {
   }
   if (Object.hasOwn(manifest, "packageManager")) {
     throw new CheckoutError(`${shown} names packageManager; ${ONLY_ROOT}`);
+  }
+  if (Object.hasOwn(manifest, "pnpm")) {
+    throw new CheckoutError(
+      `${shown} has a pnpm field; pnpm takes its settings from the root package.json, where the check reads them, and executionEnv from each project, where it can make pnpm download and run a Node.js runtime (TM-29)`,
+    );
   }
   const { devEngines } = manifest;
   if (devEngines === undefined) return;
