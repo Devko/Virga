@@ -173,6 +173,8 @@ const RPC_TYPES: true[] = [
   true as Typed<Awaited<ReturnType<Stub["evaluateRules"]>>>,
   true as Typed<Awaited<ReturnType<Stub["finishScan"]>>>,
   true as Typed<Awaited<ReturnType<Stub["scanSummary"]>>>,
+  true as Typed<Awaited<ReturnType<Stub["addAccount"]>>>,
+  true as Typed<Awaited<ReturnType<Stub["removeAccount"]>>>,
 ];
 
 describe("GraphReader", () => {

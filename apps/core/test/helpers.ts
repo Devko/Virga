@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import type { ExposureRow } from "@virga/graph";
 import type { RuleRunSummary } from "@virga/rules";
 import type { AccountGraph } from "../src/account-graph.ts";
+import type { AccountChanges } from "../src/accounts.ts";
 import type { Evaluators } from "../src/graph/evaluators.ts";
 import { dueAccounts, upsertAccount } from "../src/index-db.ts";
 
@@ -133,24 +134,65 @@ export async function runningScanRow(accountId: string, startedAt: number) {
 }
 
 /**
- * ACCOUNT_GRAPH whose stubs run `hook` before `deleteAll`, to make the
- * deletion fail (the hook throws) or to do something just before it.
+ * Makes the account's graph object use `index` for addAccount and
+ * removeAccount, and run `beforeDelete` or `beforeClear` before it deletes
+ * the graph or clears the `removed` marker: to make that step fail (the hook
+ * throws) or to do something just before it. Hooks run inside the graph
+ * object. Returns a function that puts the real ones back.
  */
-export function graphsWith(hook: () => Promise<void>): Env["ACCOUNT_GRAPH"] {
-  const graphs = env.ACCOUNT_GRAPH;
+export async function changesWith(
+  accountId: string,
+  options: {
+    index?: D1Database;
+    beforeDelete?: () => Promise<void>;
+    beforeClear?: () => Promise<void>;
+  },
+): Promise<() => Promise<void>> {
+  const stub = graphOf(accountId);
+  let real: AccountChanges | undefined;
+  await runInDurableObject(stub, (graph: AccountGraph) => {
+    const base = graph.accounts;
+    real = base;
+    graph.accounts = {
+      index: options.index ?? base.index,
+      async deleteGraph() {
+        await options.beforeDelete?.();
+        return base.deleteGraph();
+      },
+      async clearRemoved() {
+        await options.beforeClear?.();
+        return base.clearRemoved();
+      },
+    };
+  });
+  return () =>
+    runInDurableObject(stub, (graph: AccountGraph) => {
+      if (real) graph.accounts = real;
+    });
+}
+
+export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A hook that stops once, until `release`. The test and the graph object
+ * share it through memory only: a promise made in one request and settled
+ * in another would cross request contexts.
+ */
+export function pause() {
+  const state = { reached: false, released: false };
   return {
-    idFromName: (name: string) => graphs.idFromName(name),
-    get(id: DurableObjectId) {
-      const stub = graphs.get(id);
-      return {
-        async deleteAll() {
-          await hook();
-          return stub.deleteAll();
-        },
-        clearRemoved: () => stub.clearRemoved(),
-      };
+    async hook() {
+      if (state.reached) return;
+      state.reached = true;
+      while (!state.released) await sleep(5);
     },
-  } as unknown as Env["ACCOUNT_GRAPH"];
+    async reached() {
+      while (!state.reached) await sleep(5);
+    },
+    release() {
+      state.released = true;
+    },
+  };
 }
 
 /**

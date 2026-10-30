@@ -43,14 +43,14 @@ Then the step `audit:purge` deletes tool audit rows older than 90 days, at most 
 
 `getScanSummary` returns `{ account, lastRun, graph }`: the index row, the latest `scan_runs` row, and the graph's summary. `graph.ruleRuns` lists, per rule of the latest scan, its status, hits (decided rows), undecided rows, missing inputs and the error text (`Untrusted`, at most 500 characters). A rule that is not evaluated, or an undecided row, is not a pass.
 
-`Admin`: `addAccount({ id, name, cadenceHours, profile })`, which also calls the account's graph object to clear its `removed` marker (`AccountGraph.clearRemoved`), so an account that is added again can be scanned again; `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless the account is unknown (`unknown_account`), being removed (`removing`) or has a scan running (`running`), and `removeAccount(accountId)`. `addAccount` on an account that is still `removing` finishes the removal first, so the account starts from nothing.
+`Admin`: `addAccount({ id, name, cadenceHours, profile })`, which also clears the `removed` marker of the account's graph, so an account that is added again can be scanned again; `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless the account is unknown (`unknown_account`), being removed (`removing`) or has a scan running (`running`), and `removeAccount(accountId)`. `addAccount` on an account that is still `removing` finishes the removal first, so the account starts from nothing.
 
 `Admin` also keeps the tool audit trail (`tool_audit`, migration 0003, [docs/architecture/data-model.md](../../docs/architecture/data-model.md#tool-audit-table)): `recordToolCall({ identity, identityType, channel, action, accountId, outcome })` checks every field against a fixed shape and writes one row at the time of the call, and `listToolCalls({ limit, cursor })` returns a page, newest first. The web Worker records each API request and MCP tool call, and shows the trail to admins.
 
 `removeAccount` runs in an order that never hides an account whose graph is left (R5-08):
 
 1. Mark the account `removing` (`accounts.removing_at`, migration 0002). From here on it is listed with status `removing`.
-2. Delete its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, an empty schema again, and a `removed` key in `meta`).
+2. Delete its whole graph (`ctx.storage.deleteAll()`, an empty schema again, and a `removed` key in `meta`).
 3. Delete its `accounts` and `scan_runs` rows.
 
 It returns `{ removed }`, true when the account was in the index, and is idempotent: a step that fails leaves the account listed as `removing`, and a retry finishes the removal. From the first step on (R4-03, R5-08):
@@ -60,7 +60,7 @@ It returns `{ removed }`, true when the account was in the index, and is idempot
 - While `removed` is set, `AccountGraph.beginScan` refuses with `{ started: false, removed: true }`, in case the removal lands between the index check and the graph call. The index's `beginRun` adds a `running` row only while the account exists and is not `removing`.
 - A scan that began before the mark keeps writing until the graph is deleted, is refused at its next write after that, and `finishRun` gives it no row back. If the graph deletion fails, such a scan can still finish into the graph of the `removing` account; a repeat of the removal deletes that data.
 
-Concurrent `addAccount` and `removeAccount` calls for one account are not serialized. In the worst interleaving the graph is left empty without its `removed` marker, the same small window as before R5-08.
+`addAccount` and `removeAccount` of one account run one at a time (TM-09). Admin passes both to the account's graph object (`AccountGraph.addAccount`, `AccountGraph.removeAccount`, [src/accounts.ts](src/accounts.ts)), which runs them in the order they arrive: a call waits until the addition or removal under way has ended, failed or not. So the last call decides the end state. A re-add during a removal ends with the account listed and its graph empty and open to scans; a removal during an add ends with no index row and the `removed` marker set. Before, a removal that had marked the account could delete the row a re-add had just written, or set the marker after the add had cleared it. The queue is in memory: the platform runs one instance per Durable Object ID, so every call for the account reaches it. A graph object that is restarted mid-change (for example by a deploy) drops its queue together with the change under way; the steps it already took are those a failed removal leaves, and a repeat finishes it (R5-08). The graph object refuses an account ID that does not name it, and offers the graph deletion and the marker only inside these two calls, not over RPC.
 
 Full offboarding also needs the broker: the web Worker calls `TokenIntake.remove(accountId)` first, so a running scan gets no more API access, then `Admin.removeAccount(accountId)`.
 
