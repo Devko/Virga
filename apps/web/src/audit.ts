@@ -18,8 +18,6 @@ interface Waiter {
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 const ACCOUNT_VIEWS = new Set(["findings", "finding", "neighborhood", "scan"]);
 const COLLECTIONS = new Set(["me", "accounts", "audit"]);
-// As in the Access check and in core's table.
-const MAX_IDENTITY = 320;
 
 /** The route template an API request matched, and its account ID; `unmatched` otherwise. */
 export function apiAction(
@@ -48,14 +46,15 @@ export function apiAction(
 export const channelOf = (request: Request): Channel =>
   request.headers.get("sec-fetch-site") === "same-origin" ? "ui" : "api";
 
-/** The identity as the trail records it: the email, else the service token's client ID. */
+/**
+ * The identity as the trail records it: the email, else the service token's
+ * client ID, unchanged. The Access check lets only identities through that
+ * core stores (`isIdentity`, R9-04), so a write never fails on the identity.
+ */
 export function actorOf(identity: Identity): Pick<ToolCall, "identity" | "identityType"> {
   return identity.email !== null
-    ? { identity: identity.email.slice(0, MAX_IDENTITY), identityType: "email" }
-    : {
-        identity: (identity.serviceToken ?? "").slice(0, MAX_IDENTITY),
-        identityType: "service_token",
-      };
+    ? { identity: identity.email, identityType: "email" }
+    : { identity: identity.serviceToken ?? "", identityType: "service_token" };
 }
 
 /** Writes one entry; resolves when it is written or its failure is logged. */

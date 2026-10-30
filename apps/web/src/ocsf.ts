@@ -54,37 +54,68 @@ const hex = (code: number) => `\\u${code.toString(16).padStart(4, "0")}`;
 
 /**
  * Characters that JSON leaves as they are but that should not appear raw in
- * a file someone opens in an editor, a terminal or a browser: `&`, `<`,
- * `>`, DEL and C1 controls, the soft hyphen, and the invisible formatting,
- * direction and separator characters. JSON.stringify already escapes C0
- * controls and lone surrogates.
+ * a file someone opens in an editor, a terminal or a browser, as inclusive
+ * code point ranges: `&`, `<`, `>`, DEL and C1 controls, the line and
+ * paragraph separators, and every format character (general category Cf)
+ * and default-ignorable code point (Default_Ignorable_Code_Point) of
+ * Unicode 17. Those include the soft hyphen, zero-width and bidi controls,
+ * U+034F, the Hangul fillers, variation selectors and tags, which a viewer
+ * draws as nothing or uses to reorder text. JSON.stringify already escapes
+ * C0 controls and lone surrogates. A test checks the list against the
+ * runtime's Unicode properties.
  */
-const ESCAPED: readonly [number, number][] = [
+export const EXPORT_ESCAPED: readonly (readonly [number, number])[] = [
   [0x26, 0x26],
   [0x3c, 0x3c],
   [0x3e, 0x3e],
   [0x7f, 0x9f],
   [0xad, 0xad],
-  [0x061c, 0x061c],
-  [0x180e, 0x180e],
+  [0x34f, 0x34f],
+  [0x600, 0x605],
+  [0x61c, 0x61c],
+  [0x6dd, 0x6dd],
+  [0x70f, 0x70f],
+  [0x890, 0x891],
+  [0x8e2, 0x8e2],
+  [0x115f, 0x1160],
+  [0x17b4, 0x17b5],
+  [0x180b, 0x180f],
   [0x200b, 0x200f],
   [0x2028, 0x202e],
   [0x2060, 0x206f],
+  [0x3164, 0x3164],
+  [0xfe00, 0xfe0f],
   [0xfeff, 0xfeff],
-  [0xfff9, 0xfffb],
+  [0xffa0, 0xffa0],
+  [0xfff0, 0xfffb],
+  [0x110bd, 0x110bd],
+  [0x110cd, 0x110cd],
+  [0x13430, 0x1343f],
+  [0x1bca0, 0x1bca3],
+  [0x1d173, 0x1d17a],
+  [0xe0000, 0xe0fff],
 ];
+const point = (code: number) => `\\u{${code.toString(16)}}`;
 const ESCAPE = new RegExp(
-  `[${ESCAPED.map(([from, to]) => (from === to ? hex(from) : `${hex(from)}-${hex(to)}`)).join("")}]`,
-  "g",
+  `[${EXPORT_ESCAPED.map(([from, to]) => (from === to ? point(from) : `${point(from)}-${point(to)}`)).join("")}]`,
+  "gu",
 );
+
+/** A character as JSON `\u` escapes: two, a surrogate pair, above U+FFFF. */
+function escaped(c: string): string {
+  let out = "";
+  for (let i = 0; i < c.length; i++) out += hex(c.charCodeAt(i));
+  return out;
+}
 
 /**
  * JSON with the characters above as `\u` escapes. They occur only inside
  * strings, so the value parses back unchanged: strings from scanned
- * accounts stay data, and none can close a tag or reorder the text around it.
+ * accounts stay data, and none can close a tag, or hide or reorder the
+ * text around it.
  */
 export function exportJson(value: unknown): string {
-  return JSON.stringify(value).replace(ESCAPE, (c) => hex(c.charCodeAt(0)));
+  return JSON.stringify(value).replace(ESCAPE, escaped);
 }
 
 const utf8 = new TextEncoder();
@@ -95,14 +126,29 @@ function activityOf(f: FindingView) {
   return f.lastSeen > f.firstSeen ? ACTIVITY.update : ACTIVITY.create;
 }
 
-/** One finding of `accountId` as an OCSF Detection Finding. */
+/**
+ * One finding of `accountId` as an OCSF Detection Finding. Evidence larger
+ * than MAX_EVIDENCE_BYTES is left out, and the record says so: OCSF 1.9's
+ * `metadata.is_truncated`, and `metadata.untruncated_size`, which OCSF
+ * defines as the size of the whole event before truncation in kilobytes:
+ * the record with its evidence, as exported, in KiB rounded up.
+ */
 export function detectionFinding(f: FindingView, accountId: string): Record<string, unknown> {
+  const whole = record(f, accountId, null);
+  if (byteLength(exportJson(f.evidence ?? {})) <= MAX_EVIDENCE_BYTES) return whole;
+  return record(f, accountId, Math.ceil(byteLength(exportJson(whole)) / 1024));
+}
+
+/** The record; with `untruncatedSize` (KiB), without its evidence. */
+function record(
+  f: FindingView,
+  accountId: string,
+  untruncatedSize: number | null,
+): Record<string, unknown> {
   const severity = SEVERITY[f.severity] ?? { id: 0, caption: "Unknown" };
   const status = STATUS[f.status] ?? { id: 0, caption: "Unknown" };
   const activity = activityOf(f);
-  const evidence = exportJson(f.evidence ?? {});
-  const evidenceBytes = byteLength(evidence);
-  const omitted = evidenceBytes > MAX_EVIDENCE_BYTES;
+  const omitted = untruncatedSize !== null;
   const nodeType = f.subject === null ? undefined : NODE_TYPE.exec(f.subject)?.[1];
 
   const virga: Record<string, unknown> = { untrusted: UNTRUSTED_PATHS };
@@ -116,7 +162,7 @@ export function detectionFinding(f: FindingView, accountId: string): Record<stri
       version: OCSF_VERSION,
       product: { name: "Virga", vendor_name: "Virga" },
       profiles: ["cloud"],
-      ...(omitted ? { is_truncated: true, untruncated_size: Math.ceil(evidenceBytes / 1024) } : {}),
+      ...(omitted ? { is_truncated: true, untruncated_size: untruncatedSize } : {}),
     },
     category_uid: CATEGORY.uid,
     category_name: CATEGORY.name,

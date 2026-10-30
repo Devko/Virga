@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, type RequestId } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { actorOf, recordToolCall, writeToolCall } from "./audit.ts";
@@ -71,24 +71,53 @@ export interface ToolCallOutcome {
   outcome: "ok" | "not_found" | "error" | "refused";
 }
 
-type OnCall = (call: ToolCallOutcome) => void;
+/**
+ * Tool calls that run in one request, at most; a JSON-RPC batch can hold
+ * 100. A call that runs makes one GraphReader call and one audit write
+ * through service bindings, and the runtime allows a request at most 32
+ * Worker invocations through them. 8 calls make 8 reads, 8 writes and one
+ * `refused` row (25 if each read's Durable Object counts too), so every
+ * tool that runs can be recorded, and a request writes at most 9 rows.
+ * Calls past the limit run nothing and get an error result.
+ */
+export const MAX_TOOL_CALLS = 8;
 
-export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
+const TOO_MANY =
+  `Refused: a request runs at most ${MAX_TOOL_CALLS} tool calls. ` +
+  "Send the rest in another request.";
+
+/** How the server reports tool calls to the audit trail. */
+export interface ToolAudit {
+  /** Asked before a tool runs; false refuses the call, and nothing runs. */
+  admit(): boolean;
+  /** A tool ran with this outcome, for the JSON-RPC request `request`. */
+  ran(call: ToolCallOutcome, request: RequestId): void;
+}
+
+const UNAUDITED: ToolAudit = { admit: () => true, ran: () => {} };
+
+/** The part of a tool handler's context the audit trail reads. */
+type CallContext = { mcpReq: { id: RequestId } };
+
+export function virgaMcpServer(env: Env, audit: ToolAudit = UNAUDITED): McpServer {
   const reader = graphReader(env);
   const server = new McpServer({ name: "virga", version: "0.0.0" }, { instructions: INSTRUCTIONS });
 
   const guarded = async (
     name: ToolName,
     accountId: string | null,
+    context: CallContext,
     run: () => Promise<unknown>,
   ): Promise<ToolResult> => {
+    if (!audit.admit()) return failure(TOO_MANY);
+    const request = context.mcpReq.id;
     try {
       const data = await run();
-      onCall({ tool: name, accountId, outcome: data === null ? "not_found" : "ok" });
+      audit.ran({ tool: name, accountId, outcome: data === null ? "not_found" : "ok" }, request);
       return data === null ? failure(NOT_FOUND) : result(data);
     } catch (cause) {
       logFailure(`mcp: ${name}`, cause);
-      onCall({ tool: name, accountId, outcome: "error" });
+      audit.ran({ tool: name, accountId, outcome: "error" }, request);
       return failure("The graph could not be read. Try again later.");
     }
   };
@@ -104,7 +133,7 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
       inputSchema: z.object({}),
       annotations: READ_ONLY,
     },
-    () => guarded("list_accounts", null, () => reader.listAccounts()),
+    (_args, context) => guarded("list_accounts", null, context, () => reader.listAccounts()),
   );
 
   server.registerTool(
@@ -124,8 +153,8 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
       inputSchema: z.object({ account_id: accountId }),
       annotations: READ_ONLY,
     },
-    ({ account_id }) =>
-      guarded("get_scan_summary", account_id, () => reader.getScanSummary(account_id)),
+    ({ account_id }, context) =>
+      guarded("get_scan_summary", account_id, context, () => reader.getScanSummary(account_id)),
   );
 
   server.registerTool(
@@ -144,8 +173,8 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
       }),
       annotations: READ_ONLY,
     },
-    ({ account_id, status, severity, limit, cursor }) =>
-      guarded("list_findings", account_id, () => {
+    ({ account_id, status, severity, limit, cursor }, context) =>
+      guarded("list_findings", account_id, context, () => {
         const filters: FindingFilters = { limit: limit ?? MCP_FINDINGS.default };
         if (status?.length) filters.status = status;
         if (severity?.length) filters.severity = severity;
@@ -162,8 +191,8 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
       inputSchema: z.object({ account_id: accountId, fingerprint: key }),
       annotations: READ_ONLY,
     },
-    ({ account_id, fingerprint }) =>
-      guarded("get_finding", account_id, () => reader.getFinding(account_id, fingerprint)),
+    ({ account_id, fingerprint }, context) =>
+      guarded("get_finding", account_id, context, () => reader.getFinding(account_id, fingerprint)),
   );
 
   server.registerTool(
@@ -181,8 +210,8 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
       }),
       annotations: READ_ONLY,
     },
-    ({ account_id, node_id, depth, limit }) =>
-      guarded("get_neighborhood", account_id, () =>
+    ({ account_id, node_id, depth, limit }, context) =>
+      guarded("get_neighborhood", account_id, context, () =>
         reader.getNeighborhood(account_id, node_id, {
           depth: depth ?? 1,
           limit: limit ?? MCP_NEIGHBORHOOD.default,
@@ -193,42 +222,95 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
   return server;
 }
 
-// A tool call is far smaller; a larger body is not read twice.
-const MAX_CALL_BODY = 65_536;
+/**
+ * Request bodies larger than this are refused with 413 before the MCP SDK
+ * reads them (its own limit is 4 MiB). A tool call is far smaller, and every
+ * call that can run was read here first, so the audit trail always knows
+ * what a request asked for (R9-03).
+ */
+export const MAX_MCP_BODY = 65_536;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** The tool call a request body names, if it is one JSON-RPC `tools/call` request. */
-async function toolCallIn(request: Request): Promise<Omit<ToolCallOutcome, "outcome"> | null> {
-  if (request.method !== "POST" || request.body === null) return null;
-  const body = request.clone().body;
-  const bytes = body === null ? null : await readLimited(body, MAX_CALL_BODY);
-  if (bytes === null) return null;
-  let message: unknown;
-  try {
-    message = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return null;
-  }
-  if (!isRecord(message) || message.method !== "tools/call") return null;
+/** A `tools/call` request in a body, as the audit trail names it. */
+interface Attempt extends Omit<ToolCallOutcome, "outcome"> {
+  /** The JSON-RPC ID, as the client sent it. */
+  id: unknown;
+}
+
+function attemptOf(message: Record<string, unknown>): Attempt {
   const params = isRecord(message.params) ? message.params : {};
   const name = params.name;
   const args = isRecord(params.arguments) ? params.arguments : {};
   return {
+    id: message.id,
     tool: TOOL_NAMES.includes(name as ToolName) ? (name as ToolName) : "unknown_tool",
     accountId: isAccountId(args.account_id) ? args.account_id : null,
   };
 }
 
 /**
+ * The `tools/call` requests a body holds, as one message or a JSON-RPC
+ * batch, in order; `too_large` for a body over MAX_MCP_BODY.
+ */
+async function toolCallsIn(request: Request): Promise<Attempt[] | "too_large"> {
+  if (request.method !== "POST" || request.body === null) return [];
+  if (Number(request.headers.get("content-length") ?? "0") > MAX_MCP_BODY) return "too_large";
+  const body = request.clone().body;
+  const bytes = body === null ? new Uint8Array() : await readLimited(body, MAX_MCP_BODY);
+  if (bytes === null) return "too_large";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return [];
+  }
+  const messages: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+  return messages
+    .filter((m): m is Record<string, unknown> => isRecord(m) && m.method === "tools/call")
+    .map(attemptOf);
+}
+
+/** The first attempt whose request ran no tool; `ran` holds the IDs of those that did. */
+function firstRefused(
+  attempts: readonly Attempt[],
+  ran: readonly RequestId[],
+): Attempt | undefined {
+  const left = [...ran];
+  return attempts.find((attempt) => {
+    const i = left.indexOf(attempt.id as RequestId);
+    if (i !== -1) left.splice(i, 1);
+    return i === -1;
+  });
+}
+
+/** The MCP SDK's answer to a body over its limit, with ours. */
+const tooLarge = () =>
+  Response.json(
+    {
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: `Payload Too Large: Request body must not exceed ${MAX_MCP_BODY} bytes`,
+      },
+      id: null,
+    },
+    { status: 413 },
+  );
+
+/**
  * Serves /mcp. A browser Origin must be the Worker's own host (the default
  * list would admit localhost pages), and no CORS headers are sent. The Host
  * is the Custom Domain that Cloudflare routed the request for.
  *
- * Every tool that runs lands in the audit trail with its outcome. A
- * `tools/call` request that runs no tool (an unknown tool, invalid input, a
- * refused Origin) lands there as `refused` once its answer has ended.
+ * Every tool that runs lands in the audit trail with its outcome, at most
+ * MAX_TOOL_CALLS per request. When `tools/call` requests in the body run no
+ * tool (an unknown tool, invalid input, a refused Origin, past the limit),
+ * one `refused` row names the first of them once the answer has ended, after
+ * the rows of the tools that ran: if a write fails then, it is this one. A
+ * body over MAX_MCP_BODY runs nothing and lands there as one `refused` row
+ * with the tool `unknown_tool` and no account: nobody read what it asked for.
  */
 export async function handleMcp(
   request: Request,
@@ -243,22 +325,30 @@ export async function handleMcp(
     accountId: call.accountId,
     outcome: call.outcome,
   });
-  const attempted = await toolCallIn(request);
-  let ran = 0;
-  const handler = createMcpHandler(
-    () =>
-      virgaMcpServer(env, (call) => {
-        ran++;
-        recordToolCall(env, ctx, entry(call));
-      }),
-    {
-      route: "/mcp",
-      corsOptions: false,
-      allowedOriginHostnames: [new URL(request.url).hostname],
+  const attempts = await toolCallsIn(request);
+  if (attempts === "too_large") {
+    recordToolCall(env, ctx, entry({ tool: "unknown_tool", accountId: null, outcome: "refused" }));
+    return tooLarge();
+  }
+  let admitted = 0;
+  const ran: RequestId[] = [];
+  const writes: Promise<void>[] = [];
+  const audit: ToolAudit = {
+    admit: () => ++admitted <= MAX_TOOL_CALLS,
+    ran: (call, id) => {
+      ran.push(id);
+      const write = writeToolCall(env, entry(call));
+      writes.push(write);
+      ctx.waitUntil(write);
     },
-  );
+  };
+  const handler = createMcpHandler(() => virgaMcpServer(env, audit), {
+    route: "/mcp",
+    corsOptions: false,
+    allowedOriginHostnames: [new URL(request.url).hostname],
+  });
   const response = await handler(request, env, ctx);
-  if (attempted !== null) {
+  if (attempts.length > 0) {
     // The answer can stream; once it has ended, a tool that was going to run has run.
     const ended =
       response.body === null
@@ -271,9 +361,14 @@ export async function handleMcp(
               () => undefined,
             );
     ctx.waitUntil(
-      ended.then(() =>
-        ran === 0 ? writeToolCall(env, entry({ ...attempted, outcome: "refused" })) : undefined,
-      ),
+      ended
+        .then(() => Promise.all(writes))
+        .then(() => {
+          const refused = firstRefused(attempts, ran);
+          if (refused === undefined) return;
+          const { tool, accountId } = refused;
+          return writeToolCall(env, entry({ tool, accountId, outcome: "refused" }));
+        }),
     );
   }
   return response;

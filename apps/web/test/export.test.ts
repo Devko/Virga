@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EXPORT_CHUNK, EXPORT_MAX, EXPORT_MAX_BYTES } from "../src/export.ts";
 import { CSP } from "../src/http.ts";
 import {
+  byteLength,
   detectionFinding,
+  EXPORT_ESCAPED,
+  exportJson,
   MAX_EVIDENCE_BYTES,
   OCSF_VERSION,
   UNTRUSTED_PATHS,
@@ -277,6 +280,86 @@ describe("OCSF export", () => {
     }
   });
 
+  it("escapes tag characters, Hangul fillers, U+034F and the other invisible characters (R9 hardening: export escaping)", () => {
+    const hidden = [
+      // Tags, and the variation selectors that can carry hidden bytes after a visible character.
+      0xe0000, 0xe0001, 0xe0020, 0xe0041, 0xe007f, 0xe0100, 0xe01ef, 0xe0fff, 0xfe00, 0xfe0f,
+      // Hangul fillers, the combining grapheme joiner, and the format characters near them.
+      0x3164, 0x115f, 0x1160, 0xffa0, 0x034f, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0x2065,
+      0x180e, 0x180b, 0x17b4, 0x0600, 0x06dd, 0x070f, 0x08e2, 0x110bd, 0x13430, 0x1bca0, 0x1d173,
+      0xfff0, 0xfffb,
+    ];
+    for (const c of hidden) {
+      const ch = String.fromCodePoint(c);
+      const value = { [`k${ch}`]: [`a${ch}b`] };
+      const text = exportJson(value);
+      const label = `U+${c.toString(16).toUpperCase()}`;
+      expect(text.includes(ch), label).toBe(false);
+      // UTF-16 escapes, as JSON has them: a tag is a surrogate pair.
+      const units = Array.from(
+        { length: ch.length },
+        (_, i) => `\\u${ch.charCodeAt(i).toString(16).padStart(4, "0")}`,
+      ).join("");
+      expect(text, label).toBe(`{"k${units}":["a${units}b"]}`);
+      expect(JSON.parse(text), label).toEqual(value);
+    }
+  });
+
+  it("escapes exactly the documented set, and every format and default-ignorable character (R9 hardening: export escaping)", () => {
+    // Every code point but the surrogates, in one string.
+    const points: number[] = [];
+    for (let c = 0; c <= 0x10ffff; c++) if (c < 0xd800 || c > 0xdfff) points.push(c);
+    const all = points.map((c) => String.fromCodePoint(c)).join("");
+    const text = exportJson(all);
+    expect(JSON.parse(text)).toBe(all);
+    expect(text).not.toMatch(/[&<>]/);
+    // Escapes are ASCII, so every non-ASCII character in the output was left raw.
+    const raw = new Uint8Array(0x110000);
+    for (const ch of text) raw[ch.codePointAt(0) as number] = 1;
+    const hiding = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
+    const wrong: string[] = [];
+    for (const c of points) {
+      if (c < 0x7f) continue;
+      const escaped = raw[c] === 0;
+      const documented = EXPORT_ESCAPED.some(([from, to]) => c >= from && c <= to);
+      const expected = (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029;
+      if (escaped !== documented || (expected || hiding.test(String.fromCodePoint(c))) !== escaped)
+        wrong.push(`U+${c.toString(16).toUpperCase()}`);
+    }
+    expect(wrong).toEqual([]);
+    expect(EXPORT_ESCAPED).toEqual([
+      [0x26, 0x26],
+      [0x3c, 0x3c],
+      [0x3e, 0x3e],
+      [0x7f, 0x9f],
+      [0xad, 0xad],
+      [0x34f, 0x34f],
+      [0x600, 0x605],
+      [0x61c, 0x61c],
+      [0x6dd, 0x6dd],
+      [0x70f, 0x70f],
+      [0x890, 0x891],
+      [0x8e2, 0x8e2],
+      [0x115f, 0x1160],
+      [0x17b4, 0x17b5],
+      [0x180b, 0x180f],
+      [0x200b, 0x200f],
+      [0x2028, 0x202e],
+      [0x2060, 0x206f],
+      [0x3164, 0x3164],
+      [0xfe00, 0xfe0f],
+      [0xfeff, 0xfeff],
+      [0xffa0, 0xffa0],
+      [0xfff0, 0xfffb],
+      [0x110bd, 0x110bd],
+      [0x110cd, 0x110cd],
+      [0x13430, 0x1343f],
+      [0x1bca0, 0x1bca3],
+      [0x1d173, 0x1d17a],
+      [0xe0000, 0xe0fff],
+    ]);
+  });
+
   it("names the fields that hold strings from the scanned account", async () => {
     const [record] = await records(await download(exportPath(HOSTILE_ACCOUNT)));
     expect(record?.unmapped.virga.untrusted).toEqual([
@@ -409,10 +492,30 @@ describe("OCSF export", () => {
 
     const big = all[7] as OcsfRecord;
     expect(big.evidences).toBeUndefined();
-    expect(big.metadata).toMatchObject({ is_truncated: true, untruncated_size: 98 });
+    expect(big.metadata).toMatchObject({ is_truncated: true });
+    expect(big.metadata.untruncated_size).toBeGreaterThan(98);
     expect(big.unmapped.virga.evidence_omitted).toMatch(/read the finding/);
     const normal = all[8] as OcsfRecord;
     expect(normal.metadata.is_truncated).toBeUndefined();
+    expect(normal.metadata.untruncated_size).toBeUndefined();
     expect(normal.evidences).toEqual([{ data: expected[8]?.evidence }]);
+  });
+
+  it("writes untruncated_size as the size of the whole record in KB, as OCSF 1.9 defines it (R9 hardening: OCSF untruncated_size)", () => {
+    const evidence = {
+      blob: "y".repeat(100_000),
+      hosts: [HOSTILE],
+    } as unknown as FindingView["evidence"];
+    const record = detectionFinding({ ...finding, evidence }, ACCOUNT) as OcsfRecord;
+    const { is_truncated, untruncated_size, ...metadata } = record.metadata;
+    expect(is_truncated).toBe(true);
+    expect(record.evidences).toBeUndefined();
+    // The record as it would be without truncation: with the evidence, without the note.
+    const { evidence_omitted, ...virga } = record.unmapped.virga;
+    expect(evidence_omitted).toMatch(/read the finding/);
+    const whole = { ...record, metadata, evidences: [{ data: evidence }], unmapped: { virga } };
+    expect(untruncated_size).toBe(Math.ceil(byteLength(exportJson(whole)) / 1024));
+    // The whole event, not the evidence alone.
+    expect(untruncated_size).toBeGreaterThan(Math.ceil(byteLength(exportJson(evidence)) / 1024));
   });
 });
