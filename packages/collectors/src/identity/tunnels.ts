@@ -89,9 +89,25 @@ export function accessRequired(rule: Record<string, unknown>, defaults: unknown)
   return (access(rule.originRequest) ?? access(defaults))?.required === true;
 }
 
-/** Drops credentials from a URL-style service value: `http://user:pw@host` → `http://host`. */
-const withoutUserinfo = (service: string): string =>
-  service.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+const URL_START = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * A service value without credentials: `http://user:p@ss@host` → `http://host`.
+ * cloudflared parses it with Go's url.Parse: the authority runs from `//` to
+ * the first '/', '?' or '#', and the userinfo ends at its last '@'. Userinfo
+ * needs an '@', so a value without one is kept. An '@' anywhere else may end
+ * a password that holds '/', '?' or '#', or be read as userinfo by another
+ * parser, so the whole value is dropped. The result never contains an '@'.
+ */
+export function withoutCredentials(service: string): string {
+  const at = service.lastIndexOf("@");
+  if (at < 0) return service;
+  const start = URL_START.exec(service)?.[0];
+  if (!start) return "";
+  const end = service.slice(start.length).search(/[/?#]/);
+  if (end >= 0 && at > start.length + end) return "";
+  return start + service.slice(at + 1);
+}
 
 /**
  * Cloudflare Tunnels and Mesh nodes (`tunnel`), and the public hostnames of
@@ -158,7 +174,7 @@ async function collectIngress(
     const hostId = g.node("tunnel_hostname", nativeId, hostname, {
       hostname,
       path: rulePath,
-      service: withoutUserinfo(service),
+      service: withoutCredentials(service),
       origin_scheme: originScheme(service),
       tunnel_id: id,
       access_required: accessRequired(rule, config.originRequest),

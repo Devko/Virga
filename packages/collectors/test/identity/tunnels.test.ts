@@ -1,8 +1,15 @@
+import { envelope } from "@virga/cf-api/testing";
 import { describe, expect, it } from "vitest";
-import { accessRequired, originScheme, tunnelsCollector } from "../../src/identity/tunnels.ts";
+import {
+  accessRequired,
+  originScheme,
+  tunnelsCollector,
+  withoutCredentials,
+} from "../../src/identity/tunnels.ts";
 import { tunnelsRoutes } from "./fixtures/routes.ts";
 import {
   BLOG,
+  blogConfig,
   DELETED,
   LEGACY,
   LOCAL,
@@ -206,6 +213,57 @@ describe("tunnels collector", () => {
     const { output } = await run(tunnelsCollector, routes);
     expect(node(output, blogHost("app.example.com")).props?.service).toBe("http://localhost:8080");
     expect(JSON.stringify(output)).not.toContain(ORIGIN_PASSWORD);
+  });
+
+  it("R2-04: drops the whole password when it contains '@'", async () => {
+    const config = {
+      ...blogConfig,
+      config: {
+        ingress: [
+          { hostname: "app.example.com", service: "http://admin:s3cr@tPass@10.0.0.5:8080" },
+          { service: "http_status:404" },
+        ],
+      },
+    };
+    const { output } = await run(tunnelsCollector, {
+      ...routes,
+      [`${BASE}/cfd_tunnel/${BLOG}/configurations`]: envelope(config),
+    });
+    expect(node(output, blogHost("app.example.com")).props).toMatchObject({
+      service: "http://10.0.0.5:8080",
+      origin_scheme: "http",
+    });
+    const json = JSON.stringify(output);
+    for (const part of ["admin", "s3cr", "tPass"]) expect(json).not.toContain(part);
+  });
+
+  it("R2-04: keeps no part of a credential in any service value", () => {
+    const cases: [string, string][] = [
+      ["http://localhost:8080", "http://localhost:8080"],
+      ["ssh://localhost:22", "ssh://localhost:22"],
+      ["unix+tls:/home/production/echo.sock", "unix+tls:/home/production/echo.sock"],
+      ["bastion", "bastion"],
+      ["http://admin:pw@localhost:8080", "http://localhost:8080"],
+      ["HTTPS://admin@Origin.internal", "HTTPS://Origin.internal"],
+      ["tcp://user:p@ss@w@rd@10.0.0.5:22", "tcp://10.0.0.5:22"],
+      ["http://admin:s3cr%40t:x@[::1]:8080", "http://[::1]:8080"],
+      ["http://a:b@host:80?debug=1", "http://host:80?debug=1"],
+      ["ssh://u:p\\q@host:22", "ssh://host:22"],
+      // The authority ends at the first '/', '?' or '#', so this '@' cannot be
+      // told apart from a password holding one of those: the value is dropped.
+      ["ssh://admin:pa/ss@host:22", ""],
+      ["ssh://admin:pa?ss@host:22", ""],
+      ["ssh://admin:pa#ss@host:22", ""],
+      ["http://host/path@x", ""],
+      // URL parsers disagree on these; none of them is kept.
+      ["http:admin:secret@host", ""],
+      ["http:\\\\admin:secret@host", ""],
+      [" http://admin:secret@host", ""],
+      ["unix:/run/admin:secret@x.sock", ""],
+    ];
+    for (const [service, expected] of cases) {
+      expect(withoutCredentials(service), service).toBe(expected);
+    }
   });
 
   it("emits the tunnel without hostnames when its configuration is gone", async () => {
