@@ -6,7 +6,8 @@ import { handleMcp } from "./mcp.ts";
 /**
  * The web Worker: SPA, JSON API under /api and MCP at /mcp. Every request,
  * static assets included (`run_worker_first`), needs a valid Access identity
- * first; anything else gets 403.
+ * first; anything else gets 403 and is not audited. API requests and MCP
+ * tool calls land in the tool audit trail.
  */
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -17,9 +18,9 @@ export default {
     }
     const { pathname } = new URL(request.url);
     if (pathname === "/api" || pathname.startsWith("/api/")) {
-      return handleApi(request, env, auth.identity);
+      return handleApi(request, env, auth.identity, ctx);
     }
-    if (pathname === "/mcp") return secure(await handleMcp(request, env, ctx));
+    if (pathname === "/mcp") return secure(await handleMcp(request, env, ctx, auth.identity));
     if (request.method !== "GET" && request.method !== "HEAD") {
       return error(405, "method_not_allowed");
     }

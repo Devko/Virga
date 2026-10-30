@@ -103,6 +103,11 @@ export interface FindingView {
    */
   status: FindingStatus;
   title: string;
+  /**
+   * The node the finding is about (`finding_nodes` with role `subject`, the
+   * rule's `subject_id`); null if the finding has no such row.
+   */
+  subject: Untrusted<string> | null;
   evidence: Untrusted<JsonRecord>;
   insightId: Untrusted<string> | null;
   firstSeen: number;

@@ -42,7 +42,7 @@ button.link {
   color: var(--accent);
 }
 
-header > a {
+header > a:first-child {
   font-weight: 700;
   font-size: 1.1rem;
 }
@@ -56,6 +56,15 @@ main {
   max-width: 1200px;
   margin: 0 auto;
   padding: 1rem 1.5rem 3rem;
+}
+
+footer {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 2rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 button.link {
@@ -278,6 +287,16 @@ form {
 label {
   display: grid;
   gap: 0.25rem;
+}
+
+label.inline {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.export {
+  margin-bottom: 1rem;
 }
 
 .filters label {

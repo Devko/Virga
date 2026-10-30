@@ -91,12 +91,15 @@ function edgeView(row: Row): EdgeView {
 const FINDINGS_AT = `(
   SELECT fingerprint, rule_id, rule_version, severity, title, evidence, insight_id,
          first_seen, last_seen, resolved_at,
+         (SELECT n.node_id FROM finding_nodes n
+          WHERE n.fingerprint = cur.fingerprint AND n.role = 'subject'
+          ORDER BY n.node_id LIMIT 1) AS subject_id,
          CASE WHEN ended THEN 'open' ELSE status END AS status,
          CASE WHEN ended THEN NULL ELSE suppressed_until END AS suppressed_until,
          CASE WHEN ended THEN NULL ELSE suppressed_by END AS suppressed_by,
          CASE WHEN ended THEN NULL ELSE suppress_reason END AS suppress_reason
   FROM (SELECT *, status = 'suppressed' AND COALESCE(suppressed_until, 0) <= ? AS ended
-        FROM findings)
+        FROM findings) AS cur
 )`;
 
 const SEVERITY_RANK_SQL = `CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3
@@ -111,6 +114,7 @@ const SEVERITY_RANK: Record<FindingSeverity, number> = {
 
 function findingView(row: Row): FindingView {
   const insightId = str(row.insight_id);
+  const subject = str(row.subject_id);
   return {
     fingerprint: untrusted(String(row.fingerprint)),
     ruleId: String(row.rule_id),
@@ -118,6 +122,7 @@ function findingView(row: Row): FindingView {
     severity: row.severity as FindingSeverity,
     status: row.status as FindingStatus,
     title: String(row.title),
+    subject: subject === null ? null : untrusted(subject),
     evidence: untrusted(parseJson(row.evidence)),
     insightId: insightId === null ? null : untrusted(insightId),
     firstSeen: Number(row.first_seen),

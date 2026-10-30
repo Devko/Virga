@@ -2,18 +2,22 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
   AdminRpc,
   FindingFilters,
+  FindingView,
   GraphReaderRpc,
   IntakeResult,
   NewAccount,
   Profile,
   TokenIntakeRpc,
+  ToolCall,
   Untrusted,
 } from "../src/rpc.ts";
 import {
   ACCOUNT,
   ACCOUNT_REMOVAL_FAILS,
   accounts,
+  auditPage,
   detail,
+  exportFindings,
   findings,
   hugeNeighborhood,
   neighborhood,
@@ -34,7 +38,32 @@ export { default } from "../src/index.ts";
 export const calls: { method: string; args: unknown[] }[] = [];
 const record = (method: string, args: unknown[]) => calls.push({ method, args });
 
+/** Entries Admin.recordToolCall received, apart from `calls`; `fail` makes it throw. */
+export const audit: { entries: ToolCall[]; fail: boolean } = { entries: [], fail: false };
+
 const known = (accountId: string) => accountId === ACCOUNT;
+
+const asList = <T>(value: T | T[] | undefined): T[] =>
+  value === undefined ? [] : Array.isArray(value) ? value : [value];
+
+/** Filters and pages like core; the cursor is the index of the next finding. */
+function page(all: FindingView[], filters: FindingFilters = {}) {
+  const status = asList(filters.status);
+  const severity = asList(filters.severity);
+  const matching = all.filter(
+    (f) =>
+      (status.length === 0 || status.includes(f.status)) &&
+      (severity.length === 0 || severity.includes(f.severity)),
+  );
+  const limit = filters.limit ?? 50;
+  if (limit < 1 || limit > 200) throw new RangeError("limit must be 1 to 200");
+  const start = filters.cursor === undefined ? 0 : Number(filters.cursor.replace(/^at:/, ""));
+  const next = start + limit;
+  return {
+    findings: matching.slice(start, next),
+    cursor: next < matching.length ? `at:${next}` : null,
+  };
+}
 
 export class StubGraphReader extends WorkerEntrypoint<Env> implements GraphReaderRpc {
   async listAccounts() {
@@ -51,6 +80,8 @@ export class StubGraphReader extends WorkerEntrypoint<Env> implements GraphReade
 
   async listFindings(accountId: string, filters?: FindingFilters) {
     record("listFindings", [accountId, filters]);
+    const listed = exportFindings(accountId);
+    if (listed !== null) return page(listed, filters);
     if (!known(accountId)) return null;
     const limit = filters?.limit ?? 50;
     return {
@@ -95,6 +126,16 @@ export class StubAdmin extends WorkerEntrypoint<Env> implements AdminRpc {
     if (!known(accountId))
       return { started: false as const, reason: "unknown_account" as const, id: null };
     return { started: true as const, id: `scan-${accountId}-202610290715-manual` };
+  }
+
+  async recordToolCall(entry: ToolCall) {
+    if (audit.fail) throw new Error(`index unavailable for ${entry.identity}`);
+    audit.entries.push(entry);
+  }
+
+  async listToolCalls(query?: { limit?: number; cursor?: string }) {
+    record("listToolCalls", [query]);
+    return query?.cursor === undefined ? auditPage : { entries: [], cursor: null };
   }
 
   async removeAccount(accountId: string) {

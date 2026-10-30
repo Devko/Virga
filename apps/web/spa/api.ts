@@ -7,6 +7,7 @@ import type {
   Neighborhood,
   Profile,
   ScanSummaryView,
+  ToolCallPage,
   TriggerResult,
 } from "../src/rpc.ts";
 
@@ -87,6 +88,53 @@ export interface FindingQuery {
   cursor?: string;
 }
 
+export type ExportFormat = "json" | "ndjson";
+
+/** One response of the OCSF export, ready to save. */
+export interface ExportPart {
+  blob: Blob;
+  /** Findings in this part. */
+  count: number;
+  /** The URL of the next part (`Link: <…>; rel="next"`), or null after the last part. */
+  next: string | null;
+}
+
+// The export only ever links to itself; anything else in the header is ignored.
+const EXPORT_LINK = /^<(\/api\/accounts\/[0-9a-f]{32}\/findings\/export\?[^<>\s]*)>; rel="next"$/;
+
+/** The next part's path from a `Link` header, if it is the export's own. */
+export function nextExportPart(link: string | null): string | null {
+  return EXPORT_LINK.exec(link ?? "")?.[1] ?? null;
+}
+
+export function exportPath(id: string, query: FindingQuery, format: ExportFormat): string {
+  const params = new URLSearchParams();
+  for (const s of query.status) params.append("status", s);
+  for (const s of query.severity) params.append("severity", s);
+  params.set("format", format);
+  return `${account(id)}/findings/export?${params}`;
+}
+
+/** Fetches one part of the OCSF export: `path` is exportPath() or a previous part's `next`. */
+export async function exportPart(path: string): Promise<ExportPart> {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    headers: { accept: "application/json, application/x-ndjson" },
+  });
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const code =
+      body && typeof body === "object" && "error" in body ? String(body.error) : "request_failed";
+    throw new ApiError(response.status, code, body);
+  }
+  const count = Number(response.headers.get("virga-export-count"));
+  return {
+    blob: await response.blob(),
+    count: Number.isSafeInteger(count) ? count : 0,
+    next: nextExportPart(response.headers.get("link")),
+  };
+}
+
 export const api = {
   me: () => request<Me>("/api/me"),
   accounts: () => request<AccountRow[]>("/api/accounts"),
@@ -109,4 +157,9 @@ export const api = {
   onboard: (input: OnboardingInput) =>
     send<{ account: AccountRow; intake: IntakeView }>("POST", "/api/accounts", input),
   remove: (id: string) => send<RemovalView>("DELETE", account(id), { confirm: id }),
+  /** The tool audit trail, newest first; admins only. */
+  audit: (cursor?: string) =>
+    request<ToolCallPage>(
+      `/api/audit?${new URLSearchParams(cursor ? { limit: "100", cursor } : { limit: "100" })}`,
+    ),
 };

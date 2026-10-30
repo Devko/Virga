@@ -8,6 +8,7 @@ import type {
   RuleRunStatus,
   RuleRunView,
   ScanSummaryView,
+  ToolCallRow,
   TriggerResult,
 } from "../src/rpc.ts";
 import type { IntakeView, RemovalView } from "./api.ts";
@@ -393,6 +394,57 @@ export function scanMessage(r: TriggerResult): string {
   if (r.started) return "Scan started.";
   return Object.hasOwn(SCAN_REFUSED, r.reason) ? SCAN_REFUSED[r.reason] : "The scan did not start.";
 }
+
+/**
+ * The tool audit trail, newest first. Identities come from Access and the
+ * rest from fixed vocabularies, but every value is shown as text.
+ */
+export function AuditTable({ entries }: { entries: ToolCallRow[] }) {
+  if (entries.length === 0) return <p className="muted">No calls recorded.</p>;
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Identity</th>
+          <th>Channel</th>
+          <th>Action</th>
+          <th>Account</th>
+          <th>Outcome</th>
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map((e) => (
+          <tr key={e.id}>
+            <td>{time(e.at)}</td>
+            <td>
+              <Text value={e.identity} max={80} />
+              {e.identityType === "service_token" && <div className="muted">service token</div>}
+            </td>
+            <td>{e.channel}</td>
+            <td className="mono">
+              <Text value={e.action} max={100} />
+            </td>
+            <td className="mono">
+              {e.accountId === null ? (
+                <span className="muted">—</span>
+              ) : ACCOUNT_ID.test(e.accountId) ? (
+                <Link to={paths.account(e.accountId)}>{e.accountId}</Link>
+              ) : (
+                <Text value={e.accountId} max={40} />
+              )}
+            </td>
+            <td className="mono">
+              <Text value={e.outcome} max={32} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 
 /** What a removal did, step by step; a step that is null failed or did not run. */
 export function RemovalResult({ result }: { result: RemovalView }) {

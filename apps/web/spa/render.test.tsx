@@ -4,6 +4,7 @@ import type { AccountRow, CoverageView, ScanSummaryView, TriggerResult } from ".
 import {
   ACCOUNT,
   accounts,
+  auditPage,
   detail,
   findings,
   INJECTION,
@@ -15,13 +16,38 @@ import {
   summary,
   UNKNOWN_ACCOUNT,
 } from "../test/fixtures.ts";
-import { ApiError, api, type IntakeView, type Me } from "./api.ts";
+import {
+  ApiError,
+  api,
+  exportPart,
+  exportPath,
+  type IntakeView,
+  type Me,
+  nextExportPart,
+} from "./api.ts";
+import { Footer, Header } from "./app.tsx";
 import { graphElements } from "./graph.tsx";
 import type { Loaded } from "./load.tsx";
-import { AccountView, listedAccount } from "./pages.tsx";
+import {
+  AccountView,
+  AuditPage,
+  ExportControl,
+  exportFileName,
+  exportMessage,
+  listedAccount,
+} from "./pages.tsx";
+import { match } from "./router.tsx";
 import { JsonView, shown } from "./text.tsx";
+
+const sources = import.meta.glob(["./**/*.ts", "./**/*.tsx", "!./**/*.test.tsx"], {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
 import {
   AccountsTable,
+  AuditTable,
   FindingHeader,
   FindingsTable,
   IntakeResult,
@@ -379,13 +405,181 @@ describe("SPA with an account being removed (R5-08)", () => {
   });
 });
 
-describe("SPA sources", () => {
-  const sources = import.meta.glob(["./**/*.ts", "./**/*.tsx", "!./**/*.test.tsx"], {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  }) as Record<string, string>;
+describe("OCSF export in the findings view", () => {
+  it("offers the export with a format choice", () => {
+    const html = renderToStaticMarkup(
+      <ExportControl accountId={ACCOUNT} status={["open"]} severity={[]} />,
+    );
+    expect(html).toContain("OCSF export");
+    expect(html).toContain('<option value="json" selected="">JSON</option>');
+    expect(html).toContain('<option value="ndjson">NDJSON</option>');
+    expect(html).toMatch(/<button type="button">Export findings<\/button>/);
+    expect(html).not.toContain("Save part");
+  });
 
+  it("is part of the account page for viewers too", () => {
+    const viewer: Me = { email: "viewer@example.com", serviceToken: null, admin: false };
+    const html = renderToStaticMarkup(
+      <AccountView
+        accountId={ACCOUNT}
+        me={viewer}
+        summary={{ data: summary, error: undefined, loading: false, reload: () => {} }}
+        onRemoved={() => {}}
+      />,
+    );
+    expect(html).toContain("Export findings");
+  });
+
+  it("asks for the filters of the view and names the files by account and part", () => {
+    expect(
+      exportPath(ACCOUNT, { status: ["open", "suppressed"], severity: ["high"] }, "ndjson"),
+    ).toBe(
+      `/api/accounts/${ACCOUNT}/findings/export?status=open&status=suppressed&severity=high&format=ndjson`,
+    );
+    expect(exportFileName(ACCOUNT, "json", 1)).toBe(`virga-findings-${ACCOUNT}.ocsf.json`);
+    expect(exportFileName(ACCOUNT, "ndjson", 3)).toBe(
+      `virga-findings-${ACCOUNT}-part-3.ocsf.ndjson`,
+    );
+    expect(exportMessage(1, 2, false)).toBe("Saved 2 findings.");
+    expect(exportMessage(1, 1000, true)).toBe(
+      "Saved part 1; 1000 findings so far. More findings match: save the next part.",
+    );
+    expect(exportMessage(2, 1005, false)).toBe("Saved part 2; 1005 findings in all.");
+  });
+
+  it("follows only the export's own next link", () => {
+    const next = `/api/accounts/${ACCOUNT}/findings/export?format=json&cursor=at%3A1000`;
+    expect(nextExportPart(`<${next}>; rel="next"`)).toBe(next);
+    for (const link of [
+      null,
+      "",
+      `<https://evil.example.com${next}>; rel="next"`,
+      `<//evil.example.com${next}>; rel="next"`,
+      `</api/accounts/${ACCOUNT}/findings?cursor=x>; rel="next"`,
+      `</api/accounts/x/findings/export?a=b>; rel="next"`,
+      `<${next}>; rel="prev"`,
+    ]) {
+      expect(nextExportPart(link), String(link)).toBeNull();
+    }
+  });
+
+  it("reads a part, its count and its next link, and reports refusals", async () => {
+    const next = `/api/accounts/${ACCOUNT}/findings/export?format=json&cursor=at%3A1000`;
+    const fetch = vi.fn(async (path: string) =>
+      path.includes("severity=critical")
+        ? new Response(JSON.stringify({ error: "cross_origin" }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          })
+        : new Response("[]", {
+            headers: {
+              "content-type": "application/json",
+              "virga-export-count": "1000",
+              link: `<${next}>; rel="next"`,
+            },
+          }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const part = await exportPart(exportPath(ACCOUNT, { status: [], severity: [] }, "json"));
+      expect(part.count).toBe(1000);
+      expect(part.next).toBe(next);
+      expect(await part.blob.text()).toBe("[]");
+      const refused = await exportPart(
+        exportPath(ACCOUNT, { status: [], severity: ["critical"] }, "json"),
+      ).catch((e: unknown) => e);
+      expect(refused).toBeInstanceOf(ApiError);
+      expect((refused as ApiError).code).toBe("cross_origin");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("audit trail page", () => {
+  const admin: Me = { email: "admin@example.com", serviceToken: null, admin: true };
+  const viewer: Me = { email: "viewer@example.com", serviceToken: null, admin: false };
+
+  it("lists the entries as text, with links to the accounts", () => {
+    const hostile = {
+      ...(auditPage.entries[0] as (typeof auditPage.entries)[number]),
+      id: 9,
+      identity: MARKUP,
+      action: INJECTION,
+      accountId: "../../etc",
+      outcome: MARKUP,
+    };
+    const html = renderToStaticMarkup(<AuditTable entries={[...auditPage.entries, hostile]} />);
+    expectInert(html);
+    expect(html).toContain("2026-10-30 09:05 UTC");
+    expect(html).toContain("DELETE /api/accounts/{id}");
+    expect(html).toContain(`<a href="/accounts/${ACCOUNT}">${ACCOUNT}</a>`);
+    expect(html).toContain("service token");
+    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    // An account ID that is not one is text, not a link.
+    expect(html).not.toContain('href="/accounts/../../etc"');
+    expect(renderToStaticMarkup(<AuditTable entries={[]} />)).toContain("No calls recorded.");
+  });
+
+  it("is linked and shown for admins only", () => {
+    expect(renderToStaticMarkup(<Header me={admin} />)).toContain(
+      '<a href="/audit">Audit trail</a>',
+    );
+    expect(renderToStaticMarkup(<Header me={viewer} />)).not.toContain("Audit trail");
+    expect(renderToStaticMarkup(<Header me={undefined} />)).not.toContain("Audit trail");
+    expect(renderToStaticMarkup(<AuditPage me={viewer} />)).toContain(
+      "Only administrators can read the audit trail.",
+    );
+    const page = renderToStaticMarkup(<AuditPage me={admin} />);
+    expect(page).toContain("<h1>Audit trail</h1>");
+    expect(page).toContain("kept for 90 days");
+    expect(match(new URL("https://virga.example.com/audit"))).toEqual({ page: "audit" });
+  });
+
+  it("reads the trail page by page", async () => {
+    const requests: string[] = [];
+    const fetch = vi.fn(async (path: string) => {
+      requests.push(path);
+      return new Response(JSON.stringify(auditPage), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      expect(await api.audit()).toEqual(auditPage);
+      await api.audit("2");
+      expect(requests).toEqual(["/api/audit?limit=100", "/api/audit?limit=100&cursor=2"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("non-affiliation notice (D-01)", () => {
+  it("says in the footer that Virga is not affiliated with or endorsed by Cloudflare", () => {
+    const html = renderToStaticMarkup(<Footer />);
+    expect(html).toMatch(/^<footer>[^<]*<\/footer>$/);
+    expect(html).toContain("Virga is an independent open source project.");
+    expect(html).toContain("not affiliated with, endorsed by, or sponsored by Cloudflare, Inc.");
+  });
+
+  it("is on every page, and no Cloudflare logo is", () => {
+    const app = sources["./app.tsx"] ?? "";
+    expect(app).toMatch(/<\/main>\s*<Footer \/>/);
+    const assets = import.meta.glob(["./**/*", "!./**/*.ts", "!./**/*.tsx"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(assets)).toContain("./public/favicon.svg");
+    for (const [file, text] of Object.entries(assets)) {
+      expect(file.toLowerCase(), file).not.toContain("cloudflare");
+      expect(text.toLowerCase(), file).not.toContain("cloudflare");
+    }
+  });
+});
+
+describe("SPA sources", () => {
   it("never write HTML or evaluate strings", () => {
     expect(Object.keys(sources).length).toBeGreaterThan(5);
     for (const [file, source] of Object.entries(sources)) {
