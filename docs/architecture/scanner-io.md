@@ -68,15 +68,18 @@ Some reports are rejected on purpose even though they are valid JSON: an osv-sca
 
 Objects become `Map`s, so a key such as `__proto__` is only a string. Recursion depth is bounded by `maxDepth` (at most 256), far from the stack limit.
 
+The parser counts values and object keys against `maxValues` and objects and arrays against `maxContainers` as well; both give `too_many_values`. A string with escapes is collected in pieces and joined once, so it is one flat string: appending each escape to the string built so far makes a rope of one node per escape, which V8 keeps as it is (see [memory budget](#memory-budget)).
+
 ## Limits and why
 
 Defaults, overridable per call through `ReaderOptions.limits`. They are first estimates; S-07 and the test range will show real report sizes.
 
 | Limit | Default | Why |
 | --- | --- | --- |
-| `maxBytes` | 16 MiB | A large image with every package listed stays below a few MiB. 16 MiB of text plus the parsed tree still fits the 128 MB of a Worker |
+| `maxBytes` | 16 MiB | A large image with every package listed stays below a few MiB. Memory follows the next two limits more than this one; see [memory budget](#memory-budget) |
 | `maxDepth` | 32 | osv-scanner output nests 13 levels down to `affected[].ranges[].events[]`; free-form members get the rest |
-| `maxValues` | 500,000 | Bounds the parsed tree, whatever the shape |
+| `maxValues` | 500,000 | Values and object keys. Each costs at most about 30 bytes of heap in workerd (a string, a number or a map entry) |
+| `maxContainers` | 100,000 | Objects and arrays. An object costs about 100 bytes in workerd for two bytes of text, so containers have their own, tighter limit. Estimated from the format, not from captured output: a Trivy report near `maxBytes` has about 6,000 vulnerabilities and 65,000 containers |
 | `maxArrayItems` | 100,000 | OSV `affected[].versions` can list thousands of versions |
 | `maxObjectKeys` | 1,000 | Report objects have a few dozen members |
 | `maxStringLength` | 256 Ki UTF-16 units | OSV `details` and Trivy `Description` are prose, rarely above 50 KB |
@@ -100,6 +103,26 @@ Kept strings have their own limits:
 **Clean text** has no C0 or C1 control character, no lone surrogate, no bidi control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) and no line or paragraph separator.
 
 **purls** use only the characters the purl spec leaves unencoded (`A-Z a-z 0-9 . - _ ~ % ! $ & ' ( ) * + , ; = : @ / ?`), valid percent escapes, a lowercase type, a non-empty version after the last `@`, and qualifiers as `key=value` pairs. A subpath (`#`) is refused: graph edge IDs use `#` before the edge key, so a purl with `#` could make two edges collide.
+
+## Memory budget
+
+A reader parses the whole report before it checks the shape, so the text, the parsed tree and the reader's own state must fit the 128 MB of a Worker together. Their size follows what is built, not the byte count (R9-06): `{}` is two bytes of text and a `Map` of about 100 bytes in workerd. Before round 10, five arrays of 99,998 `{}` (1.5 MB, 499,996 values) kept 48.3 MB in workerd, and 16 MiB of `\n` escapes kept 162.5 MB, because the parser built each escaped string as a rope of one node per escape. The fix bounds containers separately, counts object keys as values, builds every string flat, and keys the reader's matches by package and its secrets by file, so that no long string is copied once per entry (one package with a 900-character key and 50,000 matches held 127 MB in Node while the result was built).
+
+Measured at the default limits: heap kept after two full collections. workerd 1.20261012.1, read through the V8 inspector (`HeapProfiler.collectGarbage`, then `Runtime.getHeapUsage`) with a harness that is not committed, because this package does not depend on workerd; Node 22.23 with `--expose-gc`. Node does not compress pointers, so objects take about twice the heap there; strings take the same.
+
+| Input (accepted) | Bytes | Text | Tree, workerd | Tree, Node |
+| --- | --- | --- | --- | --- |
+| 99,980 `{}` (the container limit) | 0.3 MB | 0.3 MB | 9.7 MB | 19.4 MB |
+| 499,980 strings of 12 characters | 7.5 MB | 7.6 MB | 14.3 MB | 20.7 MB |
+| 499,980 strings that start with `\n` | 8.5 MB | 8.5 MB | 16.3 MB | 20.7 MB |
+| 16 MiB of `\n` escapes in strings with one two-byte character | 16.3 MB | 32.5 MB | 16.3 MB | 16.4 MB |
+| 249,000 members with 13-character keys and values | 8.0 MB | 8.0 MB | 15.5 MB | 23.2 MB |
+| 99,540 `{}` and 199,000 such members (both limits) | 6.7 MB | 6.7 MB | 22.0 MB | 37.8 MB |
+| The same with one two-byte character, padded to 16 MiB | 16.8 MB | 33.6 MB | 22.1 MB | |
+
+The text is a JavaScript string: one byte per character, or two for the whole text once one character is above U+00FF, so 16 MiB of input can take 33.6 MB as text. The worst parse measured holds 55.7 MB in workerd (text and tree; 77 MB in Node). A caller that passes bytes also holds the bytes, up to 16.8 MB: about 73 MB in all, 57% of a Worker. The reader's state and result come on top and stay small. Peaks of whole reads in Node, found by shrinking a worker thread's heap cap until the read fails, are upper bounds for workerd: 35 MB for one osv-scanner package with a 512-character name and 50,000 advisories, 49 MB for 50,000 Trivy matches linked to one such package, 55 MB for 20,000 Trivy packages with a match each, and 33 MB for 5,000 gitleaks findings with 1,000-character paths.
+
+`test/memory.test.ts` keeps these bounds in CI: the tree of every input above stays below 48 MB in Node, and the worst parse and the two match cases run in a worker thread with a capped heap (96 MB and 64 MB).
 
 ## Masking
 

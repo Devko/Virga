@@ -8,6 +8,10 @@
  * numbers that do not fit a double, a byte order mark and trailing data.
  * Objects become `Map`s, so a key such as `__proto__` is only a string.
  *
+ * Memory follows what is built, not the byte count (R9-06): an empty object
+ * is two bytes of text and about 100 bytes of heap. So containers and
+ * values (object keys included) are counted, and every string is built flat.
+ *
  * Errors carry a character offset, never the text around it.
  */
 
@@ -92,6 +96,7 @@ class Parser {
   readonly tool: Tool;
   pos = 0;
   values = 0;
+  containers = 0;
 
   constructor(text: string, limits: Limits, tool: Tool) {
     this.text = text;
@@ -121,10 +126,16 @@ class Parser {
     this.pos = p;
   }
 
+  /** Counts one value or key; containers count once more, against their own limit. */
+  count(container: boolean): void {
+    if (++this.values > this.limits.maxValues) this.fail("too_many_values");
+    if (container && ++this.containers > this.limits.maxContainers) this.fail("too_many_values");
+  }
+
   value(depth: number): JsonValue {
     this.space();
-    if (++this.values > this.limits.maxValues) this.fail("too_many_values");
     const c = this.text.charCodeAt(this.pos);
+    this.count(c === 0x7b || c === 0x5b);
     switch (c) {
       case 0x7b:
         return this.object(depth + 1);
@@ -163,6 +174,8 @@ class Parser {
       this.space();
       const keyAt = this.pos;
       if (this.text.charCodeAt(keyAt) !== 0x22) this.fail("invalid_json");
+      // A key costs a string and an entry, like a value.
+      this.count(false);
       const key = this.string();
       if (out.has(key)) this.fail("duplicate_key", keyAt);
       if (out.size >= this.limits.maxObjectKeys) this.fail("too_many_keys", keyAt);
@@ -204,7 +217,10 @@ class Parser {
     const begin = this.pos;
     let p = begin + 1;
     let start = p;
-    let out = "";
+    // The pieces of a string with escapes, joined once at the end. `out +=`
+    // per escape builds a rope of one node per escape, which V8 keeps as it
+    // is: 16 MiB of `\n` escapes kept 260 MB in Node (R9-06).
+    let parts: string[] | null = null;
     let length = 0;
     let unicodeEscape = false;
     for (;;) {
@@ -217,26 +233,28 @@ class Parser {
         if (length + (p - start) > max) this.fail("string_too_long", begin);
         continue;
       }
-      out += t.slice(start, p);
+      parts ??= [];
+      if (p > start) parts.push(t.slice(start, p));
       length += p - start;
       const e = t.charCodeAt(p + 1);
       if (e === 0x75) {
         const hex = t.slice(p + 2, p + 6);
         if (!HEX4.test(hex)) this.fail("invalid_json", p);
-        out += String.fromCharCode(Number.parseInt(hex, 16));
+        parts.push(String.fromCharCode(Number.parseInt(hex, 16)));
         unicodeEscape = true;
         p += 6;
       } else {
         const ch = ESCAPES.get(e);
         if (ch === undefined) this.fail("invalid_json", p);
-        out += ch;
+        parts.push(ch);
         p += 2;
       }
       length += 1;
       start = p;
       if (length > max) this.fail("string_too_long", begin);
     }
-    out += t.slice(start, p);
+    if (parts !== null && p > start) parts.push(t.slice(start, p));
+    const out = parts === null ? t.slice(start, p) : parts.join("");
     this.pos = p + 1;
     // Raw lone surrogates were refused with the encoding; escapes can still make one.
     if (unicodeEscape && !isWellFormed(out)) this.fail("invalid_text", begin);

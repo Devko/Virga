@@ -8,8 +8,10 @@ export interface Limits {
   maxBytes: number;
   /** Nesting of arrays and objects; a top-level object is depth 1. */
   maxDepth: number;
-  /** JSON values in the whole document, containers included. */
+  /** JSON values and object keys in the whole document, containers included. */
   maxValues: number;
+  /** Objects and arrays in the whole document. */
+  maxContainers: number;
   /** Items in one array. */
   maxArrayItems: number;
   /** Members of one object. */
@@ -25,13 +27,20 @@ export interface Limits {
 }
 
 export const DEFAULT_LIMITS: Readonly<Limits> = Object.freeze({
-  // A large image with every package listed stays below a few MiB; 16 MiB
-  // of text plus the parsed tree still fits the 128 MB of a Worker.
+  // A large image with every package listed stays below a few MiB. Memory
+  // is set by the next limits, not by this one (R9-06): see the memory
+  // budget in docs/architecture/scanner-io.md.
   maxBytes: 16 * 1024 * 1024,
   // osv-scanner output nests 13 levels down to `affected[].ranges[].events[]`;
   // free-form members such as `database_specific` get the rest.
   maxDepth: 32,
+  // Every value and key costs a string or a slot: at most about 30 bytes of
+  // heap each in workerd.
   maxValues: 500_000,
+  // An object costs about 100 bytes of heap in workerd, an array with an
+  // item as much, while its text can be two bytes. Bounded separately, so
+  // that 1.5 MB of `{}` can no longer keep 48 MB.
+  maxContainers: 100_000,
   // OSV `affected[].versions` can list thousands of versions.
   maxArrayItems: 100_000,
   maxObjectKeys: 1_000,
