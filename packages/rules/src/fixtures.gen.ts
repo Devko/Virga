@@ -3169,7 +3169,7 @@ export const FIXTURES: readonly RuleFixture[] = [
     "nodes": [
       {
         "type": "tunnel",
-        "id": "t-1",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
         "name": "office",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -3179,27 +3179,28 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "gone.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com",
         "name": "gone.example.com",
         "props": {
           "hostname": "gone.example.com",
           "path": "",
           "service": "http_status:404",
           "origin_scheme": "http_status",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:gone.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:gone.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com",
         "decision": "public",
         "confidence": 2
       }
@@ -3215,7 +3216,7 @@ export const FIXTURES: readonly RuleFixture[] = [
     "nodes": [
       {
         "type": "tunnel",
-        "id": "t-1",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
         "name": "office",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -3225,71 +3226,74 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "ssh.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "name": "ssh.example.com",
         "props": {
           "hostname": "ssh.example.com",
           "path": "",
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "api.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:api.example.com",
         "name": "api.example.com",
         "props": {
           "hostname": "api.example.com",
           "path": "",
           "service": "https://localhost:8443",
           "origin_scheme": "https",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "odd.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:odd.example.com",
         "name": "odd.example.com",
         "props": {
           "hostname": "odd.example.com",
           "path": "",
           "service": "http_status:503",
           "origin_scheme": "http_status",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:ssh.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:api.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:api.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:odd.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:odd.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:ssh.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "decision": "access",
         "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:api.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:api.example.com",
         "decision": "service_auth",
         "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:odd.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:odd.example.com",
         "decision": "unknown",
         "confidence": 0
       }
@@ -3301,7 +3305,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-004",
     "name": "positive-public-tunnel-hostnames",
-    "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access.\n",
+    "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access. A second tunnel serves ssh.example.com as well; its hostname node is keyed by its own tunnel ID, so it is a finding of its own.\n",
     "nodes": [
       {
         "type": "tunnel",
@@ -3315,76 +3319,112 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "ssh.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "name": "ssh.example.com",
         "props": {
           "hostname": "ssh.example.com",
           "path": "",
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
-          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel",
+        "id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+        "name": "office-dr",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "jump.example.com",
+        "id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "name": "ssh.example.com",
+        "props": {
+          "hostname": "ssh.example.com",
+          "path": "",
+          "service": "ssh://10.1.0.4:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
         "name": "jump.example.com",
         "props": {
           "hostname": "jump.example.com",
           "path": "",
           "service": "bastion",
           "origin_scheme": "other",
-          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "app.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "name": "app.example.com",
         "props": {
           "hostname": "app.example.com",
           "path": "",
           "service": "http://localhost:8080",
           "origin_scheme": "http",
-          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:ssh.example.com",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:jump.example.com",
+        "src": "tunnel_hostname:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "dst": "tunnel:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
         "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:app.example.com",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:ssh.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "decision": "public",
         "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:jump.example.com",
+        "entry": "tunnel_hostname:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
         "decision": "public",
         "confidence": 1
       },
       {
-        "entry": "tunnel_hostname:app.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "decision": "access",
         "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:app.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "path": "/api",
         "decision": "public",
         "confidence": 2
@@ -3394,15 +3434,19 @@ export const FIXTURES: readonly RuleFixture[] = [
     "signals": [],
     "expect": [
       {
-        "fingerprint": "CF-004:tunnel_hostname:ssh.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "severity": "critical"
       },
       {
-        "fingerprint": "CF-004:tunnel_hostname:jump.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
         "severity": "critical"
       },
       {
-        "fingerprint": "CF-004:tunnel_hostname:app.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "severity": "high"
       }
     ]
@@ -3410,11 +3454,11 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-004",
     "name": "positive-rdp-on-path",
-    "description": "An ingress rule with a path routes RDP. The hostname node is keyed by hostname and path; exposure is public.\n",
+    "description": "An ingress rule with a path routes RDP. The hostname node is keyed by tunnel, hostname and path; exposure is public.\n",
     "nodes": [
       {
         "type": "tunnel",
-        "id": "t-2",
+        "id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3",
         "name": "dc",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -3424,27 +3468,28 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "remote.example.com/desk",
+        "id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
         "name": "remote.example.com",
         "props": {
           "hostname": "remote.example.com",
           "path": "/desk",
           "service": "rdp://10.0.0.5:3389",
           "origin_scheme": "rdp",
-          "tunnel_id": "t-2"
+          "tunnel_id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:remote.example.com/desk",
-        "dst": "tunnel:t-2"
+        "src": "tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
+        "dst": "tunnel:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:remote.example.com/desk",
+        "entry": "tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
         "decision": "public",
         "confidence": 2
       }
@@ -3453,7 +3498,7 @@ export const FIXTURES: readonly RuleFixture[] = [
     "signals": [],
     "expect": [
       {
-        "fingerprint": "CF-004:tunnel_hostname:remote.example.com/desk",
+        "fingerprint": "CF-004:tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
         "severity": "critical"
       }
     ]
@@ -3465,7 +3510,7 @@ export const FIXTURES: readonly RuleFixture[] = [
     "nodes": [
       {
         "type": "tunnel",
-        "id": "t-1",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
         "name": "office",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -3475,82 +3520,85 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "db.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
         "name": "db.example.com",
         "props": {
           "hostname": "db.example.com",
           "path": "",
           "service": "tcp://localhost:5432",
           "origin_scheme": "tcp",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "web.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
         "name": "web.example.com",
         "props": {
           "hostname": "web.example.com",
           "path": "",
           "service": "http://localhost:8080",
           "origin_scheme": "http",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "mixed.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
         "name": "mixed.example.com",
         "props": {
           "hostname": "mixed.example.com",
           "path": "",
           "service": "https://localhost:8443",
           "origin_scheme": "https",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:db.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:web.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:mixed.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:db.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
         "decision": "unknown",
         "confidence": 0
       },
       {
-        "entry": "tunnel_hostname:web.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
         "decision": "access",
         "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:web.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
         "path": "/internal",
         "decision": "unknown",
         "confidence": 0
       },
       {
-        "entry": "tunnel_hostname:mixed.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
         "decision": "unknown",
         "confidence": 0
       },
       {
-        "entry": "tunnel_hostname:mixed.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
         "path": "/api",
         "decision": "public",
         "confidence": 2
@@ -3560,15 +3608,15 @@ export const FIXTURES: readonly RuleFixture[] = [
     "signals": [],
     "expect": [
       {
-        "fingerprint": "CF-004:tunnel_hostname:db.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
         "decided": false
       },
       {
-        "fingerprint": "CF-004:tunnel_hostname:web.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
         "decided": false
       },
       {
-        "fingerprint": "CF-004:tunnel_hostname:mixed.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
         "severity": "high"
       }
     ]
@@ -5759,7 +5807,7 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel",
-        "id": "t1",
+        "id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f",
         "name": "monitoring",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -5769,14 +5817,15 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "grafana.example.net",
+        "id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net",
         "name": "grafana.example.net",
         "props": {
           "hostname": "grafana.example.net",
           "path": "",
           "service": "http://localhost:3000",
           "origin_scheme": "http",
-          "tunnel_id": "t1"
+          "tunnel_id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f",
+          "access_required": false
         }
       },
       {
@@ -5954,8 +6003,8 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:grafana.example.net",
-        "dst": "tunnel:t1"
+        "src": "tunnel_hostname:0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net",
+        "dst": "tunnel:0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f"
       },
       {
         "type": "ROUTES_TO",
@@ -6588,7 +6637,7 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel",
-        "id": "t1",
+        "id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f",
         "name": "lab",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -6598,14 +6647,15 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "lab.example.net",
+        "id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f:lab.example.net",
         "name": "lab.example.net",
         "props": {
           "hostname": "lab.example.net",
           "path": "",
           "service": "http://localhost:8000",
           "origin_scheme": "http",
-          "tunnel_id": "t1"
+          "tunnel_id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f",
+          "access_required": false
         }
       },
       {
@@ -6756,8 +6806,8 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:lab.example.net",
-        "dst": "tunnel:t1"
+        "src": "tunnel_hostname:e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f:lab.example.net",
+        "dst": "tunnel:e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f"
       },
       {
         "type": "DEPLOYS",
