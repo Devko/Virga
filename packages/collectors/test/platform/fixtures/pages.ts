@@ -90,18 +90,18 @@ export const gitProject = {
   subdomain: "this-is-my-project-01.pages.dev",
 };
 
-/** Git-connected project with preview deployments switched off. */
+/** Git-connected project with preview deployments switched off and no env vars. */
 export const noPreviewProject = {
   ...gitProject,
   id: "9c3f1e2d-4b5a-4c6d-8e7f-0a1b2c3d4e5f",
-  deployment_configs: { preview: {}, production: {} },
+  deployment_configs: { preview: { env_vars: {} }, production: { env_vars: {} } },
   name: "docs",
   domains: [],
   source: source("none"),
   subdomain: "docs-4xz.pages.dev",
 };
 
-/** Direct Upload project: no source, no subdomain field. */
+/** Direct Upload project: no source, no subdomain field, and configs without env_vars. */
 export const directUploadProject = {
   id: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
   created_on: "2020-01-01T00:00:00Z",

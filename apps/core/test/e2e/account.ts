@@ -136,12 +136,15 @@ export interface AccountState {
    * when the API leaves the flag out (R4-02).
    */
   publicAssetsR2Dev: boolean | null;
+  /** CF-024: the API returns the env vars of `handbook`; else `env_vars: null` (R5-07). */
+  handbookEnvVars: boolean;
   /** R5-06: the edge tunnel's ingress has 1,000 more hostname rules. */
   edgeIngressFlood: boolean;
 }
 
 export const initialState = (): AccountState => ({
   publicAssetsR2Dev: true,
+  handbookEnvVars: true,
   edgeIngressFlood: false,
 });
 
@@ -473,6 +476,18 @@ const PAGES_PROJECTS = [
   // CF-024 clean: a URL as plain text and the key as a secret env var, in both environments.
   pagesProject("landing", "25507196-ff59-435e-9f6e-87d5ed25721a", landingEnv, landingEnv),
 ];
+
+/** The project as the API returns it when it leaves the env var data out. */
+function withoutEnvVars(project: (typeof PAGES_PROJECTS)[number]) {
+  const { preview, production } = project.deployment_configs;
+  return {
+    ...project,
+    deployment_configs: {
+      preview: { ...preview, env_vars: null },
+      production: { ...production, env_vars: null },
+    },
+  };
+}
 
 // Access ----------------------------------------------------------------------
 
@@ -874,7 +889,9 @@ export function fakeAccount(
     routes[`${scripts}/${w.name}/versions/${w.versionId}`] = envelope(version(w));
   }
   for (const project of PAGES_PROJECTS) {
-    routes[`${base}/pages/projects/${project.name}`] = envelope(project);
+    const served =
+      project.name === "handbook" && !state.handbookEnvVars ? withoutEnvVars(project) : project;
+    routes[`${base}/pages/projects/${project.name}`] = envelope(served);
     routes[`${base}/pages/projects/${project.name}/domains`] = list([]);
   }
   for (const { app, policies } of APPS) {

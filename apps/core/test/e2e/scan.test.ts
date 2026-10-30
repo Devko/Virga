@@ -35,9 +35,9 @@ import {
 // the real scan orchestration (runScan), and an AccountGraph Durable Object
 // running the real exposure evaluator and findings lifecycle over all rules.
 // Five scans: the seeded account, the same account unchanged, the account
-// whose r2.dev flag cannot be read on one bucket, the account with r2.dev
-// turned off on that bucket, and the account with one tunnel's ingress grown
-// past 1,000 entry points.
+// whose r2.dev flag on one bucket and env vars of one Pages project cannot be
+// read, the account with r2.dev turned off on that bucket, and the account
+// with one tunnel's ingress grown past 1,000 entry points.
 //
 // A case marked `mismatch` in account.ts fails because two packages disagree
 // on the graph contract; it runs as `it.fails` until the mismatch is fixed.
@@ -180,7 +180,9 @@ beforeAll(async () => {
   first = await scan("seeded", NOW);
   second = await scan("unchanged", NOW + DAY);
   state.publicAssetsR2Dev = null;
-  unreadable = await scan("r2-dev-unreadable", NOW + DAY + DAY / 2);
+  state.handbookEnvVars = false;
+  unreadable = await scan("unreadable", NOW + DAY + DAY / 2);
+  state.handbookEnvVars = true;
   state.publicAssetsR2Dev = false;
   third = await scan("r2-dev-off", NOW + 2 * DAY);
   state.edgeIngressFlood = true;
@@ -454,7 +456,7 @@ describe("second scan of the unchanged account", () => {
   });
 });
 
-describe("scan after the r2.dev flag of public-assets can no longer be read", () => {
+describe("scan after the r2.dev flag and the handbook env vars can no longer be read", () => {
   const fingerprint = "CF-021:r2_bucket:public-assets";
   const entry = `r2_public_domain:${R2_DEV_HOST}`;
 
@@ -481,6 +483,18 @@ describe("scan after the r2.dev flag of public-assets can no longer be read", ()
     expect(unreadable.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
     expect(byFingerprint(unreadable, fingerprint)).toMatchObject({ status: "open" });
     expect(unreadable.findings).toEqual(second.findings);
+  });
+
+  it("R5-07: leaves the open Pages finding of CF-024 open as undecided", () => {
+    // The Worker finding (mailer) is still decided; handbook is undecided.
+    expect(unreadable.ruleRuns.find((r) => r.rule_id === "CF-024")).toMatchObject({
+      status: "evaluated",
+      hits: 1,
+      undecided: 1,
+    });
+    expect(byFingerprint(unreadable, "CF-024:pages_project:handbook")).toMatchObject({
+      status: "open",
+    });
   });
 });
 
