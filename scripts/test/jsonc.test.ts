@@ -34,6 +34,50 @@ describe("parseJsonc", () => {
     expect(() => parseJsonc(`{ /* open`)).toThrow(/unterminated comment/);
     expect(() => parseJsonc(`{ "open`)).toThrow(/unterminated string/);
   });
+
+  it("R5-01: refuses __proto__, constructor and prototype keys at any depth", () => {
+    for (const key of ["__proto__", "constructor", "prototype", "\\u005f_proto__"]) {
+      expect(() => parseJsonc(`{ "${key}": { "d1_databases": [] } }`)).toThrow(/key .* is refused/);
+      expect(() => parseJsonc(`{ "a": [{ "b": { "${key}": 1 } }] }`)).toThrow(/key .* is refused/);
+    }
+  });
+
+  it("R5-01: refuses duplicate keys", () => {
+    expect(() => parseJsonc(`{ "routes": [], "name": "x", "routes": [] }`)).toThrow(
+      /duplicate key "routes" at line 1/,
+    );
+    expect(() => parseJsonc(`{ "a": { "b": 1, "b": 2 } }`)).toThrow(/duplicate key "b"/);
+  });
+
+  it("R5-01: returns objects without a prototype", () => {
+    const parsed = parseJsonc(`{ "a": { "b": [{}] } }`) as { a: { b: object[] } };
+    expect(Object.getPrototypeOf(parsed)).toBeNull();
+    expect(Object.getPrototypeOf(parsed.a.b[0])).toBeNull();
+    expect((parsed as Record<string, unknown>).toString).toBeUndefined();
+  });
+
+  it("R5-01: ends a line comment at a carriage return, as Wrangler does", () => {
+    const text = `{ "name": "virga-web", // comment\r "routes": ["x.example.com"]\n}`;
+    expect(parseJsonc(text)).toEqual({ name: "virga-web", routes: ["x.example.com"] });
+  });
+
+  it("R5-01: accepts what Wrangler accepts around commas and a byte order mark", () => {
+    expect(parseJsonc(`﻿{ "a": 1 }`)).toEqual({ a: 1 });
+    expect(() => parseJsonc(`[,]`)).toThrow(SyntaxError);
+    expect(() => parseJsonc(`{ , }`)).toThrow(SyntaxError);
+    expect(() => parseJsonc(`[1,,]`)).toThrow(SyntaxError);
+    expect(() => parseJsonc(``)).toThrow(SyntaxError);
+  });
+
+  it("R5-01: refuses whitespace and literals outside JSON", () => {
+    for (const text of [`{\v}`, `{ }`, `{ }`, `[NaN]`, `[0x1]`, `['a']`, `[01]`, `[1.]`]) {
+      expect(() => parseJsonc(text), JSON.stringify(text)).toThrow(SyntaxError);
+    }
+  });
+
+  it("refuses nesting deeper than any config needs", () => {
+    expect(() => parseJsonc(`${"[".repeat(200)}${"]".repeat(200)}`)).toThrow(/nested too deeply/);
+  });
 });
 
 describe("stripComments", () => {

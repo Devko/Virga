@@ -4,8 +4,8 @@
 // Wrangler configs against each other, creates missing D1 databases and
 // applies their migrations, checks the master key (D-15), then deploys
 // virga-broker, virga-core and virga-web in that order. Safe to run again.
-// Wrangler always gets the checked config as --config and never a named
-// environment.
+// Wrangler always gets the checked config as --config, never a named
+// environment, and loads no .env file.
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
-import { configOverrides, processRunner, redact } from "./lib/run.ts";
+import { API_VARS, apiOverrides, configOverrides, processRunner, redact } from "./lib/run.ts";
 import {
   build,
   type Context,
@@ -61,6 +61,13 @@ async function main(): Promise<number> {
   if (overrides.length > 0) {
     console.error(
       `error: unset ${overrides.join(" and ")}; the deploy checks and deploys only the top-level configuration of each Worker`,
+    );
+    return 1;
+  }
+  const redirects = apiOverrides(process.env);
+  if (redirects.length > 0) {
+    console.error(
+      `error: unset ${redirects.join(" and ")}; the deploy sends the token only to ${API_VARS.CLOUDFLARE_API_BASE_URL}`,
     );
     return 1;
   }

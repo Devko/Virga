@@ -1,4 +1,4 @@
-import type { WorkerConfig } from "./config.ts";
+import type { KeyPath, WorkerConfig } from "./config.ts";
 import type { ModuleExports } from "./exports.ts";
 import { isCloudflareVar } from "./run.ts";
 
@@ -37,7 +37,127 @@ export const SERVICE_GRANTS: Readonly<Record<string, readonly Grant[]>> = {
   ],
 };
 
-/** Workers that hold no state and no keys: no D1, no Durable Objects, no Secrets Store. */
+const COMMON_KEYS = [
+  "$schema",
+  "name",
+  "main",
+  "compatibility_date",
+  "compatibility_flags",
+  "workers_dev",
+  "preview_urls",
+  "observability",
+  "vars",
+  "secrets",
+];
+
+/**
+ * The top-level keys each Worker may set (R5-02). Wrangler deploys every key
+ * of its schema (node_modules/wrangler/config-schema.json), and the checks
+ * below read only these, so any other key would deploy unchecked. A new key
+ * goes here together with the check that covers it.
+ */
+export const CONFIG_KEYS: Readonly<Record<string, readonly string[]>> = {
+  "virga-broker": [
+    ...COMMON_KEYS,
+    "d1_databases",
+    "durable_objects",
+    "migrations",
+    "secrets_store_secrets",
+  ],
+  "virga-core": [
+    ...COMMON_KEYS,
+    "services",
+    "d1_databases",
+    "durable_objects",
+    "migrations",
+    "workflows",
+  ],
+  "virga-web": [...COMMON_KEYS, "routes", "route", "services", "assets"],
+};
+
+/** Keys below the top level that any Worker may set, by path; `[]` stands for any index. */
+export const NESTED_KEYS: ReadonlySet<string> = new Set([
+  "observability.enabled",
+  "observability.head_sampling_rate",
+  "observability.logs",
+  "observability.logs.enabled",
+  "observability.logs.head_sampling_rate",
+  "observability.logs.invocation_logs",
+  "observability.logs.persist",
+  "observability.traces",
+  "observability.traces.enabled",
+  "observability.traces.head_sampling_rate",
+  "observability.traces.persist",
+  "secrets.required",
+  "routes[].pattern",
+  "routes[].custom_domain",
+  "routes[].zone_id",
+  "routes[].zone_name",
+  "route.pattern",
+  "route.custom_domain",
+  "route.zone_id",
+  "route.zone_name",
+  "services[].binding",
+  "services[].service",
+  "services[].entrypoint",
+  "d1_databases[].binding",
+  "d1_databases[].database_name",
+  "d1_databases[].database_id",
+  "d1_databases[].migrations_dir",
+  "secrets_store_secrets[].binding",
+  "secrets_store_secrets[].store_id",
+  "secrets_store_secrets[].secret_name",
+  "durable_objects.bindings",
+  "durable_objects.bindings[].name",
+  "durable_objects.bindings[].class_name",
+  "durable_objects.bindings[].script_name",
+  "migrations[].tag",
+  "migrations[].new_sqlite_classes",
+  "migrations[].renamed_classes",
+  "migrations[].renamed_classes[].from",
+  "migrations[].renamed_classes[].to",
+  "migrations[].deleted_classes",
+  "workflows[].binding",
+  "workflows[].name",
+  "workflows[].class_name",
+  "workflows[].script_name",
+  "workflows[].schedules",
+  "workflows[].limits",
+  "workflows[].limits.steps",
+  "workflows[].concurrency",
+  "workflows[].concurrency.limit",
+  "workflows[].default_retention",
+  "workflows[].default_retention.success_retention",
+  "workflows[].default_retention.error_retention",
+  "assets.directory",
+  "assets.binding",
+  "assets.run_worker_first",
+  "assets.not_found_handling",
+  "assets.html_handling",
+]);
+
+/** Why some keys are refused, where the generic reason says too little. */
+const KEY_REASONS = new Map([
+  [
+    "env",
+    "named environments (env) are not supported; the deploy checks only the top-level configuration, and Wrangler would deploy an environment chosen with --env or CLOUDFLARE_ENV unchecked",
+  ],
+  [
+    "build",
+    "build.command is not supported: Wrangler runs it with the deploy token in its environment. Put the step in the app's build script, which the deploy runs without credentials (R3-05)",
+  ],
+  ["unsafe", "unsafe is not supported: its bindings and metadata bypass every binding check"],
+  [
+    "previews",
+    "previews is not supported: it holds the bindings of preview versions, which the deploy does not check",
+  ],
+  [
+    "migrations[].transferred_classes",
+    "migrations[].transferred_classes is not supported: it moves the Durable Objects of another Worker into this one",
+  ],
+]);
+
+/** Workers that hold no state and no keys: no D1, no Durable Objects, no Workflows, no Secrets Store. */
 const STATELESS = new Set(["virga-web"]);
 /** Workers that must not be reachable from the internet. */
 const INTERNAL = new Set(["virga-broker", "virga-core"]);
@@ -72,6 +192,7 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
 
   for (const worker of byName.values()) {
     const at = where(worker);
+    checkKeys(worker, error);
     const grants = SERVICE_GRANTS[worker.name] ?? [];
     for (const binding of worker.services) {
       const target = byName.get(binding.service);
@@ -133,11 +254,6 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
         );
       }
     }
-    if (worker.hasEnvironments) {
-      error(
-        `${at}: named environments (env) are not supported; the deploy checks only the top-level configuration, and Wrangler would deploy an environment chosen with --env or CLOUDFLARE_ENV unchecked`,
-      );
-    }
   }
 
   // By name and by ID: Wrangler binds by database_id, whatever database_name says (R3-06).
@@ -168,11 +284,57 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
   return issues;
 }
 
+/**
+ * Refuses every key outside the Worker's lists, once per key: under a refused
+ * key, nothing more is reported.
+ */
+function checkKeys(worker: WorkerConfig, error: (m: string) => void) {
+  const allowed = CONFIG_KEYS[worker.name] ?? [];
+  const refused = new Set<string>();
+  for (const path of worker.keys) {
+    const name = formatPath(path);
+    const parents = path.slice(1).map((_, i) => formatPath(path.slice(0, i + 1)));
+    if (parents.some((parent) => refused.has(parent)) || refused.has(name)) continue;
+    const top = String(path[0]);
+    if (path.length === 1 ? allowed.includes(top) : NESTED_KEYS.has(name)) continue;
+    refused.add(name);
+    const reason = KEY_REASONS.get(name);
+    if (reason !== undefined) error(`${where(worker)}: ${reason}`);
+    else if (path.length === 1 && Object.values(CONFIG_KEYS).some((keys) => keys.includes(top))) {
+      error(
+        `${where(worker)}: ${worker.name} may not set ${name}; the deploy does not check it there, and Wrangler would deploy it`,
+      );
+    } else {
+      error(
+        `${where(worker)}: ${name} is not supported: the deploy does not check it, and Wrangler would deploy it`,
+      );
+    }
+  }
+}
+
+/** `services[].entrypoint`; a key that is not a plain name is quoted, so it cannot pass for a path. */
+function formatPath(path: KeyPath): string {
+  return path
+    .map((part, i) => {
+      if (typeof part === "number") return "[]";
+      if (!/^[$\w]+$/.test(part)) return `[${JSON.stringify(part)}]`;
+      return i === 0 ? part : `.${part}`;
+    })
+    .join("");
+}
+
 function checkClasses(worker: WorkerConfig, exportsOf: ExportsOf, error: (m: string) => void) {
-  const local = [
+  const bindings = [
     ...worker.durableObjects.map((b) => ({ ...b, kind: "Durable Object" })),
     ...worker.workflows.map((b) => ({ ...b, kind: "Workflow" })),
-  ].filter((b) => b.scriptName === null || b.scriptName === worker.name);
+  ];
+  const local = bindings.filter((b) => b.scriptName === null || b.scriptName === worker.name);
+  for (const b of bindings) {
+    if (local.includes(b)) continue;
+    error(
+      `${where(worker)}: ${b.kind} binding ${b.binding} uses class ${b.className} of ${b.scriptName}; bindings to another Worker's classes are not part of the topology`,
+    );
+  }
   if (local.length === 0) return;
   const exported = exportsOf(worker);
   if (exported === null) {
@@ -196,6 +358,9 @@ function checkState(worker: WorkerConfig, error: (m: string) => void) {
       error(
         `${at}: ${worker.name} must not bind Durable Objects; it reads the graph through GraphReader`,
       );
+    }
+    if (worker.workflows.length > 0) {
+      error(`${at}: ${worker.name} must not bind Workflows; it starts scans through Admin`);
     }
   }
   if (worker.name !== KEY_HOLDER && worker.secretsStore.length > 0) {

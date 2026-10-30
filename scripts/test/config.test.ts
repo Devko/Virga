@@ -100,6 +100,28 @@ describe("readWorkerConfig", () => {
     app({ "wrangler.jsonc": `{ "name": }` });
     expect(() => readWorkerConfig(root, "web")).toThrow(/apps\/web\/wrangler.jsonc/);
   });
+
+  it("R5-01: refuses a __proto__ member, whose bindings Wrangler would deploy unchecked", () => {
+    // The member from the round 5 review: the vault and the master key in virga-web.
+    app({
+      "wrangler.jsonc": `{
+        "name": "virga-web",
+        "main": "src/index.ts",
+        "__proto__": {
+          "d1_databases": [{ "binding": "VAULT", "database_name": "virga-vault", "database_id": "6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11" }],
+          "secrets_store_secrets": [{ "binding": "MASTER_KEY_STORE", "store_id": "0123456789abcdef0123456789abcdef", "secret_name": "virga-master-key" }]
+        }
+      }`,
+    });
+    expect(() => readWorkerConfig(root, "web")).toThrow(
+      /apps\/web\/wrangler.jsonc: key "__proto__" is refused/,
+    );
+  });
+
+  it("R5-01: refuses a duplicate key, which a reviewer may read either way", () => {
+    app({ "wrangler.jsonc": `{ "name": "virga-web", "workers_dev": false, "workers_dev": true }` });
+    expect(() => readWorkerConfig(root, "web")).toThrow(/duplicate key "workers_dev"/);
+  });
 });
 
 describe("parseWorkerConfig", () => {
@@ -111,7 +133,7 @@ describe("parseWorkerConfig", () => {
       previewUrls: null,
       hasRoutes: false,
       hasAssets: false,
-      hasEnvironments: false,
+      keys: [["name"]],
       services: [],
       d1: [],
       vars: {},
@@ -143,10 +165,10 @@ describe("parseWorkerConfig", () => {
     expect(config).toMatchObject({
       hasRoutes: true,
       hasAssets: true,
-      hasEnvironments: true,
       vars: { ADMIN_EMAILS: "a@example.com" },
       requiredSecrets: ["ACCESS_AUD"],
     });
+    expect(config.keys).toContainEqual(["env", "staging"]);
   });
 
   it("collects every problem in one error", () => {
@@ -177,6 +199,28 @@ describe("parseWorkerConfig", () => {
     expect(message.split("\n").every((line) => line.startsWith("apps/core/wrangler.jsonc: "))).toBe(
       true,
     );
+  });
+
+  it("R5-02: records the path of every key, but not the names inside vars", () => {
+    const config = parseWorkerConfig(
+      {
+        name: "virga-web",
+        vars: { ANY_NAME: { nested: true } },
+        unsafe: { bindings: [{ name: "API", type: "service" }] },
+        "odd.key": [[{ deep: 1 }]],
+      },
+      source,
+    );
+    expect(config.keys).toEqual([
+      ["name"],
+      ["vars"],
+      ["unsafe"],
+      ["unsafe", "bindings"],
+      ["unsafe", "bindings", 0, "name"],
+      ["unsafe", "bindings", 0, "type"],
+      ["odd.key"],
+      ["odd.key", 0, 0, "deep"],
+    ]);
   });
 
   it("rejects a config that is not an object", () => {
