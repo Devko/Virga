@@ -589,7 +589,7 @@ export function parseWorkspace(text: string): Map<string, string | string[]> {
   const settings = new Map<string, string | string[]>();
   /** The list of the setting above, while its items follow. */
   let list: string[] | undefined;
-  const lines = text.replace(/^﻿/, "").split(/\r\n|\r|\n/);
+  const lines = text.replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
   for (const [index, line] of lines.entries()) {
     const number = index + 1;
     const content = line.replace(/ +$/, "");

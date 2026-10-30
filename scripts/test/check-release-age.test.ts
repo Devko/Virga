@@ -1432,7 +1432,7 @@ describe("R8-01: config dependencies are refused", () => {
   it("R8-01: accepts the layout the repository uses, and the committed file", async () => {
     expect(await runMain(checkout())).toEqual(PASSES);
     const quoted = [
-      "﻿packages:\r\n  - 'apps/*'\r\n  - \"packages/*\"   ",
+      "\uFEFFpackages:\r\n  - 'apps/*'\r\n  - \"packages/*\"   ",
       "  # not built",
       "onlyBuiltDependencies: ",
       "minimumReleaseAge: 20160",
