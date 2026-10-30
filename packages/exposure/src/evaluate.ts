@@ -240,6 +240,8 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       const tunnelPath = parseTunnelPath(typeof p.path === "string" ? p.path : "");
       path = tunnelPath.set;
       approximate = tunnelPath.approximate;
+      // Per node: a `via_fallthrough` node carries the token check of the rule
+      // that takes its requests, and Access decides by host and path alike.
       originAccess = p.access_required === true;
       break;
     }

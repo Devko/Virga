@@ -524,6 +524,56 @@ const cases: Case[] = [
     ],
   },
   {
+    name: "R3-02: a catch-all origin behind a path-restricted hostname is public where the hostname rule requires a token",
+    build: (g) => {
+      g.tunnelHostname("app.example.com", "^/admin", "http://localhost:9000", {
+        accessRequired: true,
+      });
+      g.tunnelHostname("app.example.com", "", "http://localhost:8080", { viaFallthrough: true });
+    },
+    expect: [
+      [TH("app.example.com"), "/", "public", 2, null],
+      [TH("app.example.com^/admin"), "/admin*", "access", 1, TH("app.example.com^/admin")],
+    ],
+  },
+  {
+    name: "R3-02: a path-only rule before a hostname rule that requires a token is public on its path",
+    build: (g) => {
+      g.tunnelHostname("app.example.com", "^/debug", "http://localhost:6060", {
+        viaFallthrough: true,
+      });
+      g.tunnelHostname("app.example.com", "", "http://localhost:8080", { accessRequired: true });
+    },
+    expect: [
+      [TH("app.example.com"), "/", "access", 1, TH("app.example.com")],
+      [TH("app.example.com^/debug"), "/debug*", "public", 2, null],
+    ],
+  },
+  {
+    name: "R3-02: fall-through entry points get Access apps and their own token check like other tunnel hostnames",
+    build: (g) => {
+      const fallthrough = { viaFallthrough: true };
+      g.tunnelHostname("kb.example.com", "^/debug", "http://localhost:6060", fallthrough);
+      g.tunnelHostname("open.example.com", "^/debug", "http://localhost:6060", fallthrough);
+      g.tunnelHostname("ops.example.com", "", "http://localhost:8080", {
+        accessRequired: true,
+        viaFallthrough: true,
+      });
+      g.tunnelHostname("api.example.com", "^/v1", "http://localhost:6060", fallthrough);
+      allowApp(g, "kb", [host("kb.example.com")]);
+      bypassApp(g, "open", [host("open.example.com")]);
+      allowApp(g, "v1", [host("api.example.com", "/v1/admin")]);
+    },
+    expect: [
+      // The regex path is read approximately, so split prefixes have lower confidence.
+      [TH("api.example.com^/v1"), "/v1*", "public", 1, null],
+      [TH("api.example.com^/v1"), "/v1/admin", "access", 1, APP("v1")],
+      [TH("kb.example.com^/debug"), "/debug*", "access", 2, APP("kb")],
+      [TH("open.example.com^/debug"), "/debug*", "public", 2, POLICY("open-bypass")],
+      [TH("ops.example.com"), "/", "access", 1, TH("ops.example.com")],
+    ],
+  },
+  {
     name: "a tunnel hostname that requires an Access token stays unknown where Access is undecided",
     build: (g) => {
       g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { accessRequired: true });

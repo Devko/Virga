@@ -191,11 +191,11 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("every scan", () => {
-  it("seeds one case and a clean counterpart for every phase 1 rule but CF-001", () => {
+  it("seeds cases and clean counterparts for every phase 1 rule but CF-001", () => {
     const phase1 = RULES.map((r) => r.id)
       .filter((id) => id !== "CF-001")
       .sort();
-    expect(SEEDED.map((c) => c.rule).sort()).toEqual(phase1);
+    expect([...new Set(SEEDED.map((c) => c.rule))].sort()).toEqual(phase1);
     expect([...new Set(CLEAN.map((c) => c.rule))].sort()).toEqual(phase1);
   });
 
@@ -254,7 +254,19 @@ describe("first scan of the seeded account", () => {
               props ->> '$.tunnel_id' AS tunnel
        FROM nodes WHERE type = 'tunnel_hostname' AND deleted_at IS NULL ORDER BY id`,
     );
-    expect(rows.map((r) => r.hostname).sort()).toEqual(["app.example.com", "ssh.example.com"]);
+    expect(rows.map((r) => r.hostname).sort()).toEqual([
+      "app.example.com",
+      "dash.example.com",
+      "dash.example.com",
+      "git.example.com",
+      "kb.example.com",
+      "kb.example.com",
+      "ops.example.com",
+      "ops.example.com",
+      "ssh.example.com",
+      "vault.example.com",
+      "wiki.example.com",
+    ]);
     for (const r of rows) {
       // Round 1 is `<hostname><path>`; round 2 adds the tunnel ID in front.
       expect([
@@ -264,6 +276,26 @@ describe("first scan of the seeded account", () => {
     }
   });
 
+  it("R3-02: emits an entry point per hostname for ingress rules without a hostname", async () => {
+    const rows = await sql<{ entry: string; via_fallthrough: number; access_required: number }>(
+      stub,
+      `SELECT (props ->> '$.hostname') || (props ->> '$.path') AS entry,
+              props ->> '$.via_fallthrough' AS via_fallthrough,
+              props ->> '$.access_required' AS access_required
+       FROM nodes WHERE type = 'tunnel_hostname' AND deleted_at IS NULL ORDER BY entry`,
+    );
+    // The catch-all of the ops tunnel does not reach vault.example.com, whose
+    // rule takes every path; catch-alls with a status code yield nothing.
+    expect(rows.filter((r) => r.via_fallthrough === 1)).toEqual([
+      { entry: "dash.example.com^/debug", via_fallthrough: 1, access_required: 0 },
+      { entry: "kb.example.com^/debug", via_fallthrough: 1, access_required: 0 },
+      { entry: "ops.example.com", via_fallthrough: 1, access_required: 0 },
+    ]);
+    expect(rows.filter((r) => r.via_fallthrough !== 1).every((r) => r.via_fallthrough === 0)).toBe(
+      true,
+    );
+  });
+
   describe("exposure", () => {
     for (const e of EXPOSURE) {
       const test = e.mismatch ? it.fails : it;
@@ -271,7 +303,9 @@ describe("first scan of the seeded account", () => {
         const rows = first.exposure
           .filter((r) => r.entry_id === resolve(e.entry))
           .map(({ entry_id, reason, ...rest }) => rest);
-        expect(rows).toEqual(e.rows);
+        expect(rows).toEqual(
+          e.rows.map((r) => ({ ...r, reason_id: r.reason_id && resolve(r.reason_id) })),
+        );
       });
     }
 
@@ -336,6 +370,16 @@ describe("first scan of the seeded account", () => {
   });
 
   describe("no findings for the clean counterparts", () => {
+    it("has every clean subject in the graph", async () => {
+      const ids = CLEAN.map((c) => resolve(c.subject));
+      const found = await sql<{ id: string }>(
+        stub,
+        "SELECT id FROM nodes WHERE deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))",
+        JSON.stringify(ids),
+      );
+      expect(found.map((r) => r.id).sort()).toEqual([...new Set(ids)].sort());
+    });
+
     for (const c of CLEAN) {
       it(`${c.rule}: ${c.case}`, () => {
         const hits = first.findings.filter(

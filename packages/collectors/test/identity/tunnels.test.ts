@@ -38,6 +38,40 @@ const routes = tunnelsRoutes;
 const blogHost = (host: string) => `tunnel_hostname:${BLOG}:${host}`;
 const legacyHost = (host: string) => `tunnel_hostname:${LEGACY}:${host}`;
 
+/** The fixture routes with the blog tunnel serving this configuration. */
+const withBlogConfig = (config: object) => ({
+  ...routes,
+  [`${BASE}/cfd_tunnel/${BLOG}/configurations`]: envelope({ ...blogConfig, config }),
+});
+
+const required = { access: { required: true, teamName: "acme", audTag: ["aud1"] } };
+
+/** The blog tunnel's hostname nodes, as `ID → props`. */
+async function blogHostnames(ingress: object[]) {
+  const { output } = await run(tunnelsCollector, withBlogConfig({ ingress }));
+  return Object.fromEntries(
+    output.nodes
+      .filter((n) => n.type === "tunnel_hostname" && n.props?.tunnel_id === BLOG)
+      .map((n) => [n.nativeId.slice(BLOG.length + 1), n.props]),
+  );
+}
+
+const hostProps = (
+  hostname: string,
+  path: string,
+  service: string,
+  access_required: boolean,
+  via_fallthrough: boolean,
+) => ({
+  hostname,
+  path,
+  service,
+  origin_scheme: originScheme(service),
+  tunnel_id: BLOG,
+  access_required,
+  via_fallthrough,
+});
+
 describe("tunnels collector", () => {
   it("lists cfd tunnels and Mesh nodes that are not deleted, in chunks of 25", async () => {
     const { chunks, calls, output } = await run(tunnelsCollector, routes);
@@ -93,7 +127,7 @@ describe("tunnels collector", () => {
     );
   });
 
-  it("emits tunnel_hostname nodes with ROUTES_TO, skipping the catch-all rule", async () => {
+  it("emits tunnel_hostname nodes with ROUTES_TO, none for a catch-all with a status code", async () => {
     const { output } = await run(tunnelsCollector, routes);
     expectProps(output, "tunnel_hostname", [
       "hostname",
@@ -102,6 +136,7 @@ describe("tunnels collector", () => {
       "origin_scheme",
       "tunnel_id",
       "access_required",
+      "via_fallthrough",
     ]);
     expect(nodeIds(output, "tunnel_hostname")).toEqual(
       [
@@ -133,6 +168,7 @@ describe("tunnels collector", () => {
         origin_scheme: "https",
         tunnel_id: BLOG,
         access_required: false,
+        via_fallthrough: false,
       },
     });
     expect(node(output, blogHost("ssh.example.com")).props).toEqual({
@@ -142,6 +178,7 @@ describe("tunnels collector", () => {
       origin_scheme: "ssh",
       tunnel_id: BLOG,
       access_required: false,
+      via_fallthrough: false,
     });
     // Two tunnels serve ssh.example.com, each with its own node and origin.
     expect(node(output, legacyHost("ssh.example.com")).props).toMatchObject({
@@ -157,30 +194,168 @@ describe("tunnels collector", () => {
     );
   });
 
-  it("reads originRequest.access.required per rule, falling back to the top-level setting", async () => {
+  it("R3-01: reads originRequest.access.required from the rule's own block only", async () => {
     const { output } = await run(tunnelsCollector, routes);
     const required = (id: string) => node(output, id).props?.access_required;
     expect(required(blogHost("admin.example.com"))).toBe(true);
     expect(required(blogHost("app.example.com"))).toBe(false);
-    expect(required(legacyHost("legacy.example.com"))).toBe(true);
-    expect(required(legacyHost("wiki.example.com"))).toBe(true);
+    // The legacy tunnel sets access only at the top of its configuration.
+    expect(required(legacyHost("legacy.example.com"))).toBe(false);
+    expect(required(legacyHost("wiki.example.com"))).toBe(false);
     expect(required(legacyHost("open.example.com"))).toBe(false);
 
     const access = (required: unknown) => ({ access: { required, teamName: "t", audTag: ["a"] } });
-    const cases: [Record<string, unknown>, unknown, boolean][] = [
-      [{}, undefined, false],
-      [{ originRequest: access(true) }, undefined, true],
-      [{ originRequest: access(false) }, access(true), false],
-      // Without required in its own access object, the rule does not inherit it.
-      [{ originRequest: { access: { teamName: "t" } } }, access(true), false],
-      [{ originRequest: { connectTimeout: 5 } }, access(true), true],
-      [{}, access(true), true],
-      [{ originRequest: access("true") }, undefined, false],
-      [{ originRequest: "access" }, access(true), true],
+    const cases: [Record<string, unknown>, boolean][] = [
+      [{}, false],
+      [{ originRequest: access(true) }, true],
+      [{ originRequest: access(false) }, false],
+      [{ originRequest: { access: { teamName: "t" } } }, false],
+      [{ originRequest: { connectTimeout: 5 } }, false],
+      [{ originRequest: access("true") }, false],
+      [{ originRequest: "access" }, false],
+      [{ originRequest: { access: "required" } }, false],
     ];
-    for (const [rule, defaults, expected] of cases) {
-      expect(accessRequired(rule, defaults), JSON.stringify([rule, defaults])).toBe(expected);
+    for (const [rule, expected] of cases) {
+      expect(accessRequired(rule), JSON.stringify(rule)).toBe(expected);
     }
+  });
+
+  it("R3-01: a top-level access block does not make a rule require an Access token", async () => {
+    // The review's scenario: cloudflared builds the JWT validator from the
+    // rule's own originRequest.access only, so this SSH origin is open.
+    const config = {
+      originRequest: required,
+      ingress: [
+        { hostname: "ssh.example.com", service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ],
+    };
+    const { output } = await run(tunnelsCollector, withBlogConfig(config));
+    expect(node(output, blogHost("ssh.example.com")).props).toMatchObject({
+      service: "ssh://localhost:22",
+      access_required: false,
+    });
+  });
+
+  it("R3-02: a path-only rule before a hostname rule is an entry point of that hostname", async () => {
+    // Case A of the review: https://app.example.com/debug/… reaches
+    // localhost:6060 without a token check.
+    const nodes = await blogHostnames([
+      { path: "^/debug", service: "http://localhost:6060" },
+      { hostname: "app.example.com", service: "http://localhost:8080", originRequest: required },
+      { service: "http_status:404" },
+    ]);
+    expect(nodes).toEqual({
+      "app.example.com^/debug": hostProps(
+        "app.example.com",
+        "^/debug",
+        "http://localhost:6060",
+        false,
+        true,
+      ),
+      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+    });
+  });
+
+  it("R3-02: a catch-all origin behind a path-restricted hostname is an entry point of that hostname", async () => {
+    // Case B of the review: every path of app.example.com but /admin reaches
+    // the catch-all origin without a token check.
+    const nodes = await blogHostnames([
+      {
+        hostname: "app.example.com",
+        path: "^/admin",
+        service: "http://localhost:9000",
+        originRequest: required,
+      },
+      { service: "http://localhost:8080" },
+    ]);
+    expect(nodes).toEqual({
+      "app.example.com^/admin": hostProps(
+        "app.example.com",
+        "^/admin",
+        "http://localhost:9000",
+        true,
+        false,
+      ),
+      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", false, true),
+    });
+  });
+
+  it("R3-02: a rule without a hostname yields a node per hostname, with its own access_required", async () => {
+    const { output } = await run(
+      tunnelsCollector,
+      withBlogConfig({
+        originRequest: required,
+        ingress: [
+          { hostname: "a.example.com", path: "^/one", service: "http://localhost:1" },
+          // Answers with a status code: no entry point.
+          { path: "^/blocked", service: "http_status:403" },
+          { path: "^/metrics", service: "http://localhost:9090", originRequest: required },
+          { hostname: "B.example.com", path: "^/two", service: "http://localhost:2" },
+          // cloudflared reads `*` as no hostname.
+          { hostname: "*", path: "^/ssh", service: "ssh://localhost:22" },
+          { service: "http://localhost:8080" },
+        ],
+      }),
+    );
+    const fallthrough = output.nodes.filter((n) => n.props?.via_fallthrough === true);
+    expect(fallthrough.map((n) => [n.nativeId.slice(BLOG.length + 1), n.name]).sort()).toEqual(
+      [
+        ["a.example.com", "a.example.com"],
+        ["a.example.com^/metrics", "a.example.com"],
+        ["a.example.com^/ssh", "a.example.com"],
+        ["b.example.com", "b.example.com"],
+        ["b.example.com^/metrics", "b.example.com"],
+        ["b.example.com^/ssh", "b.example.com"],
+      ].sort(),
+    );
+    expect(node(output, blogHost("b.example.com^/metrics")).props).toEqual(
+      hostProps("b.example.com", "^/metrics", "http://localhost:9090", true, true),
+    );
+    expect(node(output, blogHost("a.example.com^/ssh")).props).toEqual(
+      hostProps("a.example.com", "^/ssh", "ssh://localhost:22", false, true),
+    );
+    // Every fall-through node routes to its tunnel.
+    for (const n of fallthrough) {
+      expect(edgeIds(output, "ROUTES_TO")).toContain(
+        `ROUTES_TO:tunnel_hostname:${n.nativeId}->tunnel:${BLOG}`,
+      );
+    }
+    expect(nodeIds(output, "tunnel_hostname")).not.toContain(blogHost("*^/ssh"));
+  });
+
+  it("R3-02: skips a rule for a hostname that an earlier rule takes whole or on the same path", async () => {
+    const nodes = await blogHostnames([
+      // Takes every request to app.example.com.
+      { hostname: "app.example.com", service: "http://localhost:8080", originRequest: required },
+      { path: "^/debug", service: "http://localhost:6060" },
+      { hostname: "app.example.com", path: "^/admin", service: "http://localhost:9000" },
+      // Takes /blocked of every hostname, so the next rule never applies.
+      { path: "^/blocked", service: "http_status:403" },
+      { hostname: "web.example.com", path: "^/blocked", service: "http://localhost:7000" },
+      // The first rule for a hostname and path applies.
+      { hostname: "web.example.com", path: "^/api", service: "http://localhost:7001" },
+      { path: "^/api", service: "http://localhost:7002" },
+      { service: "http://localhost:8081" },
+    ]);
+    expect(nodes).toEqual({
+      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+      "web.example.com^/debug": hostProps(
+        "web.example.com",
+        "^/debug",
+        "http://localhost:6060",
+        false,
+        true,
+      ),
+      "web.example.com^/api": hostProps(
+        "web.example.com",
+        "^/api",
+        "http://localhost:7001",
+        false,
+        false,
+      ),
+      "web.example.com": hostProps("web.example.com", "", "http://localhost:8081", false, true),
+    });
   });
 
   it("parses the origin scheme of every service type", async () => {
