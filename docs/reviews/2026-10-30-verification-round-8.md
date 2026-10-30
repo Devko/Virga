@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 6 verification](2026-10-30-verification-round-6.md) (R6-01 to R6-07) and the [round 7 review](2026-10-30-review-round-7.md) (R7-01, R7-02) fixed? (2) review of the round 8 changes, `git diff b8a29c1..13fd01c`, and the code paths they change or rely on, at commit 13fd01c
-- Status: round 9 of the [work packages](../team/work-packages.md) fixed R8-01 to R8-03 (`supply-chain-3`, and `deploy-3` for the build half of R8-02), the source side of the leads R8-04 and R8-05 (`deploy-3`, `supply-chain-3`), and the guard hardening (`rules-6`); not yet verified by a review. The deciding facts of R8-04 and R8-05 (the deploy branch's rules) and the leads R8-06 to R8-11 stay open
+- Status: round 9 of the [work packages](../team/work-packages.md) fixed R8-01 to R8-03 (`supply-chain-3`, and `deploy-3` for the build half of R8-02), the source side of the leads R8-04 and R8-05 (`deploy-3`, `supply-chain-3`), and the guard hardening (`rules-6`). The [round 9 verification](2026-10-30-verification-round-9.md) confirms all of them as fixed. The deciding facts of R8-04 and R8-05 (the deploy branch's rules) and the leads R8-06 to R8-11 stay open
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |

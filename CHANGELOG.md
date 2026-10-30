@@ -4,7 +4,7 @@ All notable changes to Virga are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
-No release exists yet. This section summarizes phase 1 so far: rounds 1 to 8 of the [work packages](docs/team/work-packages.md), up to commit 0812b03. Nothing has scanned a real account yet; the spikes and gates that need one are listed in the [threat model](docs/architecture/threat-model.md#open-items-that-need-the-paid-account-or-the-test-range).
+No release exists yet. This section summarizes phase 1 so far, and the phase 2 and phase 4 work started early: rounds 1 to 9 of the [work packages](docs/team/work-packages.md). Nothing has scanned a real account yet; the spikes and gates that need one are listed in the [threat model](docs/architecture/threat-model.md#open-items-that-need-the-paid-account-or-the-test-range).
 
 ### Added
 
@@ -17,6 +17,9 @@ No release exists yet. This section summarizes phase 1 so far: rounds 1 to 8 of 
   - [0005](docs/decisions/0005-truncated-collection-coverage.md): a truncated collection makes coverage `partial`.
   - [0006](docs/decisions/0006-read-only-rule-runs.md): a rule run only reads, checked at run time (R6-02).
   - [0007](docs/decisions/0007-later-phases-before-the-phase-1-gate.md): work from phases 2 and 4 before the phase 1 gate.
+  - [0008](docs/decisions/0008-malicious-package-advisories.md): malicious package advisories rank critical.
+  - [0009](docs/decisions/0009-advisory-mirror-egress.md): advisory data comes in bulk from two fixed hosts.
+  - [0010](docs/decisions/0010-cyclonedx-schema-validation.md): SBOMs are validated against the vendored CycloneDX schema in tests.
 - **Graph store** (`packages/graph`): schema with migrations, JSON batch upsert with hash-gated writes and history, sweep per complete resource class, `signals`, `coverage`, `exposure`, `findings` and `rule_runs`, Durable Object and Node adapters, and a read-only query path for rules. See the [data model](docs/architecture/data-model.md).
 - **Graph contract** ([graph-contract.md](docs/architecture/graph-contract.md)): what collectors emit and what the evaluator and the rules may read.
 - **Read client** (`packages/cf-api`): the read client contract, the read allowlist, typed errors, pagination and a fixture transport for tests.
@@ -30,6 +33,9 @@ No release exists yet. This section summarizes phase 1 so far: rounds 1 to 8 of 
 - **Supply chain checks:** exact dependency versions, `minimumReleaseAge` of 14 days, and `pnpm check:release-age` in CI before any install (`scripts/check-release-age.ts`).
 - **CI** (`.github/workflows/ci.yml`): the release-age gate, then lint, `rules:check`, typecheck, tests, script tests and a deploy dry run.
 - **End-to-end scan test** (`apps/core/test/e2e`): a seeded fake account scanned through the real collectors, evaluator and rules.
+- **OCSF export and tool audit trail** (round 9): findings as OCSF 1.9.0 Detection Findings from the API and the UI ([mapping](docs/architecture/ocsf-export.md)); every API request and MCP tool call of an identity that passed Access in `tool_audit`, kept 90 days, readable by admins.
+- **Test range** (`infra/test-range`, round 9): Terraform for a dedicated test account with a seeded case and a clean counterpart per phase 1 rule, listed in `cases.yaml`; not yet validated or applied. Fix templates per rule in `rules/*/fix/`.
+- **Phase 2 groundwork** (round 9, [decision 0007](docs/decisions/0007-later-phases-before-the-phase-1-gate.md)): `packages/vulns` (OSV and KEV readers, npm range matching, CVSS severity, rematch; [vulns.md](docs/architecture/vulns.md)) and `packages/scanner-io` (strict osv-scanner, Trivy and gitleaks readers with masked secrets, CycloneDX 1.6 SBOMs; [scanner-io.md](docs/architecture/scanner-io.md)). Not wired into scans yet.
 - **Documentation:** the [operator guide](docs/operator/guide.md), the [threat model](docs/architecture/threat-model.md) v1, the [versioning policy](docs/release/versioning.md), this changelog, and the non-affiliation notice in the README (D-01).
 
 ### Security
@@ -42,5 +48,6 @@ Seven review rounds (2 to 8) ran on the code before any release. Each review lis
 - [Round 5 verification](docs/reviews/2026-10-30-verification-round-5.md), R5-01 to R5-08: Wrangler and the deploy check parsing configs differently; config keys the check ignored; `.env` files; tunnel ID collisions, long IDs and quadratic expansion; Pages env vars; removal order. All fixed, R5-07 through R6-05; the Worker half of R5-07 continues as lead R8-08, and the R5-08 leftovers are open.
 - [Round 6 verification](docs/reviews/2026-10-30-verification-round-6.md), R6-01 to R6-07: configs checked before the builds ran; rule statement tails; the lockfile reader; the pnpm version; Pages values; R2 response shapes; `last_scan_at` after a removal. All fixed except R6-04, whose rest is R8-02.
 - [Round 7 review](docs/reviews/2026-10-30-review-round-7.md), R7-01 and R7-02: `NODE_DEBUG` printed the deploy token, and `LD_LIBRARY_PATH` loaded code into the deploy. Both fixed.
-- [Round 8 verification](docs/reviews/2026-10-30-verification-round-8.md): confirms the round 6 and round 7 fixes. Open: R8-01 to R8-03 in the release-age gate, the leads R8-04 to R8-11, and the hardening notes. The [threat model](docs/architecture/threat-model.md) lists each as a residual risk.
+- [Round 8 verification](docs/reviews/2026-10-30-verification-round-8.md): confirms the round 6 and round 7 fixes, and found R8-01 to R8-03 in the release-age gate, the leads R8-04 to R8-11, and guard hardening. Round 9 fixed R8-01 to R8-03, the source side of R8-04 and R8-05, and the hardening; the leads R8-06 to R8-11 wait for observed API shapes.
+- [Round 9 verification](docs/reviews/2026-10-30-verification-round-9.md): confirms the round 9 fixes. Open: R9-01 (medium, `.npmrc` not read by the release-age gate) and R9-02 to R9-06 (low). The [threat model](docs/architecture/threat-model.md) lists each as a residual risk.
 - The lockfile keeps body-parser 2.3.0 and fast-uri 3.1.8, which have published advisories, until their patched versions pass the age gate in November 2026 (TM-16 in the threat model).

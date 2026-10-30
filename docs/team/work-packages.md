@@ -155,6 +155,8 @@ Phase 2 logic started once `rules-6` was merged, because it changes `packages/gr
 | `vulns-1` | OSV advisory matching for npm purls, CVSS severity rank, KEV, the rematch of existing `vulns` rows; an unknown match keeps `vulns` incomplete | a new `packages/vulns/**`, the vulns functions in `packages/graph/src/write.ts`, a new `docs/architecture/vulns.md` | Table-driven range tests; a match whose version or severity cannot be read is never written as harmless |
 | `scanner-io-1` | Strict readers for osv-scanner, Trivy and gitleaks output (gate 6, with a seeded fuzz test), secrets masked at the boundary, CycloneDX 1.6 SBOMs (schema validation for gate 2 pending) | a new `packages/scanner-io/**`, a new `docs/architecture/scanner-io.md` | A report that breaks a type or a limit is rejected as a whole; no secret beyond its prefix in any output |
 
+Round 9 status (2026-10-30): all nine packages are merged, and the [round 9 verification](../reviews/2026-10-30-verification-round-9.md) (two read-only reviewers) confirms R8-01 to R8-03, the source side of R8-04 and R8-05, and the guard hardening as fixed. It found R9-01 (medium: the gate does not read `.npmrc`, where `lockfile-dir` points pnpm at an undated lockfile) and R9-02 to R9-06 (low: an app `.npmrc` that fetches a Node runtime, two audit trail gaps, npm purl case between `scanner-io` and `vulns`, and `scanner-io` memory per value). The integrator recorded decisions 0008 to 0010 for `vulns` severity of `MAL-` advisories, the advisory mirror's egress and SBOM schema validation.
+
 Not in round 9: the leads R8-06 to R8-11 wait for an observed API shape (S-05 and a test account), and the hardening notes outside these packages stay listed in the round 8 verification.
 
 ## Rules for every work package
