@@ -42,9 +42,31 @@ export type AuthFailure =
   | "wrong_type"
   | "expired"
   | "not_yet_valid"
-  | "no_identity";
+  | "no_identity"
+  | "invalid_identity";
 
 export type AuthResult = { ok: true; identity: Identity } | { ok: false; reason: AuthFailure };
+
+/** Characters in an identity, at most; as in core's audit trail. */
+export const MAX_IDENTITY = 320;
+// Spaces, C0 and C1 controls, U+00A0, zero-width marks, line and paragraph
+// separators, bidi embeddings, overrides and isolates, and U+FEFF: an email
+// or a client ID has none of them.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
+const NOT_IN_IDENTITY = /[\u0000-\u0020\u007f-\u00a0\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/;
+
+/**
+ * Whether core's audit trail can store `value` as an identity: the rule of
+ * `checkToolCall` in apps/core/src/audit.ts, mirrored because the Worker
+ * does not bundle core; test/identity.test.ts compares the two. The Access
+ * check refuses any other identity, so every identity it lets through is
+ * recorded (R9-04).
+ */
+export const isIdentity = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value !== "" &&
+  value.length <= MAX_IDENTITY &&
+  !NOT_IN_IDENTITY.test(value);
 
 interface AccessConfig {
   teamDomain: string;
@@ -253,18 +275,21 @@ async function verifyToken(
   return { ok: true, claims };
 }
 
-function identityOf(claims: Claims, config: AccessConfig): Identity | null {
-  const email =
-    typeof claims.email === "string" && claims.email !== "" && claims.email.length <= 320
-      ? claims.email.toLowerCase()
-      : null;
+/**
+ * The identity a token names: its email, lowercase, else a service token's
+ * client ID. `invalid` when the one it names fails `isIdentity`: it is
+ * refused, not shortened, cleaned or replaced by the other claim.
+ */
+function identityOf(claims: Claims, config: AccessConfig): Identity | "invalid" | null {
+  if (typeof claims.email === "string" && claims.email !== "") {
+    const email = claims.email.toLowerCase();
+    if (!isIdentity(email)) return "invalid";
+    return { email, serviceToken: null, admin: config.admins.has(email) };
+  }
   // Service token logins carry the client ID in `common_name` and an empty `sub`.
-  const serviceToken =
-    email === null && typeof claims.common_name === "string" && claims.common_name !== ""
-      ? claims.common_name.slice(0, 256)
-      : null;
-  if (email === null && serviceToken === null) return null;
-  return { email, serviceToken, admin: email !== null && config.admins.has(email) };
+  const name = claims.common_name;
+  if (typeof name !== "string" || name === "") return null;
+  return isIdentity(name) ? { email: null, serviceToken: name, admin: false } : "invalid";
 }
 
 /**
@@ -289,5 +314,6 @@ export async function authenticate(
   const verified = await verifyToken(token, config, now);
   if (!verified.ok) return verified;
   const identity = identityOf(verified.claims, config);
+  if (identity === "invalid") return { ok: false, reason: "invalid_identity" };
   return identity ? { ok: true, identity } : { ok: false, reason: "no_identity" };
 }

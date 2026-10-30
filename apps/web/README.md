@@ -29,7 +29,7 @@ Until `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` hold real values, every request answ
 Every request runs the Worker first, static assets included, and is refused with 403 unless:
 
 1. `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are valid;
-2. the `Cf-Access-Jwt-Assertion` header carries an RS256 token signed by a key from `<team>/cdn-cgi/access/certs`, with `iss` equal to the team domain, `aud` containing `ACCESS_AUD`, a future `exp`, a past `nbf` (30 s skew), `type` `app` when present, and an email or a service token `common_name`;
+2. the `Cf-Access-Jwt-Assertion` header carries an RS256 token signed by a key from `<team>/cdn-cgi/access/certs`, with `iss` equal to the team domain, `aud` containing `ACCESS_AUD`, a future `exp`, a past `nbf` (30 s skew), `type` `app` when present, and an email or a service token `common_name` that the audit trail can store (below);
 3. `ctx.access`, when the runtime provides it, has the same `aud`.
 
 Keys are imported with Web Crypto and cached per isolate for an hour. An unknown `kid` refetches them at most every 30 seconds, and when the endpoint fails the previous keys stay in use for up to 24 hours (Access keeps a rotated-out key valid for 7 days). The token and its claims are never logged; refusals log a reason code.
@@ -37,6 +37,8 @@ Keys are imported with Web Crypto and cached per isolate for an hour. An unknown
 `ctx.access` is not required by default. The Workers docs state that Workers with Static Assets run behind an internal router that does not pass `ctx.access` to the user Worker, so requiring it would refuse every request. The signed token is the check that always runs. `REQUIRE_ACCESS_CONTEXT: "true"` also refuses requests without `ctx.access`, for when spike S-08 shows that it arrives.
 
 The identity comes from the token: `email` for users, `common_name` (the client ID) for service tokens. Admin actions need an email in `ADMIN_EMAILS` (case-insensitive); a service token is never admin.
+
+The identity must also be one the audit trail can store, by the rule core's `Admin.recordToolCall` applies (`isIdentity` in `src/auth.ts`, mirrored from `checkToolCall` in `apps/core/src/audit.ts` and compared with it in `test/identity.test.ts`): 1 to 320 characters, the email after lowercasing, with no space, C0 or C1 control, U+00A0, U+200B to U+200F, U+2028 to U+202E, U+2066 to U+2069 or U+FEFF. Any other identity is refused with the same 403 (logged as `invalid_identity`), so every identity that is served is also recorded (R9-04). An email that fails the rule is not shortened, cleaned or replaced by `common_name`.
 
 ## JSON API
 
