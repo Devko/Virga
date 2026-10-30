@@ -34,6 +34,8 @@ interface Entry {
   /** The path set is wider than what the entry point serves (tunnel path regex). */
   approximate: boolean;
   scripts: Set<string>;
+  /** One of `scripts` has no known Worker ID. */
+  unidentified: boolean;
   preview: boolean;
   /** Served by a Worker, so Worker-level Access can apply. */
   worker: boolean;
@@ -252,6 +254,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       path,
       approximate,
       scripts,
+      unidentified: [...scripts].some((s) => !graph.scripts.get(s)?.workerId),
       preview: node.type === "worker_preview_url",
       worker: scripts.size > 0,
       originAccess,
@@ -282,7 +285,8 @@ function hostTokens(value: unknown, depth = 0, out: string[] = []): string[] {
 /**
  * Whether a target the evaluator cannot interpret might cover the entry
  * point. Only a target that clearly names another Worker, Workers in general
- * or other hosts is ruled out.
+ * or other hosts is ruled out. A Worker ID that no script in the graph has
+ * may belong to a script whose ID is not known.
  */
 function couldApply(raw: unknown, entry: Entry, refs: Map<string, string>): boolean {
   if (isObject(raw)) {
@@ -290,9 +294,12 @@ function couldApply(raw: unknown, entry: Entry, refs: Map<string, string>): bool
     if (type === "private" || type === "via_mcp_server_portal") return false;
     if (type === "all_workers") return entry.worker;
     if (type === "all_preview_workers") return entry.preview;
-    const ref = str(raw.worker_id) ?? str(raw.script);
+    const id = str(raw.worker_id);
+    const ref = id ?? str(raw.script);
     if (ref) {
-      return servesWorker(entry, ref, refs) && (type !== "preview_worker" || entry.preview);
+      if (type === "preview_worker" && !entry.preview) return false;
+      if (servesWorker(entry, ref, refs)) return true;
+      return id !== null && !refs.has(id) && entry.unidentified;
     }
   }
   const hosts = hostTokens(raw);

@@ -1095,6 +1095,23 @@ const cases: Case[] = [
     ],
   },
   {
+    name: "an uninterpreted Worker target with an unknown ID may apply to a Worker whose ID is unknown",
+    build: (g) => {
+      g.script("w");
+      g.customDomain("app.example.com", "w");
+      g.script("v", { worker_id: "id-v" });
+      g.customDomain("v.example.com", "v");
+      g.tunnelHostname("ssh.example.com");
+      allowApp(g, "all", [allWorkers()]);
+      bypassApp(g, "odd", [other({ type: "worker", worker_id: "id-gone" })]);
+    },
+    expect: [
+      [CD("app.example.com"), "/", "unknown", 0, APP("odd")],
+      [CD("v.example.com"), "/", "access", 1, APP("all")],
+      [TH("ssh.example.com"), "/", "public", 2, null],
+    ],
+  },
+  {
     name: "a hostname target with a port or another host wildcard than a leading *. is not interpretable",
     build: (g) => {
       g.script("w");
