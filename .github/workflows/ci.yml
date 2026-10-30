@@ -56,9 +56,12 @@ jobs:
       - run: pnpm test:scripts
 
   # Bundles every Worker with `wrangler deploy --dry-run` and checks the
-  # configs against each other. Uses no Cloudflare credentials.
+  # configs against each other. Uses no Cloudflare credentials. Needs check
+  # too (R8-04, R8-05), so one green deploy-dry-run status also covers lint,
+  # rules:check, typecheck and the tests: the deploy ships the committed
+  # rules.gen.ts, which only rules:check compares with the compiler output.
   deploy-dry-run:
-    needs: release-age
+    needs: [release-age, check]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

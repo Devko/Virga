@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -1579,23 +1579,41 @@ describe("EXCEPTIONS", () => {
 });
 
 describe("CI workflow", () => {
-  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
+  const workflow = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
 
-  /** The text of each job under `jobs:`, by job name. */
-  function jobs(text: string): Map<string, string> {
-    const result = new Map<string, string>();
+  /**
+   * The text of each job under `jobs:`, by job name, and the lines under
+   * `jobs:` that belong to no job the guard can read, such as a quoted job name.
+   */
+  function readJobs(text: string): { jobs: Map<string, string>; unread: string[] } {
+    const jobs = new Map<string, string>();
+    const unread: string[] = [];
+    const lines = text.split(/\r\n|\r|\n/);
+    const start = lines.indexOf("jobs:");
+    if (start < 0) return { jobs, unread: ["(no jobs: line)"] };
     let name: string | undefined;
-    for (const line of text.slice(text.indexOf("\njobs:\n")).split("\n").slice(2)) {
+    for (const line of lines.slice(start + 1)) {
+      if (/^ *(?:#.*)?$/.test(line)) continue;
+      // The next top-level key ends jobs:.
+      if (/^[\w-]+:/.test(line)) break;
       const header = /^ {2}([\w-]+):$/.exec(line);
       if (header?.[1] !== undefined) {
         name = header[1];
-        result.set(name, "");
+        jobs.set(name, "");
       } else if (name !== undefined && line.startsWith("    ")) {
-        result.set(name, `${result.get(name)}${line}\n`);
+        jobs.set(name, `${jobs.get(name)}${line}\n`);
+      } else {
+        // The lines below belong to what the guard could not read, not to the job above.
+        name = undefined;
+        unread.push(line);
       }
     }
-    return result;
+    return { jobs, unread };
   }
+
+  /** The text of each job under `jobs:`, by job name. */
+  const jobs = (text: string) => readJobs(text).jobs;
 
   /** The jobs a job needs, from `needs: a` or `needs: [a, b]`. */
   function needs(job: string): string[] {
@@ -1606,10 +1624,12 @@ describe("CI workflow", () => {
 
   /**
    * A job that installs packages or runs a package manager: pnpm/action-setup
-   * (which installs pnpm itself), a setup-node package cache, or any pnpm, npm,
-   * npx, yarn or corepack command.
+   * (which installs pnpm itself), a setup-node package cache, any pnpm, npm,
+   * npx, yarn or corepack command, or a reusable workflow (job-level `uses:`),
+   * whose steps the guard cannot see.
    */
-  const INSTALLS = /uses: pnpm\/action-setup@|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
+  const INSTALLS =
+    /uses: pnpm\/action-setup@|^ {4}uses:|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
 
   /** Jobs other than release-age that install without waiting for it. */
   const ungated = (text: string) =>
@@ -1617,6 +1637,103 @@ describe("CI workflow", () => {
       .filter(([name, job]) => name !== "release-age" && INSTALLS.test(job))
       .filter(([, job]) => !needs(job).includes("release-age"))
       .map(([name]) => name);
+
+  /**
+   * What lets a workflow install before the check (R8-04): a job the guard
+   * cannot read, a job that installs without needing release-age, a
+   * release-age job that does not run the check alone, a pnpm/action-setup
+   * version input, or an action not pinned by commit SHA.
+   */
+  function gateProblems(text: string): string[] {
+    const { jobs: all, unread } = readJobs(text);
+    const problems = unread.map((line) => `cannot read ${JSON.stringify(line)} under jobs:`);
+    for (const name of ungated(text)) problems.push(`job ${name} installs before release-age`);
+    if ([...all.values()].some((job) => INSTALLS.test(job))) {
+      const check = all.get("release-age");
+      if (
+        check === undefined ||
+        !check.includes("      - run: node scripts/check-release-age.ts\n") ||
+        INSTALLS.test(check) ||
+        needs(check).length > 0
+      ) {
+        problems.push("no release-age job that runs the check before anything else");
+      }
+    }
+    for (const [, inputs] of text.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)) {
+      if (/\bversion:/.test(inputs ?? "")) problems.push("pnpm/action-setup has a version input");
+    }
+    for (const [, action] of text.matchAll(/uses: (\S+)/g)) {
+      if (!/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(action ?? "")) {
+        problems.push(`${action} is not pinned by commit SHA`);
+      }
+    }
+    return problems;
+  }
+
+  /** gateProblems of every file in a workflow directory, prefixed with its name. */
+  const workflowProblems = (dir: string) =>
+    readdirSync(dir)
+      .sort()
+      .flatMap((file) =>
+        gateProblems(readFileSync(join(dir, file), "utf8")).map((problem) => `${file}: ${problem}`),
+      );
+
+  it("R8-04: every workflow in .github/workflows installs only after its release-age job", () => {
+    expect(readdirSync(WORKFLOWS)).toContain("ci.yml");
+    expect(workflowProblems(WORKFLOWS)).toEqual([]);
+  });
+
+  it("R8-04: the guard reads every file in the workflow directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "virga-workflows-"));
+    checkouts.push(dir);
+    put(join(dir, "ci.yml"), workflow);
+    const sha = "0".repeat(40);
+    put(
+      join(dir, "deploy.yml"),
+      [
+        "name: Deploy",
+        "",
+        "on:",
+        "  push:",
+        "    branches: [main]",
+        "",
+        "jobs:",
+        "  # A job named release-age that does not run the check.",
+        "  release-age:",
+        "    steps:",
+        "      - run: echo ok",
+        "  deploy:",
+        "    needs: release-age",
+        "    steps:",
+        `      - uses: pnpm/action-setup@${sha}`,
+        "        with:",
+        "          version: 10.34.9",
+        "      - run: pnpm install --frozen-lockfile && pnpm deploy",
+        "  'quoted':",
+        "    steps:",
+        "      - run: npm ci",
+        "  reusable:",
+        "    uses: example/workflows/.github/workflows/deploy.yml@main",
+        "",
+      ].join("\n"),
+    );
+    expect(workflowProblems(dir)).toEqual([
+      `deploy.yml: cannot read "  'quoted':" under jobs:`,
+      `deploy.yml: cannot read "    steps:" under jobs:`,
+      `deploy.yml: cannot read "      - run: npm ci" under jobs:`,
+      "deploy.yml: job reusable installs before release-age",
+      "deploy.yml: no release-age job that runs the check before anything else",
+      "deploy.yml: pnpm/action-setup has a version input",
+      "deploy.yml: example/workflows/.github/workflows/deploy.yml@main is not pinned by commit SHA",
+    ]);
+  });
+
+  it("R8-05: deploy-dry-run needs release-age and check, so one green status covers rules:check", () => {
+    const deploy = jobs(workflow).get("deploy-dry-run") ?? "";
+    expect(deploy).toContain("- run: node scripts/deploy.ts --dry-run\n");
+    expect(needs(deploy).sort()).toEqual(["check", "release-age"]);
+    expect(jobs(workflow).get("check")).toContain("- run: pnpm rules:check\n");
+  });
 
   it("R4-07: runs the check in its own job, which installs nothing and runs no package code", () => {
     const check = jobs(workflow).get("release-age") ?? "";
