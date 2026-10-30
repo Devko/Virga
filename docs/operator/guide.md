@@ -1,6 +1,6 @@
 # Operator guide
 
-Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md), then R5-01 to R5-03 of the [round 5 verification](../reviews/2026-10-30-verification-round-5.md)), offboarding the same day (account removal in the UI and API). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
+Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md), then R5-01 to R5-03 of the [round 5 verification](../reviews/2026-10-30-verification-round-5.md), and in round 7 Wrangler's environment and the assets directory), offboarding the same day (account removal in the UI and API). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
 
 Virga is an independent project. It is not affiliated with or endorsed by Cloudflare (D-01).
 
@@ -106,14 +106,22 @@ node scripts/deploy.ts --dry-run   # optional; needs no credentials
 node scripts/deploy.ts
 ```
 
+Run it from a plain shell. A debugger terminal, for example, sets `NODE_OPTIONS` to load its own code into every Node process, and the script refuses to run then (step 1).
+
 The script:
 
-1. Refuses to run while `CLOUDFLARE_ENV` or `WRANGLER_CI_OVERRIDE_NAME` is set: with them, Wrangler would deploy a named environment or under another Worker name, not the configuration the script checked. It also refuses to run while `CF_API_BASE_URL` is set, or `CLOUDFLARE_API_BASE_URL`, `WRANGLER_API_ENVIRONMENT` or `CLOUDFLARE_COMPLIANCE_REGION` is set to anything but `https://api.cloudflare.com/client/v4`, `production` and `public`: the token goes only to the public API. The script itself takes no option but `--dry-run`.
+1. Checks its own environment, also for a dry run, and refuses to run while:
+   - `NODE_OPTIONS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` or `OPENSSL_CONF` is set to anything. They load code into Node and the processes it starts, or turn off certificate checks, and they act on the script itself, which holds the token, before it could drop them;
+   - `CLOUDFLARE_ENV` or `WRANGLER_CI_OVERRIDE_NAME` is set: with them, Wrangler would deploy a named environment or under another Worker name, not the configuration the script checked;
+   - `CF_API_BASE_URL` is set, or `CLOUDFLARE_API_BASE_URL`, `WRANGLER_API_ENVIRONMENT` or `CLOUDFLARE_COMPLIANCE_REGION` is set to anything but `https://api.cloudflare.com/client/v4`, `production` and `public`: the token goes only to the public API.
+
+   Then it prints the proxy settings it passes to Wrangler (see [Behind a proxy](#behind-a-proxy)) and names the other `CLOUDFLARE_`, `CF_` and `WRANGLER_` variables that Wrangler does not get, so that a setting such as `WRANGLER_LOG` does not seem to have worked. The script itself takes no option but `--dry-run`.
 2. Reads `apps/broker`, `apps/core` and `apps/web` (`wrangler.jsonc` or `wrangler.json`; `apps/web` may be missing, then it deploys broker and core only). It stops if:
    - an app has more than one of `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`;
    - any of them sits in a directory above an app, up to the filesystem root, including the repository root and your home directory: Wrangler run in an app directory without `--config` takes the first `wrangler.json` above it before the app's own config;
    - an app directory holds `.env`, `.env.local` or `.dev.vars`: Wrangler loads `.env` and `.env.local` from the directory it runs in into its environment, where a file could change the API host (and so where the token goes), the Worker name or the environment that is deployed;
-   - a config has a `__proto__`, `constructor` or `prototype` key at any depth, or a key twice. The script reads each config the way Wrangler does (JSON with comments and trailing commas), and these are where the two readings, or Wrangler and a reviewer, could differ: Wrangler deploys the keys under `__proto__` as the config's own.
+   - a config has a `__proto__`, `constructor` or `prototype` key at any depth, or a key twice. The script reads each config the way Wrangler does (JSON with comments and trailing commas), and these are where the two readings, or Wrangler and a reviewer, could differ: Wrangler deploys the keys under `__proto__` as the config's own;
+   - `assets.directory` is not a directory below the app directory. Wrangler resolves it against the config's directory and uploads whatever it holds, so the script resolves it the same way, follows every symlink on the way, and refuses a path that climbs out (`../..`), an absolute path elsewhere, a symlink that leads elsewhere or nowhere, and the app directory itself. A directory the build has yet to create is checked as written.
 3. Checks the configs against each other and stops on any error:
    - each Worker sets only keys the checks cover for it (`CONFIG_KEYS` and `NESTED_KEYS` in `scripts/lib/topology.ts`). Anything else, for example `unsafe`, `build`, `previews`, `tail_consumers` or a service binding's `props`, would deploy unchecked and is an error;
    - each Worker has its expected name (`virga-broker`, `virga-core`, `virga-web`);
@@ -126,7 +134,7 @@ The script:
 4. Lists the D1 databases of the account. Before it creates or migrates anything, it checks that every `database_id` exists and is the database its `database_name` names, and that no database, by ID, is bound by two Workers. Then it creates `virga-vault` and `virga-index` if they are missing and applies their migrations (`wrangler d1 migrations apply --remote`).
 5. Checks the master key.
 6. Checks the web settings, if `apps/web` declares required secrets.
-7. Runs each app's `build` script, if it has one, and deploys `virga-broker`, `virga-core` and `virga-web`, in this order.
+7. Runs each app's `build` script, if it has one, and deploys `virga-broker`, `virga-core` and `virga-web`, in this order. Right before each `wrangler deploy` it checks `assets.directory` again, now that the build has filled it, and refuses any symlink in it: Wrangler uploads the file a link points to and the files under a linked directory, wherever they are.
 8. Prints what is still to do as `ACTION:` lines.
 
 It is safe to run again: existing databases are reused, applied migrations are skipped, and each Worker gets a new version.
@@ -137,17 +145,30 @@ What it never does:
 - It never lets Wrangler choose a config: every Wrangler call gets `--config` with the absolute path of the file it checked, so Wrangler neither searches for a config nor follows a `.wrangler/deploy` redirect, and it never selects a named environment.
 - It never lets Wrangler load a `.env` file: every Wrangler call gets `--env-file` with the null device (`/dev/null`) in place of `.env` and `.env.local`. Wrangler 4.151.0 has no flag that turns the loading off.
 - It sends the token only to `https://api.cloudflare.com/client/v4`: Wrangler gets `CLOUDFLARE_API_BASE_URL` set to it, `WRANGLER_API_ENVIRONMENT=production` and `CLOUDFLARE_COMPLIANCE_REGION=public`, and never `CF_API_BASE_URL`. A variable that is set wins over a `.env` file.
+- It gives Wrangler only these variables of its environment: `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `LANG`, `LANGUAGE`, the `LC_` variables, `TZ`, `TERM`, `COLORTERM` and `NO_COLOR` (on Windows also the usual system variables such as `SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP` and `USERPROFILE`), the proxy variables `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (each also in lowercase) and `NODE_EXTRA_CA_CERTS`, `CLOUDFLARE_ACCOUNT_ID`, and for a real deploy `CLOUDFLARE_API_TOKEN`. It sets the API variables (above) and the telemetry variables (below) itself. Everything else stays out, including every other `CLOUDFLARE_`, `CF_` and `WRANGLER_` variable (credentials, bundling, logs, output files), `NODE_PATH`, `NODE_ENV` and `DEBUG`; without them, the checked config and Wrangler's defaults decide what is deployed where.
 - It passes only `CLOUDFLARE_API_TOKEN` to Wrangler: a Global API Key in the environment is not used. A dry run passes no credentials at all. The `build` scripts get no `CLOUDFLARE_` or `CF_` variable at all, so no build-time package can read the token. No config may have a custom build (`build.command`): Wrangler would run it with the token in its environment.
 - It takes only `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS` from its environment to upload as secrets of `virga-web`; never the token or any other variable.
 - It runs Wrangler with stdin closed, so Wrangler never prompts and never writes resource IDs into a `wrangler.jsonc`.
 - It never prints the token or a setting it uploads: all output passes through a filter that also removes anything shaped like a Cloudflare credential (`cfat_`, `cfut_`, `cfk_`, `cfoat_`). It never reads the master key.
 - It sends no Wrangler telemetry or error reports (`WRANGLER_SEND_METRICS=false`, `WRANGLER_SEND_ERROR_REPORTS=false`) and keeps Wrangler's debug log sanitized (`WRANGLER_LOG_SANITIZE=true`).
 
-The `npx wrangler` commands in this guide run in an app directory without `--config`. Wrangler then uses that app's own config only while no other Wrangler config sits next to or above it, which step 2 checks, and only while `CLOUDFLARE_ENV` is unset. It also loads `.env` and `.env.local` from that directory, which step 2 refuses too: keep them out of the app directories. Run the dry run first if in doubt.
+The `npx wrangler` commands in this guide run in an app directory without `--config`. Wrangler then uses that app's own config only while no other Wrangler config sits next to or above it, which step 2 checks, and only while `CLOUDFLARE_ENV` is unset. It also loads `.env` and `.env.local` from that directory, which step 2 refuses too: keep them out of the app directories. And it gets your whole environment, not the allowlist above: unset the variables step 1 refuses before you run one with a token. Run the dry run first if in doubt.
+
+### Behind a proxy
+
+Wrangler uses `HTTPS_PROXY` or `HTTP_PROXY` (lowercase names first) for its connections, except to the hosts in `NO_PROXY`. If the proxy presents its own certificates, export its CA as a PEM file and point `NODE_EXTRA_CA_CERTS` to it; never set `NODE_TLS_REJECT_UNAUTHORIZED`, which the script refuses. The script prints the settings it passes on, the proxy's host and port only, never a user name or password in the URL:
+
+```text
+Proxy settings passed to Wrangler:
+  HTTPS_PROXY: proxy.example.com:3128 (credentials not shown)
+  NODE_EXTRA_CA_CERTS: /etc/ssl/proxy-ca.pem; Node trusts these certificates as well, so a proxy with one of their keys can read the API token
+```
+
+A proxy that holds the key of such a CA can read every request Wrangler sends, the deploy token included. Deploy through it only if you trust it with the token; otherwise deploy from CI or another network.
 
 ### Deploy from CI
 
-CI runs the dry run on every push (`.github/workflows/ci.yml`, job `deploy-dry-run`). For real deploys, a separate workflow with a protected environment keeps the token away from pull requests. An example, with actions pinned like the CI workflow:
+CI runs the dry run on every push (`.github/workflows/ci.yml`, job `deploy-dry-run`). It needs no variable beyond what a GitHub-hosted runner sets; like a real deploy, it stops if the runner sets one that step 1 refuses. For real deploys, a separate workflow with a protected environment keeps the token away from pull requests. An example, with actions pinned like the CI workflow:
 
 ```yaml
 name: Deploy
@@ -362,6 +383,11 @@ What stays behind:
 | Message or symptom | Cause and fix |
 | --- | --- |
 | `set CLOUDFLARE_API_TOKEN …` or `set CLOUDFLARE_ACCOUNT_ID …` | Export both. The account ID is 32 hex characters |
+| `unset NODE_OPTIONS: it can load code …` (or `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `OPENSSL_CONF`) | Unset the variable for the deploy, for example `env -u NODE_OPTIONS node scripts/deploy.ts`, or run it from a plain shell instead of a debugger terminal. It loads code into the deploy script, which holds the token, and into Wrangler. The script refuses any value, `--max-old-space-size` included |
+| `unset NODE_TLS_REJECT_UNAUTHORIZED: it turns off certificate checks …` | Unset it. Behind a proxy that presents its own certificates, set `NODE_EXTRA_CA_CERTS` to its CA instead ([Behind a proxy](#behind-a-proxy)) |
+| `unable to get local issuer certificate` or `self-signed certificate in certificate chain` from Wrangler | A proxy presents its own certificates. Set `NODE_EXTRA_CA_CERTS` to its CA as a PEM file. `NODE_OPTIONS=--use-openssl-ca` and `NODE_USE_SYSTEM_CA` do not reach Wrangler |
+| `Proxy settings passed to Wrangler: …` | Not an error. Check that the host is your proxy, and see [Behind a proxy](#behind-a-proxy) |
+| `Wrangler does not get …: the deploy passes it only the variables in the operator guide` | Not an error. The named variables do not reach Wrangler (see "What it never does"); a dry run names `CLOUDFLARE_API_TOKEN` too. To see Wrangler's own log, run the `npx wrangler` command by hand |
 | `unset CLOUDFLARE_ENV` or `unset WRANGLER_CI_OVERRIDE_NAME` | Unset the variable. The script deploys only the top-level configuration it checked, under the Worker names in the configs |
 | `unset CLOUDFLARE_API_BASE_URL; the deploy sends the token only to …` (or `CF_API_BASE_URL`, `WRANGLER_API_ENVIRONMENT`, `CLOUDFLARE_COMPLIANCE_REGION`) | Unset the variable. The deploy sends the token only to the public API, `https://api.cloudflare.com/client/v4` |
 | `usage: node scripts/deploy.ts [--dry-run]` | The script takes no other option; there is no `--env` |
@@ -369,6 +395,10 @@ What stays behind:
 | `apps/<app>/.env: Wrangler would load it into its environment …` (or `.env.local`, `.dev.vars`) | Remove the file, or move it out of the app directory while you deploy. Wrangler loads it into its environment, where it could change the API host, the Worker name or the environment. Pass settings as environment variables of the deploy instead |
 | `key "__proto__" is refused …` (or `constructor`, `prototype`) | Remove the key. Wrangler reads a `__proto__` member as the prototype and deploys the keys under it, which the checks would not see |
 | `duplicate key "…"` | Keep one of the two. Wrangler uses the last one, a reader may take the first |
+| `assets.directory "…" resolves to … (symlinks followed), outside apps/<app>` | Point `assets.directory` to a directory below the app directory, such as `./dist/client`, and remove any symlink on the way. Wrangler would upload whatever the directory holds |
+| `assets.directory "…" is apps/<app> itself` | Use a directory below it. Wrangler would upload the app's sources and config as assets |
+| `assets.directory "…" passes through …, a symlink to a path that does not exist` | Remove the link and let the build create the directory |
+| `assets.directory "…" holds symlinks, whose targets Wrangler would upload: …` | Replace each link with the file itself, or remove it. Wrangler uploads what a link points to, also from outside the app |
 | `… is not supported: the deploy does not check it, and Wrangler would deploy it` or `virga-<x> may not set …` | Remove the key. A key the deploy is to accept needs a check first: add it to `CONFIG_KEYS` or `NESTED_KEYS` in `scripts/lib/topology.ts` together with that check |
 | `build.command is not supported …` | Move the step into the app's `build` script in `package.json`, which the deploy runs without credentials. Wrangler would run `build.command` with the token in its environment |
 | `unsafe is not supported …` or `previews is not supported …` | Remove the block. Unsafe bindings and the bindings of preview versions bypass every binding check |
