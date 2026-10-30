@@ -16,6 +16,7 @@ import type { WorkerConfig } from "../lib/config.ts";
 import { masterKeySetup } from "../lib/master-key.ts";
 import type { Command, Result } from "../lib/run.ts";
 import {
+  build,
   type Context,
   checkMasterKey,
   checkWebSettings,
@@ -324,6 +325,40 @@ describe("web settings", () => {
     expect(ctx.todo).toEqual([
       expect.stringContaining("still needs ACCESS_TEAM_DOMAIN, ADMIN_EMAILS"),
     ]);
+  });
+});
+
+describe("build", () => {
+  /** apps/<name> in the temporary root, with `pkg` as its package.json. */
+  const appWith = (name: string, pkg: string) => {
+    mkdirSync(join(root, "apps", name), { recursive: true });
+    writeFileSync(join(root, "apps", name, "package.json"), pkg);
+  };
+
+  it("R8-02: starts the build at the repository root, so that corepack reads the root's pnpm pin", async () => {
+    appWith("web", '{ "scripts": { "build": "vite build" } }');
+    const { ctx, commands } = fakeContext({});
+    await build(ctx, root, { app: "web", name: "virga-web" });
+    expect(commands).toEqual([
+      { bin: "pnpm", cwd: root, args: ["--dir", "apps/web", "run", "build"] },
+    ]);
+  });
+
+  it("runs nothing for an app without a build script or package.json", async () => {
+    appWith("core", '{ "scripts": { "test": "vitest run" } }');
+    mkdirSync(join(root, "apps", "broker"), { recursive: true });
+    const { ctx, commands } = fakeContext({});
+    await build(ctx, root, { app: "core", name: "virga-core" });
+    await build(ctx, root, { app: "broker", name: "virga-broker" });
+    expect(commands).toEqual([]);
+  });
+
+  it("stops when the build fails", async () => {
+    appWith("web", '{ "scripts": { "build": "vite build" } }');
+    const { ctx } = fakeContext({ "--dir apps/web run build": fail("vite failed") });
+    await expect(build(ctx, root, { app: "web", name: "virga-web" })).rejects.toThrow(
+      "building virga-web failed",
+    );
   });
 });
 

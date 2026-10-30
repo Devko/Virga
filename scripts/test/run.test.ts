@@ -490,6 +490,31 @@ describe("processRunner", () => {
     expect(result.stdout).toContain("token=the-deploy-token-value");
   });
 
+  it("R8-02: runs builds with COREPACK_ENV_FILE=0, so that corepack loads no .corepack.env", async () => {
+    // A stand-in for corepack's pnpm shim that prints the env file setting it sees.
+    put(
+      join(dir, "corepack", "pnpm"),
+      '#!/bin/sh\necho "env-file=$(printenv COREPACK_ENV_FILE || echo unset)"\n',
+      0o755,
+    );
+    vi.stubEnv("PATH", `${join(dir, "corepack")}:${process.env.PATH ?? ""}`);
+    try {
+      const build = () =>
+        runner({ print: () => {} })({
+          bin: "pnpm",
+          cwd: dir,
+          args: ["--dir", "apps/web", "run", "build"],
+          capture: true,
+        });
+      expect((await build()).stdout).toBe("env-file=0\n");
+      // Also when the operator's environment names another file.
+      vi.stubEnv("COREPACK_ENV_FILE", join(dir, "planted.env"));
+      expect((await build()).stdout).toBe("env-file=0\n");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("R3-03: passes the checked config, and no credentials in a dry run", async () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_API_KEY", "a-global-api-key");

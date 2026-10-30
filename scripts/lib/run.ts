@@ -365,17 +365,32 @@ export interface RunnerOptions {
 }
 
 /**
+ * Set for every build. Corepack, the guide's pnpm, loads a `.corepack.env`
+ * into its environment from the directories it searches for the pnpm pin,
+ * and such a file can allow a pnpm from any URL or another registry. With
+ * `0`, corepack 0.36.0 loads none (R8-02).
+ */
+const BUILD_VARS: Readonly<Record<string, string>> = { COREPACK_ENV_FILE: "0" };
+
+/**
  * The environment of a child process. Wrangler gets wranglerEnv. A build
  * (`pnpm`) runs the app's whole build-time dependency tree and never reaches
- * the API, so it gets no CLOUDFLARE_ or CF_ variable at all (R3-05).
+ * the API, so it gets no CLOUDFLARE_ or CF_ variable at all (R3-05), and
+ * BUILD_VARS in place of the operator's values.
  */
 function childEnv(command: Command, credentials: RunnerOptions["credentials"]): NodeJS.ProcessEnv {
   if (command.bin === "wrangler") return wranglerEnv(process.env, credentials);
   const env: NodeJS.ProcessEnv = { ...process.env, ...QUIET_VARS };
   for (const name of Object.keys(env)) {
-    if (isCloudflareVar(name) || OVERRIDE_VARS.includes(name)) delete env[name];
+    if (
+      isCloudflareVar(name) ||
+      OVERRIDE_VARS.includes(name) ||
+      Object.hasOwn(BUILD_VARS, name.toUpperCase())
+    ) {
+      delete env[name];
+    }
   }
-  return env;
+  return { ...env, ...BUILD_VARS };
 }
 
 /**

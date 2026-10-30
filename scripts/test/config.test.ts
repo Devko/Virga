@@ -271,6 +271,35 @@ describe("checkAppDir", () => {
     );
   });
 
+  it("R8-02: refuses a .corepack.env in the app directory", () => {
+    checkout();
+    writeFileSync(web(".corepack.env"), "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\n");
+    expect(problem()).toBe(
+      "apps/web/.corepack.env: corepack would load it into the environment of a pnpm command run in apps/web, where it can allow another pnpm or registry. Remove it; only the root package.json names the package manager",
+    );
+  });
+
+  it("R8-02: refuses a package manager named in the app's package.json", () => {
+    checkout();
+    for (const [pkg, field] of [
+      ['{ "packageManager": "pnpm@10.33.2" }', "packageManager"],
+      ['{ "packageManager": "" }', "packageManager"],
+      [
+        '{ "devEngines": { "packageManager": { "name": "pnpm", "version": "10.33.2" } } }',
+        "devEngines.packageManager",
+      ],
+    ] as const) {
+      writeFileSync(web("package.json"), pkg);
+      expect(problem(), pkg).toBe(
+        `apps/web/package.json names ${field}; corepack would run pnpm commands in apps/web with that package manager, not with the pnpm the root package.json pins, which the release-age check dates. Remove it`,
+      );
+    }
+    writeFileSync(web("package.json"), '{ "name": "@virga/web", "devEngines": {} }');
+    expect(problem()).toBeNull();
+    writeFileSync(web("package.json"), "{ not json");
+    expect(problem()).toMatch(/^apps\/web\/package\.json cannot be read: /);
+  });
+
   it("R6-01: runs the checks of readWorkerConfig that need no parsed config", () => {
     checkout();
     writeFileSync(web(".env"), "CLOUDFLARE_API_BASE_URL=http://127.0.0.1:18787\n");

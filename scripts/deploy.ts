@@ -142,8 +142,9 @@ async function main(): Promise<number> {
 
   // Every build runs before any config is read, so that the checks below see
   // what the builds left. Builds get no credentials (R3-05), but their code
-  // can write anywhere the operator can (R6-01).
-  for (const { app, name } of present) await build(ctx, { name, dir: dirOf(app) });
+  // can write anywhere the operator can (R6-01). Each starts at the root,
+  // where corepack reads the root's pnpm pin, and loads no .corepack.env (R8-02).
+  for (const { app, name } of present) await build(ctx, root, { app, name });
 
   const cache = new Map<string, Map<string, string>>();
   for (const [dir, install] of wranglers) {

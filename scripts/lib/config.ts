@@ -160,12 +160,55 @@ function appLinks(dir: string): string[] {
 }
 
 /**
+ * Why corepack, the guide's pnpm, would run a pnpm the release-age check has
+ * not dated for a command in apps/<app>, or an empty list. It takes the pnpm
+ * version from the nearest package.json that names a package manager, and
+ * loads a `.corepack.env` from the directories it searches into its
+ * environment, where it can allow a pnpm from any URL or another registry.
+ * The check dates only the root's pin. The deploy starts its builds at the
+ * root and turns the file off for them; this covers the commands an operator
+ * runs in an app directory, and a build script that starts pnpm there (R8-02).
+ */
+function corepackProblems(app: string, dir: string): string[] {
+  const problems: string[] = [];
+  if (existsSync(join(dir, ".corepack.env"))) {
+    problems.push(
+      `apps/${app}/.corepack.env: corepack would load it into the environment of a pnpm command run in apps/${app}, where it can allow another pnpm or registry. Remove it; only the root package.json names the package manager`,
+    );
+  }
+  const pkgPath = join(dir, "package.json");
+  if (!existsSync(pkgPath)) return problems;
+  let pkg: unknown;
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return [...problems, `apps/${app}/package.json cannot be read: ${reason}`];
+  }
+  const fields: string[] = [];
+  if (isRecord(pkg) && Object.hasOwn(pkg, "packageManager")) fields.push("packageManager");
+  if (
+    isRecord(pkg) &&
+    isRecord(pkg.devEngines) &&
+    Object.hasOwn(pkg.devEngines, "packageManager")
+  ) {
+    fields.push("devEngines.packageManager");
+  }
+  for (const field of fields) {
+    problems.push(
+      `apps/${app}/package.json names ${field}; corepack would run pnpm commands in apps/${app} with that package manager, not with the pnpm the root package.json pins, which the release-age check dates. Remove it`,
+    );
+  }
+  return problems;
+}
+
+/**
  * The checks of apps/<app> that need no parsed config: one Wrangler config,
- * none above the app, no .env file, and no symlink outside node_modules.
- * Wrangler bundles, migrates and uploads what a link points to, and Vite
- * copies it, from wherever that is. The deploy runs these before the builds
- * and again after them (R6-01). Returns the config's path, or null when the
- * app has none.
+ * none above the app, no .env file, no symlink outside node_modules, and no
+ * package manager of its own. Wrangler bundles, migrates and uploads what a
+ * link points to, and Vite copies it, from wherever that is. The deploy runs
+ * these before the builds and again after them (R6-01). Returns the config's
+ * path, or null when the app has none.
  */
 export function checkAppDir(root: string, app: string): string | null {
   const dir = join(root, "apps", app);
@@ -187,6 +230,8 @@ export function checkAppDir(root: string, app: string): string | null {
       `apps/${app} holds symlinks outside node_modules: ${list.join(", ")}${more}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
     );
   }
+  const corepack = corepackProblems(app, dir);
+  if (corepack.length > 0) throw new ConfigError(corepack.join("\n"));
   return configPath;
 }
 

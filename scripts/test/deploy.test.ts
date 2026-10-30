@@ -249,10 +249,16 @@ describe("deploy.ts and the builds (R6-01)", () => {
     put(join(app("web"), "package.json"), '{ "scripts": { "build": "node build.mjs" } }');
     put(join(app("web"), "build.mjs"), BUILD);
     fake = fakeWrangler(root, ["broker", "core", "web"].map(app), LOGGING_BIN);
-    // A stand-in for pnpm that runs build.mjs for `pnpm run build`.
+    // A stand-in for pnpm that logs each call and runs build.mjs for `pnpm --dir <app> run build`.
     put(
       join(root, "path", "pnpm"),
-      '#!/bin/sh\n[ "$1 $2" = "run build" ] && exec node build.mjs\nexit 1\n',
+      [
+        "#!/bin/sh",
+        'echo "$(pwd) $* env-file=$(printenv COREPACK_ENV_FILE || echo unset)" >> "$(dirname "$0")/../builds.log"',
+        '[ "$1 $3 $4" = "--dir run build" ] && cd "$2" && exec node build.mjs',
+        "exit 1",
+        "",
+      ].join("\n"),
       0o755,
     );
   });
@@ -270,8 +276,9 @@ describe("deploy.ts and the builds (R6-01)", () => {
       timeout: 30_000,
     });
   };
-  const calls = () =>
-    existsSync(join(root, "calls.log")) ? readFileSync(join(root, "calls.log"), "utf8") : "";
+  const log = (name: string) =>
+    existsSync(join(root, name)) ? readFileSync(join(root, name), "utf8") : "";
+  const calls = () => log("calls.log");
   const build = (source: string) => put(join(app("web"), "build.mjs"), `${BUILD}${source}`);
 
   it("R6-01: builds first, then checks the configs, then runs the recorded Wrangler on them", () => {
@@ -291,6 +298,31 @@ describe("deploy.ts and the builds (R6-01)", () => {
       "",
     ]);
     expect(result.stdout).not.toContain("shim ran");
+  });
+
+  it("R8-02: starts each build at the repository root, where corepack reads the root's pin, and loads no .corepack.env", () => {
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(0);
+    expect(log("builds.log")).toBe(`${root} --dir apps/web run build env-file=0\n`);
+  });
+
+  it("R8-02: refuses a package manager pin or a .corepack.env in an app, before and after the builds", () => {
+    put(join(app("core"), "package.json"), '{ "packageManager": "pnpm@10.33.2" }');
+    let result = deploy([], REAL);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/core/package.json names packageManager; corepack would run pnpm commands in apps/core",
+    );
+    expect(result.stdout).not.toContain("Building");
+    rmSync(join(app("core"), "package.json"));
+
+    build(`writeFileSync(".corepack.env", "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\\n");\n`);
+    result = deploy([], REAL);
+    expect(result.stdout).toContain("Building virga-web");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("error: apps/web/.corepack.env: corepack would load it");
+    expect(calls()).toBe("");
+    expect(result.stdout + result.stderr).not.toContain(TOKEN);
   });
 
   const UNSAFE = `{ "bindings": [{ "name": "API", "type": "service", "service": "virga-broker", "entrypoint": "ApiCaller" }] }`;
