@@ -196,6 +196,34 @@ export function wranglerEnv(
   return { ...out, ...QUIET_VARS, ...API_VARS };
 }
 
+const LOADS_LIBRARY =
+  "it loads a library into every process the deploy starts, and into the deploy";
+
+/**
+ * Variables that load code into Node and the processes it starts, or turn
+ * off certificate checks, with the reason. They act on the deploy script
+ * itself before it could drop them, so the deploy refuses to run while one
+ * is set to anything (R5-03).
+ */
+export const UNSAFE_VARS: Readonly<Record<string, string>> = {
+  NODE_OPTIONS:
+    "it can load code (--require, --import) into every Node process, the deploy and Wrangler included, and change their checks",
+  NODE_TLS_REJECT_UNAUTHORIZED:
+    "it turns off certificate checks. For a proxy that presents its own certificates, set NODE_EXTRA_CA_CERTS to its CA instead",
+  LD_PRELOAD: LOADS_LIBRARY,
+  LD_AUDIT: LOADS_LIBRARY,
+  DYLD_INSERT_LIBRARIES: LOADS_LIBRARY,
+  OPENSSL_CONF: "it can load OpenSSL engines and providers into Node",
+};
+
+/** The UNSAFE_VARS set in `env`, in their own spelling. */
+export function unsafeVars(env: Env, platform: Platform = process.platform): string[] {
+  const fold = caseOf(platform);
+  return Object.keys(UNSAFE_VARS).flatMap((unsafe) =>
+    Object.keys(env).filter((name) => fold(name) === unsafe && (env[name] ?? "") !== ""),
+  );
+}
+
 const isWranglerSetting = (name: string) => /^(?:CLOUDFLARE|CF|WRANGLER)_/i.test(name);
 
 /**

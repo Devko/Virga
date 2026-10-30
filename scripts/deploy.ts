@@ -23,6 +23,8 @@ import {
   droppedSettings,
   processRunner,
   redact,
+  UNSAFE_VARS,
+  unsafeVars,
 } from "./lib/run.ts";
 import {
   build,
@@ -64,6 +66,14 @@ async function main(): Promise<number> {
   }
   const dryRun = values["dry-run"] === true;
   const root = fileURLToPath(new URL("..", import.meta.url));
+
+  const unsafe = unsafeVars(process.env);
+  if (unsafe.length > 0) {
+    for (const name of unsafe) {
+      console.error(`error: unset ${name}: ${UNSAFE_VARS[name.toUpperCase()]}`);
+    }
+    return 1;
+  }
 
   const overrides = configOverrides(process.env);
   if (overrides.length > 0) {

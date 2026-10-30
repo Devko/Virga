@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { PROXY_VARS } from "../lib/run.ts";
+import { PROXY_VARS, UNSAFE_VARS } from "../lib/run.ts";
 import { REPO_ROOT } from "./helpers.ts";
 
 /**
@@ -22,10 +22,16 @@ describe("deploy.ts", () => {
   afterEach(() => rmSync(join(root, "apps"), { recursive: true, force: true }));
 
   const deploy = (args: string[], extra: Record<string, string>) => {
-    // The test's own Cloudflare, Wrangler and proxy settings stay out.
+    // The test's own Cloudflare, Wrangler, proxy and Node settings stay out.
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const name of Object.keys(env)) {
-      if (/^(?:CLOUDFLARE|CF|WRANGLER)_/i.test(name) || PROXY_VARS.includes(name)) delete env[name];
+      if (
+        /^(?:CLOUDFLARE|CF|WRANGLER)_/i.test(name) ||
+        PROXY_VARS.includes(name) ||
+        Object.hasOwn(UNSAFE_VARS, name)
+      ) {
+        delete env[name];
+      }
     }
     return spawnSync(process.execPath, [join(root, "scripts", "deploy.ts"), ...args], {
       env: { ...env, ...extra },
@@ -86,6 +92,26 @@ describe("deploy.ts", () => {
       expect(result.status, file).toBe(1);
       expect(result.stderr).toContain(`error: apps/web/${file}: Wrangler would load it`);
       rmSync(join(root, "apps"), { recursive: true, force: true });
+    }
+  });
+
+  it("R5-03: refuses NODE_OPTIONS, whose code runs in the deploy before it could drop it", () => {
+    const probe = join(root, "probe.cjs");
+    writeFileSync(probe, 'process.stdout.write("probe loaded\\n");');
+    const result = deploy(["--dry-run"], { NODE_OPTIONS: `--require ${probe}` });
+    expect(result.stdout).toContain("probe loaded");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("error: unset NODE_OPTIONS: it can load code");
+    // Refused before reading any config.
+    expect(result.stderr).not.toContain("wrangler.jsonc");
+  });
+
+  it("R5-03: refuses NODE_TLS_REJECT_UNAUTHORIZED, also in a dry run", () => {
+    for (const value of ["0", "1"]) {
+      const result = deploy(["--dry-run"], { NODE_TLS_REJECT_UNAUTHORIZED: value });
+      expect(result.status, value).toBe(1);
+      expect(result.stderr).toContain("error: unset NODE_TLS_REJECT_UNAUTHORIZED: it turns off");
+      expect(result.stderr).toContain("NODE_EXTRA_CA_CERTS");
     }
   });
 

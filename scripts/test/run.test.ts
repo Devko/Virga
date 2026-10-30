@@ -11,6 +11,7 @@ import {
   parseJsonOutput,
   processRunner,
   redact,
+  unsafeVars,
   wranglerEnv,
 } from "../lib/run.ts";
 
@@ -222,6 +223,45 @@ describe("droppedSettings", () => {
         "linux",
       ),
     ).toEqual([]);
+  });
+});
+
+describe("unsafeVars", () => {
+  it("R5-03: names variables that load code or turn off certificate checks", () => {
+    expect(
+      unsafeVars(
+        {
+          NODE_OPTIONS: "--require ./capture.js",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+          LD_PRELOAD: "/tmp/capture.so",
+          LD_AUDIT: "/tmp/capture.so",
+          DYLD_INSERT_LIBRARIES: "/tmp/capture.dylib",
+          OPENSSL_CONF: "/tmp/engine.cnf",
+          PATH: "/usr/bin",
+          NODE_PATH: "/opt/node_modules",
+          NODE_EXTRA_CA_CERTS: "/etc/ssl/proxy-ca.pem",
+        },
+        "linux",
+      ),
+    ).toEqual([
+      "NODE_OPTIONS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+      "LD_PRELOAD",
+      "LD_AUDIT",
+      "DYLD_INSERT_LIBRARIES",
+      "OPENSSL_CONF",
+    ]);
+  });
+
+  it("R5-03: refuses any value, and ignores empty ones and other cases outside Windows", () => {
+    expect(unsafeVars({ NODE_OPTIONS: "--max-old-space-size=4096" }, "linux")).toEqual([
+      "NODE_OPTIONS",
+    ]);
+    expect(unsafeVars({ NODE_TLS_REJECT_UNAUTHORIZED: "1" }, "darwin")).toEqual([
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+    ]);
+    expect(unsafeVars({ NODE_OPTIONS: "", node_options: "--require x" }, "linux")).toEqual([]);
+    expect(unsafeVars({ node_options: "--require x" }, "win32")).toEqual(["node_options"]);
   });
 });
 
