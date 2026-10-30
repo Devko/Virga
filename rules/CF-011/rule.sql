@@ -13,7 +13,8 @@
 -- target
 -- - serves a Worker version with a data store binding (routes, Custom
 --   Domains and workers.dev serve the versions with a traffic share, version
---   URLs their version, Worker-level Access all of them or only the previews),
+--   URLs their version, Worker-level Access all of them or only the previews,
+--   and account-level Worker Access (`all_workers`) does so for every Worker),
 -- - serves a Pages environment with a data store binding, or
 -- - is a tunnel hostname.
 -- A hostname target covers the whole host when its path is empty, `/` or
@@ -21,6 +22,10 @@
 -- a path app for the truly public paths is the remedy this rule proposes.
 -- Hostname targets match entry points exactly, or through a `*.` wildcard
 -- that covers one label, as Access does. One finding per policy.
+-- Precedence between apps is not modeled: a policy counts when its app's
+-- target reaches data, even where a more specific app decides some of those
+-- requests (a hostname app before Worker-level Access, which comes before
+-- account-level Worker Access).
 --
 -- These are the public targets; private destinations follow in phase 3.
 WITH
@@ -128,13 +133,13 @@ reach AS (
   FROM app_entry ae
   JOIN nodes h ON h.id = ae.entry_id AND h.type = 'tunnel_hostname'
   UNION ALL
-  -- Worker-level Access
+  -- Worker-level Access on one Worker, or on every Worker of the account
   SELECT tg.app_id, NULL, vs.store_id, NULL
   FROM target tg
-  JOIN script_version sv ON sv.script_id = tg.script_id
+  JOIN script_version sv ON (tg.kind = 'all_workers' OR sv.script_id = tg.script_id)
    AND (tg.scope = 'all' OR sv.via = 'preview')
   JOIN version_store vs ON vs.version_id = sv.version_id
-  WHERE tg.kind = 'worker'
+  WHERE tg.kind IN ('worker', 'all_workers')
 )
 SELECT
   'CF-011'                                   AS rule_id,

@@ -1,0 +1,43 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# (destination type all_preview_workers)
+# Version URLs: https://developers.cloudflare.com/workers/configuration/previews/
+# Graph shape: docs/architecture/graph-contract.md, access_app target { kind: all_workers, scope, overrides }
+description: >
+  Account-level Worker Access covers only preview URLs, with a staff
+  policy. A wildcard host app on acme.workers.dev admits everyone and takes
+  precedence on the version URL of api. docs has a Bypass host app on its
+  Custom Domain, which the previews-only protection never covered, so docs
+  is not reported.
+nodes:
+  - { type: worker_script, id: api, name: api, props: { preview_urls: true } }
+  - { type: worker_version, id: a1, props: { script_node_id: "worker_script:api" } }
+  - { type: worker_preview_url, id: a1-api.acme.workers.dev, name: a1-api.acme.workers.dev, props: { script: api, kind: version, version_id: a1, alias: null } }
+  - { type: worker_script, id: docs, name: docs }
+  - { type: worker_custom_domain, id: docs.example.com, name: docs.example.com, props: { zone_id: z1, hostname: docs.example.com, service: docs, environment: null } }
+  - type: access_app
+    id: wa-previews
+    name: All previews
+    props: { app_type: self_hosted, targets: [{ kind: all_workers, scope: previews, overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: ha-workers-dev
+    name: Everything on workers.dev
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.acme.workers.dev", path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: ha-docs
+    name: Docs
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: docs.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - { type: access_policy, id: pol-staff, name: Staff, props: { decision: allow, include: [{ kind: group, value: grp-staff }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-everyone, name: Anyone with a login, props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-bypass, name: Public docs, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:api", dst: "worker_version:a1", props: { percentage: 100 } }
+  - { type: ROUTES_TO, src: "worker_preview_url:a1-api.acme.workers.dev", dst: "worker_version:a1" }
+  - { type: ROUTES_TO, src: "worker_custom_domain:docs.example.com", dst: "worker_script:docs" }
+  - { type: ALLOWS, src: "access_policy:pol-staff", dst: "access_app:wa-previews", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:ha-workers-dev", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-bypass", dst: "access_app:ha-docs", props: { precedence: 1 } }
+exposure:
+  - { entry: "worker_preview_url:a1-api.acme.workers.dev", decision: access, confidence: 1 }
+  - { entry: "worker_custom_domain:docs.example.com", decision: public, confidence: 2 }
+expect:
+  - { fingerprint: "CF-002:worker_script:api", severity: high }

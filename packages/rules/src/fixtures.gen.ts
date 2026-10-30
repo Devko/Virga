@@ -1244,7 +1244,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-002",
     "name": "negative-host-app-without-override",
-    "description": "plain has a bypass host app but no Worker-level Access to override. deep has Worker-level Access, and the wildcard app that admits everyone does not cover its two-label subdomain. strict has Worker-level Access and a host app whose only policy is limited to an email domain.\n",
+    "description": "plain has a bypass host app but nothing it overrides: its Worker-level Access and the account-level Worker Access cover only preview URLs, and plain has none. deep has Worker-level Access, and the wildcard app that admits everyone does not cover its two-label subdomain. strict has Worker-level Access and a host app whose only policy is limited to an email domain.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -1305,6 +1305,41 @@ export const FIXTURES: readonly RuleFixture[] = [
               "kind": "hostname",
               "host": "plain.example.com",
               "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-plain-previews",
+        "name": "plain previews (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "plain",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
               "overrides": []
             }
           ],
@@ -1456,6 +1491,22 @@ export const FIXTURES: readonly RuleFixture[] = [
         "type": "ALLOWS",
         "src": "access_policy:pol-bypass",
         "dst": "access_app:ha-plain",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:wa-plain-previews",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:wa-previews",
         "props": {
           "precedence": 1
         }
@@ -1642,6 +1693,162 @@ export const FIXTURES: readonly RuleFixture[] = [
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-002",
+    "name": "positive-account-level-access-overridden",
+    "description": "Account-level Worker Access covers every Worker with a staff policy. A host app on the Custom Domain of portal bypasses Access for everyone, and host apps take precedence, so the account-level protection no longer decides those requests. books has no host app and stays protected.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "portal",
+        "name": "portal"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "portal.example.com",
+        "name": "portal.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "portal.example.com",
+          "service": "portal",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "books",
+        "name": "books"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "books.example.com",
+        "name": "books.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "books.example.com",
+          "service": "books",
+          "environment": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-all",
+        "name": "All Workers",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "all",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-portal",
+        "name": "Portal",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "portal.example.com",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-staff",
+        "name": "Staff",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-staff"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:portal.example.com",
+        "dst": "worker_script:portal"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:books.example.com",
+        "dst": "worker_script:books"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-staff",
+        "dst": "access_app:wa-all",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:ha-portal",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:portal.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:books.example.com",
+        "decision": "access",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:portal",
+        "severity": "high"
+      }
+    ]
   },
   {
     "rule": "CF-002",
@@ -1875,6 +2082,223 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "fingerprint": "CF-002:worker_script:shop",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-002",
+    "name": "positive-preview-access-overridden",
+    "description": "Account-level Worker Access covers only preview URLs, with a staff policy. A wildcard host app on acme.workers.dev admits everyone and takes precedence on the version URL of api. docs has a Bypass host app on its Custom Domain, which the previews-only protection never covered, so docs is not reported.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "a1",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "a1-api.acme.workers.dev",
+        "name": "a1-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "a1",
+          "alias": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "docs",
+        "name": "docs"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "docs.example.com",
+        "name": "docs.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "docs.example.com",
+          "service": "docs",
+          "environment": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-workers-dev",
+        "name": "Everything on workers.dev",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.acme.workers.dev",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-docs",
+        "name": "Docs",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "docs.example.com",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-staff",
+        "name": "Staff",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-staff"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Anyone with a login",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public docs",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:a1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:a1-api.acme.workers.dev",
+        "dst": "worker_version:a1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:docs.example.com",
+        "dst": "worker_script:docs"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-staff",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:ha-workers-dev",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:ha-docs",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_preview_url:a1-api.acme.workers.dev",
+        "decision": "access",
+        "confidence": 1
+      },
+      {
+        "entry": "worker_custom_domain:docs.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:api",
         "severity": "high"
       }
     ]
@@ -5505,7 +5929,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-010",
     "name": "negative-target-without-data",
-    "description": "An Allow-Everyone policy sits on apps whose targets reach no data store and no tunnel: a Worker with only a service binding, a wildcard that does not cover a two-label subdomain, a Worker whose D1 binding is in a version without traffic, a Pages domain whose binding belongs to the preview environment, and an app the policy was removed from.\n",
+    "description": "An Allow-Everyone policy sits on apps whose targets reach no data store and no tunnel: a Worker with only a service binding, a wildcard that does not cover a two-label subdomain, a Worker whose D1 binding is in a version without traffic, a Pages domain whose binding belongs to the preview environment, account-level Worker Access on previews when no version behind a version URL binds data, and an app the policy was removed from.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -5708,6 +6132,23 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
         "id": "app-data",
         "name": "Data",
         "props": {
@@ -5892,6 +6333,14 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "type": "ALLOWS",
         "src": "access_policy:pol-everyone",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
         "dst": "access_app:app-data",
         "props": {
           "precedence": 1
@@ -5903,6 +6352,206 @@ export const FIXTURES: readonly RuleFixture[] = [
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-010",
+    "name": "positive-account-level-worker-access",
+    "description": "Two apps use account-level Worker Access with a policy that admits everyone. wa-all covers every Worker, and ledger's deployed version binds a D1 database. wa-previews covers only preview URLs, and an old version of api behind a version URL binds the sessions KV namespace.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "ledger",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_version",
+        "id": "ledger-1",
+        "props": {
+          "script_node_id": "worker_script:ledger"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "ledger-db",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-new",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-old",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "api-old-api.acme.workers.dev",
+        "name": "api-old-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "api-old",
+          "alias": null
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-sessions",
+        "name": "sessions"
+      },
+      {
+        "type": "access_app",
+        "id": "wa-all",
+        "name": "All Workers",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "all",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-all",
+        "name": "Anyone",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-previews",
+        "name": "Anyone (previews)",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:ledger",
+        "dst": "worker_version:ledger-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:ledger-1",
+        "dst": "d1_database:ledger-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:api-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:api-old-api.acme.workers.dev",
+        "dst": "worker_version:api-old"
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:api-old",
+        "dst": "kv_namespace:kv-sessions",
+        "key": "SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-all",
+        "dst": "access_app:wa-all",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-previews",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-010:access_policy:pol-all",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-010:access_policy:pol-previews",
+        "severity": "critical"
+      }
+    ]
   },
   {
     "rule": "CF-010",
@@ -6435,7 +7084,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-011",
     "name": "negative-path-app-or-no-data",
-    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split; /static/* is a path too, unlike /*), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
+    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split; /static/* is a path too, unlike /*), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment, and one on account-level Worker Access for previews when no Worker has a version URL. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -6640,6 +7289,40 @@ export const FIXTURES: readonly RuleFixture[] = [
         }
       },
       {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-previews",
+        "name": "Public previews",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
         "type": "access_policy",
         "id": "pol-everyone",
         "name": "Everyone",
@@ -6742,12 +7425,220 @@ export const FIXTURES: readonly RuleFixture[] = [
         "props": {
           "precedence": 1
         }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-previews",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
       }
     ],
     "exposure": [],
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-011",
+    "name": "positive-account-level-worker-access",
+    "description": "Bypass policies on account-level Worker Access. pol-all bypasses for an IP range on every Worker, and ledger's deployed version binds a D1 database. pol-previews bypasses for everyone on preview URLs only, and an old version of api behind a version URL binds the sessions KV namespace.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "ledger",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_version",
+        "id": "ledger-1",
+        "props": {
+          "script_node_id": "worker_script:ledger"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "ledger-db",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-new",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-old",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "api-old-api.acme.workers.dev",
+        "name": "api-old-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "api-old",
+          "alias": null
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-sessions",
+        "name": "sessions"
+      },
+      {
+        "type": "access_app",
+        "id": "wa-all",
+        "name": "All Workers",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "all",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-all",
+        "name": "Office",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "ip",
+              "value": "198.51.100.0/24"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-previews",
+        "name": "Public previews",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:ledger",
+        "dst": "worker_version:ledger-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:ledger-1",
+        "dst": "d1_database:ledger-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:api-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:api-old-api.acme.workers.dev",
+        "dst": "worker_version:api-old"
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:api-old",
+        "dst": "kv_namespace:kv-sessions",
+        "key": "SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-all",
+        "dst": "access_app:wa-all",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-previews",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-011:access_policy:pol-all",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-011:access_policy:pol-previews",
+        "severity": "high"
+      }
+    ]
   },
   {
     "rule": "CF-011",

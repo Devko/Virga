@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-002
--- version: 2
+-- version: 3
 -- title: Worker protected by Access on one entry point and reachable around it on another
 -- severity: high
 -- kind: toxic
@@ -16,11 +16,13 @@
 --    that protects /admin everywhere is not reported. `unknown` is never
 --    public or protected: when it stands on either side, the path would be
 --    such a gap if the unknown went one way, so the pair is undecided.
--- 2. The Worker has Worker-level Access, but an Access app with a hostname
---    target on one of its entry points carries a Bypass policy or an Allow
---    policy that includes Everyone. Hostname and path apps take precedence
---    over Worker-level Access. Host matching is exact, or a `*.` wildcard
---    that covers one label, as Access does.
+-- 2. The Worker has Worker-level Access, its own or the account's
+--    (`all_workers`), but an Access app with a hostname target on one of its
+--    entry points carries a Bypass policy or an Allow policy that includes
+--    Everyone. Hostname and path apps take precedence over Worker-level
+--    Access. Scope `all` covers every entry point of the Worker, scope
+--    `previews` only its preview URLs. Host matching is exact, or a `*.`
+--    wildcard that covers one label, as Access does.
 --
 -- One finding per Worker. A Worker with only undecided pairs returns an
 -- undecided row (decided = 0) that lists them; one decided pair or override
@@ -76,10 +78,13 @@ around_access AS (
     AND b.decision IN ('public', 'unknown')
 ),
 worker_access AS (
-  SELECT a.id AS app_id, 'worker_script:' || (t.value ->> '$.script') AS script_id
+  -- Worker-level Access on one Worker, or on every Worker of the account
+  SELECT a.id AS app_id, t.value ->> '$.kind' AS kind,
+         'worker_script:' || (t.value ->> '$.script') AS script_id,
+         COALESCE(t.value ->> '$.scope', 'all') AS scope
   FROM nodes a, json_each(a.props, '$.targets') t
   WHERE a.type = 'access_app' AND a.deleted_at IS NULL
-    AND t.value ->> '$.kind' = 'worker'
+    AND t.value ->> '$.kind' IN ('worker', 'all_workers')
 ),
 open_host_target AS (
   -- hostname targets of apps with a Bypass policy or an Allow policy for Everyone
@@ -99,7 +104,7 @@ open_host_target AS (
     )
 ),
 entry_host AS (
-  SELECT entry_id, script_id,
+  SELECT entry_id, script_id, type,
          lower(CASE type
            WHEN 'worker_route' THEN substr(route, 1, instr(route || '/', '/') - 1)
            WHEN 'worker_custom_domain' THEN props ->> '$.hostname'
@@ -118,7 +123,8 @@ entry_host AS (
 overridden AS (
   SELECT eh.script_id, eh.entry_id, ht.app_id
   FROM entry_host eh
-  JOIN worker_access wa ON wa.script_id = eh.script_id
+  JOIN worker_access wa ON (wa.kind = 'all_workers' OR wa.script_id = eh.script_id)
+   AND (wa.scope = 'all' OR eh.type = 'worker_preview_url')
   JOIN open_host_target ht ON ht.app_id <> wa.app_id
    AND (ht.host = eh.host
         OR (substr(ht.host, 1, 2) = '*.'

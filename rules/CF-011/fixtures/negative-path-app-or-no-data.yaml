@@ -6,8 +6,9 @@ description: >
   assets of a Worker with data (the recommended split; /static/* is a path
   too, unlike /*), one on an app in front of a Worker without data store
   bindings, one on a Pages domain whose data binding belongs to the preview
-  environment. An Allow policy for Everyone on the data Worker is CF-010's
-  concern, not this rule's.
+  environment, and one on account-level Worker Access for previews when no
+  Worker has a version URL. An Allow policy for Everyone on the data Worker
+  is CF-010's concern, not this rule's.
 nodes:
   - { type: worker_script, id: shop, name: shop }
   - { type: worker_version, id: shop-1, props: { script_node_id: "worker_script:shop" } }
@@ -37,6 +38,11 @@ nodes:
   - { type: access_policy, id: pol-assets, name: Public assets, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-landing, name: Public landing, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-site, name: Public site, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - type: access_app
+    id: wa-previews
+    name: All previews
+    props: { app_type: self_hosted, targets: [{ kind: all_workers, scope: previews, overrides: [] }], session_duration: null, allowed_idps: [] }
+  - { type: access_policy, id: pol-previews, name: Public previews, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-everyone, name: Everyone, props: { decision: allow, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
 edges:
   - { type: DEPLOYS, src: "worker_script:shop", dst: "worker_version:shop-1", props: { percentage: 100 } }
@@ -50,4 +56,5 @@ edges:
   - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-shop", props: { precedence: 1 } }
   - { type: ALLOWS, src: "access_policy:pol-landing", dst: "access_app:app-landing", props: { precedence: 1 } }
   - { type: ALLOWS, src: "access_policy:pol-site", dst: "access_app:app-site", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-previews", dst: "access_app:wa-previews", props: { precedence: 1 } }
 expect: []
