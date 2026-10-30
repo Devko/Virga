@@ -48,7 +48,7 @@ export const CREDENTIAL_VARS = [
 
 /**
  * Names of the deploy's own Cloudflare settings and credentials. They never
- * become Worker secrets.
+ * become Worker secrets, and builds never see them.
  */
 export const isCloudflareVar = (name: string) => /^(?:CLOUDFLARE|CF)_/i.test(name);
 
@@ -79,14 +79,34 @@ export function redact(text: string, secrets: readonly string[]): string {
 
 export interface RunnerOptions {
   /**
-   * `none` strips every credential from the environment of child processes
+   * What Wrangler gets: `none` strips every credential from its environment
    * (dry run); `token` keeps only CLOUDFLARE_API_TOKEN, so Wrangler cannot
-   * fall back to a Global API Key.
+   * fall back to a Global API Key. Builds never get credentials.
    */
   credentials: "none" | "token";
   /** Values that must never be printed, such as the API token. */
   secrets: () => readonly string[];
   print?: (stream: "stdout" | "stderr", line: string) => void;
+}
+
+/**
+ * The environment of a child process. A build (`pnpm`) runs the app's whole
+ * build-time dependency tree and never reaches the API, so it gets no
+ * CLOUDFLARE_ or CF_ variable at all (R3-05).
+ */
+function childEnv(command: Command, credentials: RunnerOptions["credentials"]): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, WRANGLER_SEND_METRICS: "false" };
+  for (const name of OVERRIDE_VARS) delete env[name];
+  if (command.bin === "pnpm") {
+    for (const name of Object.keys(env)) {
+      if (isCloudflareVar(name)) delete env[name];
+    }
+    return env;
+  }
+  for (const name of CREDENTIAL_VARS) {
+    if (credentials === "none" || name !== "CLOUDFLARE_API_TOKEN") delete env[name];
+  }
+  return env;
 }
 
 /**
@@ -118,14 +138,9 @@ export function processRunner(options: RunnerOptions): Runner {
         }
         args = [...command.args, "--config", command.config];
       }
-      const env: NodeJS.ProcessEnv = { ...process.env, WRANGLER_SEND_METRICS: "false" };
-      for (const name of OVERRIDE_VARS) delete env[name];
-      for (const name of CREDENTIAL_VARS) {
-        if (options.credentials === "none" || name !== "CLOUDFLARE_API_TOKEN") delete env[name];
-      }
       const child = spawn(file, args, {
         cwd: command.cwd,
-        env,
+        env: childEnv(command, options.credentials),
         stdio: ["ignore", "pipe", "pipe"],
       });
       const out = { stdout: "", stderr: "" };

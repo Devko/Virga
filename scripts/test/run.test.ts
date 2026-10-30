@@ -61,10 +61,40 @@ describe("processRunner", () => {
       ].join("\n"),
     );
     chmodSync(bin, 0o755);
+    // A stand-in for pnpm, found through PATH, that lists the Cloudflare variables it sees.
+    mkdirSync(join(dir, "path"));
+    const pnpm = join(dir, "path", "pnpm");
+    writeFileSync(
+      pnpm,
+      [
+        "#!/bin/sh",
+        'echo "args=$*"',
+        "echo \"vars=$(env | grep -E '^(CLOUDFLARE|CF)_' | cut -d= -f1 | sort | tr '\\n' ' ')\"",
+      ].join("\n"),
+    );
+    chmodSync(pnpm, 0o755);
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
     vi.unstubAllEnvs();
+  });
+
+  it("R3-05: runs builds without the deploy token or any other CLOUDFLARE_ variable", async () => {
+    vi.stubEnv("PATH", `${join(dir, "path")}:${process.env.PATH ?? ""}`);
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef");
+    vi.stubEnv("CF_API_TOKEN", "another-token-value");
+    const run = processRunner({ credentials: "token", secrets: () => [], print: () => {} });
+    const build = await run({ bin: "pnpm", cwd: dir, args: ["run", "build"], capture: true });
+    expect(build.stdout).toBe("args=run build\nvars=\n");
+    const wrangler = await run({
+      bin: "wrangler",
+      cwd: dir,
+      config: CONFIG,
+      args: [],
+      capture: true,
+    });
+    expect(wrangler.stdout).toContain("token=the-deploy-token-value");
   });
 
   it("R3-03: passes the checked config, and no credentials in a dry run", async () => {
