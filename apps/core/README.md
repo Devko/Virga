@@ -36,7 +36,7 @@ Only the running scan that is current in the graph may write (R2-07). `writeChun
 
 ## Entrypoints
 
-`GraphReader` (read-only, for the web Worker): `listAccounts()` (every account in the index by name, then ID, at most 1,000; it reads only the index), `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account.
+`GraphReader` (read-only, for the web Worker): `listAccounts()` (every account in the index by name, then ID, at most 1,000; it reads only the index), `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account. Findings are read as of the call: a suppressed finding whose `suppressed_until` is `null` or not after that time is `open`, without suppression fields, in the status filter, the counts and `getFinding`, even while its rule is not evaluated (R3-07). Reads write nothing.
 
 `getScanSummary` returns `{ account, lastRun, graph }`: the index row, the latest `scan_runs` row, and the graph's summary. `graph.ruleRuns` lists, per rule of the latest scan, its status, hits (decided rows), undecided rows, missing inputs and the error text (`Untrusted`, at most 500 characters). A rule that is not evaluated, or an undecided row, is not a pass.
 
