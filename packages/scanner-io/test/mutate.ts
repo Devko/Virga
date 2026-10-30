@@ -4,11 +4,14 @@
 import type { Limits } from "../src/limits.ts";
 import {
   BYTE_ORDER_MARK,
+  HANGUL_FILLER,
   LEFT_TO_RIGHT_ISOLATE,
   LINE_SEPARATOR,
   NONCHARACTER,
   PARAGRAPH_SEPARATOR,
   RIGHT_TO_LEFT_OVERRIDE,
+  TAG_A,
+  ZERO_WIDTH_SPACE,
 } from "./chars.ts";
 
 /** mulberry32: small, fast and good enough to pick mutations. */
@@ -131,6 +134,9 @@ const ODD_CHARS = [
   "\udfff",
   BYTE_ORDER_MARK,
   NONCHARACTER,
+  ZERO_WIDTH_SPACE,
+  HANGUL_FILLER,
+  TAG_A,
   "😀",
   "\\",
   '"',
@@ -233,7 +239,7 @@ function mutateValue(root: { value: Json }, rng: Rng, limits: Limits): void {
       return;
     }
     case 6:
-      // Odd characters: invalid UTF-16, NUL and other controls, bidi, markup.
+      // Odd characters: invalid UTF-16, NUL and other controls, bidi, invisible characters, markup.
       if (typeof current === "string") {
         const at = rng.int(current.length + 1);
         slot.set(current.slice(0, at) + rng.pick(ODD_CHARS) + current.slice(at));

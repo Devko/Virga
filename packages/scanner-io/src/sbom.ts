@@ -104,7 +104,7 @@ const TOOL_VERSION_MAX = 64;
 function text(value: unknown, at: string, max: number): string {
   if (typeof value !== "string") throw new SbomInputError(at, "is not text");
   if (value.length === 0 || value.length > max) throw new SbomInputError(at, "has a bad length");
-  if (!isCleanText(value)) throw new SbomInputError(at, "has control characters");
+  if (!isCleanText(value)) throw new SbomInputError(at, "has control or invisible characters");
   return value;
 }
 

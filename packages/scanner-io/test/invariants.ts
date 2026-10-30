@@ -10,8 +10,12 @@ const PURL = /^pkg:[a-z][a-z0-9.+-]*\/[A-Za-z0-9.\-_~%!$&'()*+,;=:@/?]+$/;
 const PREFIXES = new Set(["cfat_", "cfut_", "cfk_"]);
 const MASK = "********";
 
-/** No C0 or C1 controls, no lone surrogates, no bidi controls, no line separators. */
+/** Characters that render as nothing; the readers keep a list of their own. */
+const INVISIBLE = /\p{Default_Ignorable_Code_Point}/u;
+
+/** No controls, lone surrogates, line separators, bidi controls or invisible characters. */
 function cleanText(text: string): boolean {
+  if (INVISIBLE.test(text)) return false;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return false;
