@@ -123,8 +123,9 @@ const undecided = (reasonId: string, reason: string): Ranked =>
 
 /**
  * A Bypass never asks for an identity, so any selector it can match without
- * a login makes the app public, whatever require rules narrow it to. Only a
- * Bypass that may need a login to match is undecided (decision 0003).
+ * a login makes the app public, whatever require rules narrow it to. A Bypass
+ * that can match only through identity, unsupported or unresolved selectors
+ * is undecided (decision 0003).
  */
 function bypassVerdict(id: string, policy: GraphNode, graph: GraphInput): Ranked {
   const include = readInclude(policy.props.include, graph);
@@ -166,7 +167,10 @@ function serviceAuthVerdict(id: string, policy: GraphNode, graph: GraphInput): R
   if (include.kinds.size === 0) return undecided(id, "Service Auth policy has no include rules");
   const loose = [...include.kinds].filter((k) => !CREDENTIALS.has(k));
   if (loose.length > 0) {
-    return undecided(id, `Service Auth policy includes ${list(loose)} selectors`);
+    return undecided(
+      id,
+      `Service Auth policy includes selectors that are not credentials: ${list(loose)}`,
+    );
   }
   return null;
 }
