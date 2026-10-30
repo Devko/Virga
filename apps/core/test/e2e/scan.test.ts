@@ -34,10 +34,12 @@ import {
 // A full scan of a fake account: the real collectors over fixtureTransport,
 // the real scan orchestration (runScan), and an AccountGraph Durable Object
 // running the real exposure evaluator and findings lifecycle over all rules.
-// Five scans: the seeded account, the same account unchanged, the account
+// Six scans: the seeded account, the same account unchanged, the account
 // whose r2.dev flag on one bucket and env vars of one Pages project cannot be
-// read, the account with r2.dev turned off on that bucket, and the account
-// with one tunnel's ingress grown past 1,000 entry points.
+// read, the account with r2.dev turned off on that bucket, the account with
+// 1,000 harmless ingress rules before the edge tunnel's own rules, which then
+// fall past the cap, and the account with those rules gone again (decision
+// 0005).
 //
 // A case marked `mismatch` in account.ts fails because two packages disagree
 // on the graph contract; it runs as `it.fails` until the mismatch is fixed.
@@ -63,9 +65,22 @@ interface ExposureDbRow {
   reason: string | null;
 }
 
+interface TunnelRow {
+  id: string;
+  type: string;
+  /** `tunnel_id` of a tunnel hostname. */
+  tunnel: string | null;
+  /** `ingress_truncated` of a tunnel. */
+  truncated: number | null;
+  seen_scan: string;
+  deleted_at: number | null;
+}
+
 interface Snapshot {
   scanId: string;
   summary: ScanSummary;
+  /** Tunnel and tunnel hostname nodes after the scan, tombstones too. */
+  tunnels: TunnelRow[];
   coverage: { resource_class: string; status: string; detail: string | null }[];
   ruleRuns: {
     rule_id: string;
@@ -94,6 +109,7 @@ let second: Snapshot;
 let unreadable: Snapshot;
 let third: Snapshot;
 let fourth: Snapshot;
+let fifth: Snapshot;
 
 async function scan(name: string, now: number): Promise<Snapshot> {
   const scanId = `${name}-${accountId}`;
@@ -136,6 +152,12 @@ async function scan(name: string, now: number): Promise<Snapshot> {
   return {
     scanId,
     summary,
+    tunnels: await sql<TunnelRow>(
+      stub,
+      `SELECT id, type, props ->> '$.tunnel_id' AS tunnel,
+              props ->> '$.ingress_truncated' AS truncated, seen_scan, deleted_at
+       FROM nodes WHERE type IN ('tunnel', 'tunnel_hostname') ORDER BY id`,
+    ),
     coverage: await sql(
       stub,
       `SELECT resource_class, status, detail FROM coverage WHERE scan_id = ?
@@ -187,7 +209,11 @@ beforeAll(async () => {
   third = await scan("r2-dev-off", NOW + 2 * DAY);
   state.edgeIngressFlood = true;
   fourth = await scan("ingress-flood", NOW + 3 * DAY);
+  state.edgeIngressFlood = false;
+  fifth = await scan("ingress-fits", NOW + 4 * DAY);
 }, 60_000);
+
+const ALL = () => [first, second, unreadable, third, fourth, fifth];
 
 describe("every scan", () => {
   it("seeds cases and clean counterparts for every phase 1 rule but CF-001", () => {
@@ -199,7 +225,7 @@ describe("every scan", () => {
   });
 
   it("only reads, and only paths that the fake account serves", () => {
-    for (const s of [first, second, unreadable, third, fourth]) {
+    for (const s of ALL()) {
       expect(s.calls.length, s.scanId).toBeGreaterThan(0);
       for (const call of s.calls) expect(call).toMatch(/^(GET \/|POST \/graphql$)/);
       expect(s.calls).toContain("POST /graphql");
@@ -226,7 +252,9 @@ describe("every scan", () => {
       );
       stored.push(...rows.map((r) => r.text ?? ""));
     }
-    const steps = [first, second, unreadable, third, fourth].map((s) => s.stepResults).join("\n");
+    const steps = ALL()
+      .map((s) => s.stepResults)
+      .join("\n");
     for (const secret of SECRET_VALUES) {
       expect(stored.filter((text) => text.includes(secret))).toEqual([]);
       expect(steps.includes(secret)).toBe(false);
@@ -253,11 +281,9 @@ describe("first scan of the seeded account", () => {
               props ->> '$.tunnel_id' AS tunnel
        FROM nodes WHERE type = 'tunnel_hostname' AND deleted_at IS NULL ORDER BY id`,
     );
-    // The graph is read after every scan: the fourth adds f0000.example.com and on.
-    const flood = /^f\d{4}\.example\.com$/;
-    expect(rows.filter((r) => flood.test(r.hostname))).toHaveLength(997);
-    const seeded = rows.filter((r) => !flood.test(r.hostname));
-    expect(seeded.map((r) => r.hostname).sort()).toEqual([
+    // The graph is read after every scan: the fifth swept the flood of the fourth.
+    expect(rows.filter((r) => /^f\d{4}\.example\.com$/.test(r.hostname))).toEqual([]);
+    expect(rows.map((r) => r.hostname).sort()).toEqual([
       "app.example.com",
       "dash.example.com",
       "dash.example.com",
@@ -530,49 +556,84 @@ describe("third scan, after r2.dev is turned off on public-assets", () => {
   });
 });
 
-describe("fourth scan, after the edge tunnel's ingress grows past 1,000 entry points", () => {
-  const edge = `tunnel:${TUNNEL_EDGE}`;
-  const ssh = tunnelHostname(TUNNEL_EDGE, "ssh.example.com");
+// Decision 0005, in three scans: the third has an exposed SSH entry point on
+// the edge tunnel with an open CF-004 finding; the fourth puts 1,000 harmless
+// rules before it, so it falls past the cap; the fifth has them gone again.
+const TUNNEL_RULES = ["CF-004", "CF-010", "CF-011"];
+const edge = `tunnel:${TUNNEL_EDGE}`;
+const ssh = tunnelHostname(TUNNEL_EDGE, "ssh.example.com");
+const flood = (r: TunnelRow) => /^tunnel_hostname:[^:]+:f\d{4}\.example\.com:$/.test(r.id);
+const edgeEntries = (s: Snapshot) =>
+  s.tunnels.filter((r) => r.type === "tunnel_hostname" && r.tunnel === TUNNEL_EDGE);
+const live = (rows: TunnelRow[]) => rows.filter((r) => r.deleted_at === null).map((r) => r.id);
+const tunnelNode = (s: Snapshot, id: string) => s.tunnels.find((r) => r.id === id);
 
-  it("R5-06: completes the tunnels class with 1,000 entry points and marks the tunnel", async () => {
-    expect(fourth.summary.status).toBe("complete");
-    expect(fourth.summary.classes.tunnels).toMatchObject({ status: "complete" });
-    const [tunnel] = await sql<{ truncated: number }>(
-      stub,
-      "SELECT props ->> '$.ingress_truncated' AS truncated FROM nodes WHERE id = ?",
-      edge,
-    );
-    expect(tunnel?.truncated).toBe(1);
-    const [count] = await sql<{ n: number }>(
-      stub,
-      `SELECT count(*) AS n FROM edges e JOIN nodes h ON h.id = e.src AND h.deleted_at IS NULL
-       WHERE e.type = 'ROUTES_TO' AND e.dst = ? AND e.deleted_at IS NULL`,
-      edge,
-    );
-    // Three rules of its own and the flood: the last three hostnames are left out.
-    expect(count?.n).toBe(1000);
-    expect(FLOOD_HOSTNAMES + 3).toBeGreaterThan(1000);
-    const others = await sql<{ truncated: number }>(
-      stub,
-      `SELECT props ->> '$.ingress_truncated' AS truncated FROM nodes
-       WHERE type = 'tunnel' AND id <> ? AND deleted_at IS NULL`,
-      edge,
-    );
+describe("fourth scan, after 1,000 harmless rules push the edge tunnel's own rules past the cap", () => {
+  const reason = `truncated (1): tunnel ${TUNNEL_EDGE}: ingress has more than 1000 entry points`;
+
+  it("R5-06: emits the 1,000 harmless entry points and marks the tunnel", () => {
+    expect(tunnelNode(fourth, edge)?.truncated).toBe(1);
+    const seen = edgeEntries(fourth).filter((r) => r.seen_scan === fourth.scanId);
+    expect(seen).toHaveLength(FLOOD_HOSTNAMES);
+    expect(seen.every(flood)).toBe(true);
+    const others = fourth.tunnels.filter((r) => r.type === "tunnel" && r.id !== edge);
     expect(others.map((t) => t.truncated)).toEqual(others.map(() => 0));
   });
 
-  it("R5-06: decides every entry point of that tunnel unknown, and the others as before", async () => {
-    const entries = new Set(
-      (
-        await sql<{ src: string }>(
-          stub,
-          "SELECT src FROM edges WHERE type = 'ROUTES_TO' AND dst = ? AND deleted_at IS NULL",
-          edge,
-        )
-      ).map((r) => r.src),
+  it("0005: records tunnels coverage partial with the reason and ends the scan partial", async () => {
+    expect(fourth.summary.status).toBe("partial");
+    expect((await scanRun(fourth.scanId))?.status).toBe("partial");
+    const tunnels = fourth.summary.classes.tunnels;
+    expect(tunnels).toMatchObject({ status: "partial", truncated: 1, detail: reason });
+    // Every chunk was written; collection did not stop at the truncated one.
+    expect(tunnels?.done).toBe(tunnels?.chunks);
+    expect(fourth.coverage).toEqual(
+      [...RESOURCE_CLASSES, "exposure"]
+        .sort()
+        .map((resource_class) =>
+          resource_class === "tunnels"
+            ? { resource_class, status: "partial", detail: reason }
+            : { resource_class, status: "complete", detail: null },
+        ),
     );
+  });
+
+  it("0005: does not sweep tunnels, so the entry point past the cap stays", () => {
+    expect(fourth.summary.classes.tunnels?.swept).toBeUndefined();
+    expect(tunnelNode(fourth, ssh)).toMatchObject({ deleted_at: null, seen_scan: third.scanId });
+    // Every entry point of the third scan is still there, next to the flood.
+    const before = live(third.tunnels);
+    expect(live(fourth.tunnels).filter((id) => before.includes(id))).toEqual(before);
+    expect(live(edgeEntries(fourth))).toHaveLength(FLOOD_HOSTNAMES + 3);
+  });
+
+  it("0005: leaves CF-004, CF-010 and CF-011 not evaluated and evaluates the other rules", () => {
+    expect(fourth.ruleRuns.filter((r) => TUNNEL_RULES.includes(r.rule_id))).toEqual(
+      TUNNEL_RULES.map((rule_id) => ({
+        rule_id,
+        status: "not_evaluated",
+        hits: 0,
+        undecided: 0,
+        missing: JSON.stringify(["tunnels"]),
+        error: null,
+      })),
+    );
+    expect(fourth.ruleRuns.filter((r) => !TUNNEL_RULES.includes(r.rule_id))).toEqual(
+      third.ruleRuns.filter((r) => !TUNNEL_RULES.includes(r.rule_id)),
+    );
+    expect(fourth.summary.rules).toMatchObject({ status: "complete", notEvaluated: 4 });
+  });
+
+  it("0005: keeps the open CF-004 finding of the SSH hostname open and changes no finding", () => {
+    expect(fourth.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
+    expect(byFingerprint(fourth, `CF-004:${ssh}`)).toMatchObject({ status: "open" });
+    expect(fourth.findings).toEqual(third.findings);
+  });
+
+  it("R5-06: decides every entry point of the truncated tunnel unknown, and the others as before", () => {
+    const entries = new Set(live(edgeEntries(fourth)));
     const ofEdge = fourth.exposure.filter((r) => entries.has(r.entry_id));
-    expect(ofEdge).toHaveLength(1000);
+    expect(new Set(ofEdge.map((r) => r.entry_id))).toEqual(entries);
     for (const r of ofEdge) {
       expect(r).toMatchObject({ decision: "unknown", confidence: 0, reason_id: edge });
     }
@@ -580,15 +641,36 @@ describe("fourth scan, after the edge tunnel's ingress grows past 1,000 entry po
       third.exposure.filter((r) => !entries.has(r.entry_id)),
     );
   });
+});
 
-  it("R5-06: keeps the open CF-004 finding of the SSH hostname open and opens nothing", () => {
-    expect(fourth.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
-    expect(fourth.findings).toEqual(third.findings);
-    expect(byFingerprint(fourth, `CF-004:${ssh}`)).toMatchObject({ status: "open" });
-    // Every entry point of the tunnel but its status-code rule is undecided.
-    expect(fourth.ruleRuns.find((r) => r.rule_id === "CF-004")).toMatchObject({
-      status: "evaluated",
-      undecided: 999,
+describe("fifth scan, after the harmless rules are gone again", () => {
+  it("0005: completes every class and the scan again", async () => {
+    expect(fifth.summary.status).toBe("complete");
+    expect((await scanRun(fifth.scanId))?.status).toBe("complete");
+    expect(fifth.coverage).toEqual(third.coverage);
+    expect(fifth.calls).toEqual(third.calls);
+  });
+
+  it("0005: sweeps the harmless entry points and keeps the tunnel's own", () => {
+    expect(fifth.summary.classes.tunnels).toMatchObject({
+      status: "complete",
+      swept: { nodes: FLOOD_HOSTNAMES, edges: FLOOD_HOSTNAMES },
     });
+    expect(tunnelNode(fifth, edge)?.truncated).toBe(0);
+    expect(tunnelNode(fifth, ssh)).toMatchObject({ deleted_at: null, seen_scan: fifth.scanId });
+    expect(live(fifth.tunnels)).toEqual(live(third.tunnels));
+    expect(
+      edgeEntries(fifth)
+        .filter((r) => r.deleted_at !== null)
+        .every(flood),
+    ).toBe(true);
+  });
+
+  it("0005: evaluates the tunnel rules again, with the findings of the third scan", () => {
+    expect(fifth.ruleRuns).toEqual(third.ruleRuns);
+    expect(fifth.summary.rules).toMatchObject({ opened: 0, resolved: 0, notEvaluated: 1 });
+    expect(byFingerprint(fifth, `CF-004:${ssh}`)).toMatchObject({ status: "open" });
+    expect(fifth.findings).toEqual(third.findings);
+    expect(fifth.exposure).toEqual(third.exposure);
   });
 });

@@ -93,7 +93,16 @@ export interface ClassSummary {
   changed: number;
   signals: number;
   insights: number;
-  /** Why the class is not complete. May quote API error messages: untrusted. */
+  /**
+   * Reasons the written chunks gave for resources they left out (decision
+   * 0005). Any makes the class `partial`, even when every chunk was written.
+   */
+  truncated?: number;
+  /**
+   * Why the class is not complete: the error of the chunk that failed, and
+   * the first truncated reasons. May quote API error messages and IDs from
+   * the scanned account: untrusted.
+   */
   detail?: string;
   swept?: { nodes: number; edges: number } | { error: string };
 }

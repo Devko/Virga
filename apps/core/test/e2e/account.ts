@@ -138,7 +138,10 @@ export interface AccountState {
   publicAssetsR2Dev: boolean | null;
   /** CF-024: the API returns the env vars of `handbook`; else `env_vars: null` (R5-07). */
   handbookEnvVars: boolean;
-  /** R5-06: the edge tunnel's ingress has 1,000 more hostname rules. */
+  /**
+   * R5-06, decision 0005: the edge tunnel's ingress starts with 1,000
+   * harmless hostname rules, so its own rules fall past the cap.
+   */
   edgeIngressFlood: boolean;
 }
 
@@ -148,22 +151,22 @@ export const initialState = (): AccountState => ({
   edgeIngressFlood: false,
 });
 
-/** Hostnames the flood adds to the edge tunnel, before its catch-all. */
+/** Hostnames the flood puts before the edge tunnel's own rules. */
 export const FLOOD_HOSTNAMES = 1000;
 
 /** A remotely managed tunnel configuration; the last ingress rule is the catch-all. */
 type TunnelConfig = { ingress: object[] } & Record<string, unknown>;
 
-/** The edge tunnel's configuration with FLOOD_HOSTNAMES more hostname rules. */
+/**
+ * The edge tunnel's configuration behind FLOOD_HOSTNAMES hostname rules that
+ * answer with a status code: they expose nothing, but take the whole cap.
+ */
 function flooded(config: TunnelConfig) {
-  const extra = Array.from({ length: FLOOD_HOSTNAMES }, (_, i) => ({
+  const harmless = Array.from({ length: FLOOD_HOSTNAMES }, (_, i) => ({
     hostname: `f${String(i).padStart(4, "0")}.example.com`,
-    service: "http://localhost:8080",
+    service: "http_status:404",
   }));
-  return {
-    ...config,
-    ingress: [...config.ingress.slice(0, -1), ...extra, ...config.ingress.slice(-1)],
-  };
+  return { ...config, ingress: [...harmless, ...config.ingress] };
 }
 
 // Workers ---------------------------------------------------------------------
