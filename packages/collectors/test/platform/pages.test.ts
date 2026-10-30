@@ -1,9 +1,10 @@
 import { envelope } from "@virga/cf-api/testing";
 import { describe, expect, it } from "vitest";
 import { pagesCollector } from "../../src/platform/pages.ts";
-import { directUploadProject, SECRET_VALUE } from "./fixtures/pages.ts";
+import { directUploadProject, gitProject, SECRET_VALUE } from "./fixtures/pages.ts";
 import { pagesRoutes } from "./fixtures/routes.ts";
 import { queueExample } from "./fixtures/storage.ts";
+import { FAKE_TOKEN } from "./fixtures/workers.ts";
 import {
   ACCOUNT,
   context,
@@ -24,6 +25,10 @@ const GIT = "pages_project:this-is-my-project-01";
 const routes = pagesRoutes;
 
 describe("pages collector", () => {
+  it("asks for Pages Metadata Read, not Pages Read, which also reads content", () => {
+    expect(pagesCollector.permissions).toEqual(["Pages Metadata Read", "Queues Read"]);
+  });
+
   it("plans project chunks of 20 across pages of the project list", async () => {
     const { chunks } = await run(pagesCollector, routes);
     expect(chunks).toEqual([["docs", "landing", "this-is-my-project-01"]]);
@@ -34,7 +39,19 @@ describe("pages collector", () => {
 
   it("emits pages_project nodes with the contract props", async () => {
     const { output } = await run(pagesCollector, routes);
-    expectProps(output, "pages_project", ["production_branch", "subdomain", "preview_deployments"]);
+    expectProps(output, "pages_project", [
+      "production_branch",
+      "subdomain",
+      "preview_deployments",
+      "plain_text_vars",
+    ]);
+    const foo = (environment: string) => ({
+      name: "foo",
+      environment,
+      kind: "plain_text",
+      looks_secret: false,
+      secret_pattern: null,
+    });
     expect(node(output, GIT)).toEqual({
       type: "pages_project",
       nativeId: "this-is-my-project-01",
@@ -43,18 +60,21 @@ describe("pages collector", () => {
         production_branch: "main",
         subdomain: "this-is-my-project-01.pages.dev",
         preview_deployments: "all",
+        plain_text_vars: [foo("preview"), foo("production")],
       },
     });
     expect(node(output, "pages_project:docs").props).toEqual({
       production_branch: "main",
       subdomain: "docs-4xz.pages.dev",
       preview_deployments: "none",
+      plain_text_vars: [],
     });
     // Direct Upload: no source settings, previews are on by default.
     expect(node(output, "pages_project:landing").props).toEqual({
       production_branch: "main",
       subdomain: "landing.pages.dev",
       preview_deployments: "all",
+      plain_text_vars: [],
     });
   });
 
@@ -116,6 +136,45 @@ describe("pages collector", () => {
     const json = JSON.stringify(output);
     expect(json).not.toContain(SECRET_VALUE);
     expect(json).not.toContain("hello world");
+  });
+
+  it("R2-09: inspects plain-text environment variables and keeps only the verdict", async () => {
+    const envVars = {
+      API_KEY: { type: "plain_text", value: FAKE_TOKEN },
+      foo: { type: "plain_text", value: "hello world" },
+      // Without a value nothing was inspected: unknown, not clean.
+      EMPTY: { type: "plain_text" },
+      TOKEN: { type: "secret_text", value: SECRET_VALUE },
+      GONE: null,
+    };
+    const project = {
+      ...gitProject,
+      deployment_configs: {
+        preview: { env_vars: { foo: envVars.foo } },
+        production: { env_vars: envVars },
+      },
+    };
+    const { output } = await run(pagesCollector, {
+      ...routes,
+      [`${projects}/this-is-my-project-01`]: envelope(project),
+    });
+    const plain = (environment: string, name: string, looks: boolean | null, pattern = null) => ({
+      name,
+      environment,
+      kind: "plain_text",
+      looks_secret: looks,
+      secret_pattern: pattern,
+    });
+    expect(node(output, GIT).props?.plain_text_vars).toEqual([
+      plain("preview", "foo", false),
+      { ...plain("production", "API_KEY", true), secret_pattern: "cfat_" },
+      plain("production", "EMPTY", null),
+      plain("production", "foo", false),
+    ]);
+    const json = JSON.stringify(output);
+    for (const value of [FAKE_TOKEN, SECRET_VALUE, "hello world"]) {
+      expect(json).not.toContain(value);
+    }
   });
 
   it("skips projects deleted between listing and reading", async () => {

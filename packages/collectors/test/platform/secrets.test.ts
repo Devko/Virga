@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectSecret, entropy } from "../../src/platform/secrets.ts";
+import { detectSecret, detectSecretIn, entropy } from "../../src/platform/secrets.ts";
 
 // Fake credentials are assembled at runtime so secret scanners do not flag this file.
 const forty = "Q7v2Lm9XkT4pR8sWc1Ny6Hb3Jd5Fg0Za2Ue7Io4P";
@@ -67,6 +67,36 @@ describe("detectSecret", () => {
   it("never returns the value", () => {
     const verdict = detectSecret(fake("cfat"));
     expect(JSON.stringify(verdict)).not.toContain(forty);
+  });
+});
+
+describe("detectSecretIn", () => {
+  const clean = { looks_secret: false, secret_pattern: null };
+
+  it("R2-09: tests every string of a JSON value, keys included", () => {
+    expect(detectSecretIn({ a: { b: ["x", fake("cfut")] } }).secret_pattern).toBe("cfut_");
+    expect(detectSecretIn({ [fake("cfk")]: 1 }).secret_pattern).toBe("cfk_");
+    expect(detectSecretIn([[[forty]]]).secret_pattern).toBe("high_entropy");
+    expect(detectSecretIn({ region: "eu", retries: 3, on: true, off: null })).toEqual(clean);
+    for (const value of [null, 0, false, [], {}, ""]) expect(detectSecretIn(value)).toEqual(clean);
+  });
+
+  it("is detectSecret for a single string", () => {
+    for (const value of [fake("cfat"), forty, "production"]) {
+      expect(detectSecretIn(value)).toEqual(detectSecret(value));
+    }
+  });
+
+  it("names the strongest pattern, whatever the order", () => {
+    const key = ["AKIA", "IOSFODNN7", "EXAMPLE"].join("");
+    expect(detectSecretIn([forty, key, fake("cfk")]).secret_pattern).toBe("cfk_");
+    expect(detectSecretIn({ z: fake("cfat"), a: forty }).secret_pattern).toBe("cfat_");
+  });
+
+  it("walks deep nesting without recursion", () => {
+    let value: unknown = { k: fake("cfat") };
+    for (let i = 0; i < 100_000; i++) value = i % 2 ? [value] : { v: value };
+    expect(detectSecretIn(value).secret_pattern).toBe("cfat_");
   });
 });
 
