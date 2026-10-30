@@ -1,6 +1,6 @@
 # Operator guide
 
-Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md)). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
+Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md)), offboarding the same day (account removal in the UI and API). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
 
 Virga is an independent project. It is not affiliated with or endorsed by Cloudflare (D-01).
 
@@ -322,32 +322,27 @@ Where to look:
 
 ## Offboarding
 
-There is no offboarding command yet (A-13). Until there is, offboard by hand, in this order:
-
 1. **Revoke the token.** The scanned account deletes Virga's token under **Manage account** > **Account API tokens**. This alone ends all access, whatever happens in the tool account.
-2. **Stop scans.** In `apps/core`:
+2. **Remove the account.** An admin opens the account's page in the UI, chooses **Remove account…** and types the account ID to confirm. Over the API it is `DELETE /api/accounts/<account_id>` with the JSON body `{"confirm": "<account_id>"}`. Like every admin call, it needs an Access sign-in of an address in `ADMIN_EMAILS`, `Content-Type: application/json` and an `Origin` header with `virga-web`'s own origin.
 
-   ```sh
-   npx wrangler d1 execute virga-index --remote --command "UPDATE accounts SET status = 'paused' WHERE id = '<account_id>'"
-   ```
+The removal runs in this order:
 
-   A paused account stays paused if it is onboarded again; set `status = 'active'` to resume.
-3. **End a running scan,** if there is one: `npx wrangler workflows instances list virga-scan`, then `npx wrangler workflows instances terminate virga-scan <instance_id>`.
-4. **Delete the stored token.** In `apps/broker`:
+1. The broker deletes the stored token, then the account's rate budget (`TokenIntake.remove`). A scan that still runs gets no more API access.
+2. Core deletes the account's index rows (`accounts`, `scan_runs`), then its whole graph: nodes, history and findings (`Admin.removeAccount`). The UI and the API stop showing the account, and the dispatcher starts no more scans of it. A scan that still runs is refused at its next write.
 
-   ```sh
-   npx wrangler d1 execute virga-vault --remote --command "DELETE FROM vault_tokens WHERE account_id = '<account_id>'"
-   ```
+| Response | Meaning |
+| --- | --- |
+| 200 `{ token: { removed }, account: { removed } }` | Done. `removed: false` means there was nothing left to delete, for example on a repeat |
+| 400 `confirmation_required` | The body does not name the account |
+| 502 `token_not_removed` | The broker step failed. Core was not called, so the account stays listed. Run the removal again |
+| 502 `account_not_removed` | The token is gone; the index rows or the graph may remain. Run the removal again |
 
-5. **Delete the index rows,** in `apps/core`. The UI and the API stop showing the account:
-
-   ```sh
-   npx wrangler d1 execute virga-index --remote --command "DELETE FROM scan_runs WHERE account_id = '<account_id>'; DELETE FROM accounts WHERE id = '<account_id>'"
-   ```
+Both steps are idempotent, so a repeat finishes a partial removal. To scan the account again, onboard it again with a new token.
 
 What stays behind:
 
-- **The graph.** The account's `AccountGraph` Durable Object keeps its nodes, history and findings. No entrypoint deletes one account's object yet.
+- **A scan that was queued before the removal and begins after it** (R4-03). Nothing stops it yet. It starts on the empty graph, gets `no_permission` for every class because the token is gone, and leaves a scan record in the graph and a `scan_runs` row in the index, but no inventory. Removing the account again clears both.
+- **Durable Object point-in-time recovery.** SQLite-backed Durable Objects keep 30 days of history for point-in-time recovery; whether it can restore a graph after `deleteAll()` is not documented: **verify**. No Virga entrypoint restores one.
 - **Workflow instances** for 3 days (completed) or 7 days (failed). They hold counters only; `npx wrangler workflows instances delete virga-scan <instance_id>` removes them earlier.
 - **D1 Time Travel** can restore deleted rows of `virga-vault` and `virga-index` within its retention window. The token ciphertext stays useless without the master key, and the token itself is revoked in step 1.
 - **Logs** of the Workers (observability is on) under the Workers Logs retention. They contain account IDs, never tokens.

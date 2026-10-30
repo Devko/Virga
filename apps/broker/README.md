@@ -15,7 +15,7 @@ It refuses, without calling Cloudflare, every call that is not on the read allow
 
 - `store(accountId, token, profile)` runs the write check and stores the token if it passes.
 - `recheck(accountId)` runs the write check on the stored token. A token that fails is deleted; one whose check could not finish (429, 5xx) is kept.
-- `remove(accountId)` deletes the token.
+- `remove(accountId)` deletes the token, then clears the account's rate budget (`RateBudget.clear()`, which deletes the object's storage). It returns `{ removed }`, true when a token was stored; it is idempotent and throws on failure, so a retry finishes the job.
 
 Results list the reasons and warnings and never contain the token.
 
@@ -55,6 +55,8 @@ When the Secrets Store binding exists, it is the only source, and its errors fai
 ## Rate budget
 
 `RateBudget` is a Durable Object per account (S-02). REST: 1,200 requests per 300 s, 120 kept as margin. GraphQL: 300 queries per 300 s, 30 kept as margin, and each query also uses REST quota. The budget counts its own requests in a sliding window and also trusts the last `Ratelimit` header (`"default";r=1199;t=1`) until its reset. It paces the last quarter of the quota over the time until it refills, and after a 429 it blocks until `retry-after` (300 s if missing). `ApiCaller` waits out pauses of up to 5 s and answers longer ones with a 429 `CfResponse` that carries `retryAfter`.
+
+`clear()` is for offboarding (`TokenIntake.remove`). It deletes the object's storage and starts an empty ledger, so a request still in flight, or the account onboarded again, starts like a new account.
 
 ## Tests
 
