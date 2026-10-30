@@ -108,14 +108,16 @@ The `source` of rematch rows is `osv` unless the caller names another. Rule fixt
 
 A result is complete when every package parsed, no match is unknown, no record was rejected, the KEV catalog was read, and both the package set and the feed are complete. `applyVulnRematch` then records `vulns` as `complete`; otherwise as `partial`, with a detail made of counts only, such as `unknown matches: 2; no KEV catalog`. The detail holds no text from advisories or the scanned account.
 
+The caller states the two completeness inputs, as the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2) defines them: `packagesComplete` is true only when the scan's `packages` coverage is `complete`, and `feedComplete` is false when the mirror is missing or its sync failed, was partial or is older than 48 hours ([decision 0009](../decisions/0009-advisory-mirror-egress.md)). Without a feed the caller passes `readOsvFeed([])` with `feedComplete: false`, and without a readable catalog `kev: null`; the result is then `partial`, and no row is fixed because its advisory is missing.
+
 CF-001 requires `vulns` (and `packages`), and `evaluateRules` runs a rule only when every input it requires is `complete` in the scan. An incomplete rematch therefore leaves CF-001 `not_evaluated`: its findings neither open nor resolve. Its decided rows are still written, so the table stays current.
 
 The lists `unknown` and `unparsed` hold package IDs from the scanned account. A caller that logs them treats them as untrusted, like every string from a scanned account; counts are enough for the scan summary.
 
 ## Not done yet
 
-- **Packages.** No collector emits `package` nodes or `CONTAINS` edges. Extraction from Worker versions waits for [S-04](../spikes/S-04-worker-dependencies.md): `package_dependencies` came back `null` in a temporary account, and source maps were not returned.
-- **Advisory mirror and its sync.** Where the OSV npm records and the KEV catalog come from, how they are stored (R2, indexed by package name), how often they sync, and how the tool reaches osv.dev and cisa.gov (these are not Cloudflare API calls and do not go through the broker) are open. The sync decides `feedComplete`.
+- **Packages.** No collector emits `package` nodes or `CONTAINS` edges, and nothing records `packages` coverage; the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2) says what a writer must emit. Extraction from Worker versions waits for [S-04](../spikes/S-04-worker-dependencies.md): `package_dependencies` came back `null` in a temporary account, and source maps were not returned.
+- **Advisory mirror and its sync.** [Decision 0009](../decisions/0009-advisory-mirror-egress.md) settles the sources (OSV's bulk npm data and the CISA catalog, fetched in bulk by a mirror Worker into R2) and when the feed is incomplete. The mirror Worker, the R2 layout, the sync schedule and the download format are not built yet. The sync decides `feedComplete`.
 - **Scheduling.** Neither the scan nor a daily schedule runs the rematch.
 - **CVSS v4.** Advisories with only a v4 vector and no database severity are unknown. GitHub advisories carry a database severity, so this mostly concerns other sources.
 - **Aliases.** Two records that alias each other, for example a GitHub malware advisory and its `MAL-` record, give two matches. Matches are not merged by alias.

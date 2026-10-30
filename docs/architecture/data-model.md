@@ -26,7 +26,7 @@ Status: implemented in [`packages/graph`](../../packages/graph). The schema is [
 | `changes` | Attribute history (before/after per changed node or edge), written by triggers. Diff between any two scans |
 | `dirty` | Nodes marked by audit events and waiting for a targeted refetch |
 | `exposure` | Output of the exposure evaluator per entry point and path prefix |
-| `vulns` | Advisory matches per package node |
+| `vulns` | Advisory matches per package node ([below](#vulnerabilities)) |
 | `insights` | Native Security Insights as inputs that findings can enrich |
 | `findings`, `finding_nodes` | Rule hits with lifecycle, and the nodes each finding is about (replaces the `AFFECTS` edge) |
 | `rule_runs` | Per scan and rule: `evaluated`, `not_evaluated` (with missing coverage) or `error`; `hits` (decided rows), `undecided` and `error` text (migration 2) |
@@ -115,6 +115,24 @@ The TypeScript evaluator writes one row per entry point and path prefix with `re
 | `unknown` | The evaluator could not decide (unsupported expression, missing coverage). Never treated as `public` |
 
 `reason_id` points to the deciding node (Access app, policy, ruleset), and `reason` is a short explanation for the UI.
+
+## Vulnerabilities
+
+`vulns` holds one row per package node and advisory, key `(package_id, vuln_id)`. The rematch in [`packages/vulns`](../../packages/vulns) computes the rows and `applyVulnRematch` writes them, with the scan's `vulns` coverage ([vulns.md](vulns.md)). What writers and readers rely on is in the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2).
+
+| Column | Value |
+| --- | --- |
+| `package_id` | The package node ID, `package:<purl>`, as the rematch got it |
+| `vuln_id` | The OSV ID (`GHSA-…`, `MAL-…`), at most 128 characters of `[a-zA-Z0-9:_.-]` |
+| `aliases` | JSON array of at most 100 IDs in the same format |
+| `severity_rank` | 0 to 4. An unknown rank is never stored as 0; such a match gets no row and leaves `vulns` `partial`. A `MAL-` record is 4 ([decision 0008](../decisions/0008-malicious-package-advisories.md)) |
+| `kev` | 1 when the ID or an alias is in the CISA KEV catalog |
+| `fixed_in` | The lowest fixed version above the installed one, or `NULL` |
+| `status` | `open`; `fixed` when the match ended; `ignored`, which a rematch keeps |
+| `source` | The writer: `osv` for the rematch, `fixture` in rule fixtures |
+| `first_seen` | When the match was first written, epoch milliseconds; never changed afterwards |
+
+Rows are never deleted.
 
 ## Findings lifecycle
 

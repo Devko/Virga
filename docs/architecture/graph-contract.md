@@ -32,7 +32,7 @@ Values of plain-text variables, secret bindings, tokens, keys and certificates a
 
 Edges belong to the class of the collector that emits them, even when they point to nodes of another class. For example, the `workers` collector emits `BINDS` edges to `d1_database` nodes. If the target class has no coverage, the edge points to a missing node, and rules that need it are `not evaluated` because they list that class in `requires`.
 
-Derived inputs: `exposure` (exposure evaluator), and from phase 2 `packages` and `vulns`. The scan records them in `coverage` like resource classes once they are complete.
+Derived inputs: `exposure` (exposure evaluator), and from phase 2 `packages` and `vulns`. The scan records them in `coverage` like resource classes once they are complete. `packages` and `vulns` are described in [packages and vulnerabilities](#packages-and-vulnerabilities-phase-2).
 
 ## Nodes
 
@@ -349,6 +349,49 @@ Binding targets map to node IDs as follows:
 | Secrets Store | `secrets_store_secret:<store_id>/<secret_name>` |
 
 Binding types without a node type (AI, analytics engine, browser, and so on) emit no edge.
+
+## Packages and vulnerabilities (phase 2)
+
+What package writers emit, and what the rematch and CF-001 read. Nothing writes package nodes yet: the `workers` collector waits for [S-04](../spikes/S-04-worker-dependencies.md), and SBOMs from `scanner-io` do not reach the graph. Matching is described in [vulns.md](vulns.md), the table in the [data model](data-model.md#vulnerabilities).
+
+### `package` nodes
+
+`package` — native ID: the purl, spelled as the [data model](data-model.md#package-node-ids) says; name: the package name as the source spells it, for display only.
+
+- npm purls have the type, scope and name in lower case, the scope's `@` as `%40`, every other character outside `A-Z a-z 0-9 . - _ ~` percent-encoded, the installed version, and no qualifiers or subpath: `package:pkg:npm/%40babel/traverse@7.22.0`, and `package:pkg:npm/jsonstream@1.3.1` for `JSONStream`. `scanner-io`'s `npmPurl` writes this form (R9-05).
+- One node per purl: Worker versions that contain the same version of a package share its node. No props are defined yet.
+- The rematch compares npm names without regard to ASCII case, so a purl that keeps capitals still matches, but it is a second node for the same package. Writers use the lower-case form.
+- The rematch reads npm purls only. Another purl type, a version that is not SemVer 2.0.0, a qualifier or a subpath makes the package unparsed, and `vulns` is not complete.
+- Package nodes and `CONTAINS` edges belong to the class of the collector that emits them, like other edges (`workers` for Worker versions). How two classes share one package node is settled when a second writer lands.
+
+### `CONTAINS` edges
+
+| Edge | From → to | `key` | Props |
+| --- | --- | --- | --- |
+| `CONTAINS` | `worker_version` (later `container_image`) → `package` | | `confidence`, `source` |
+
+- One edge per workload and package. When several sources show the package, the edge has the highest confidence, and at equal confidence the first source in the order `package_dependencies`, `sourcemap`, `banner`, `sbom`, as `scanner-io`'s SBOM generator merges them.
+- `confidence` is an integer, 0 low, 1 medium, 2 high, never `null`. A package that only `package_dependencies` lists is 0: Wrangler mixes devDependencies in and lists direct dependencies only (A-11). Bundle content or a source map raises it to 1 or 2; the mapping is settled with S-04.
+- `source` is `package_dependencies`, `sourcemap`, `banner` or `sbom`: the source that gave the confidence.
+- CF-001 counts a package only with `confidence` at least `min_conf` (1). A missing `confidence` reads as 0.
+
+### `packages` input
+
+`packages` is a derived input in `coverage`. The writer of package nodes records it per scan:
+
+- `complete`: the packages of every Worker version the scan emitted were read, and every one became a node and an edge.
+- `partial`, with a detail of counts: a version whose packages could not be read, for example `package_dependencies` `null`, instrumentation switched off, or a package the writer could not turn into a purl. A version whose packages are unknown is not a version without packages.
+
+The rematch's `packages` are the IDs of the live `package` nodes, and `packagesComplete` is true only when `packages` is `complete` in that scan. Otherwise rows of packages that are not listed stay as they are, and `vulns` is `partial`.
+
+### `vulns` input
+
+- **Writers.** Only `applyVulnRematch(db, scanId, result)` writes rows for a scan, with `result` from `rematch` in `@virga/vulns`; `upsertVulns` is for rule fixtures and tests. `applyVulnRematch` checks every row first (package ID `package:` plus at most 512 characters, OSV ID and alias format, rank 0 to 4, boolean `kev`, status, the result's `source`, integer `first_seen`, no key twice) and throws a `RangeError` before it writes anything. In one transaction it upserts the rows and records `vulns` coverage. It never deletes a row, keeps `first_seen` and keeps `ignored`.
+- **Reading rows.** `listVulns(db, source?)` returns the rows of every source, or of one, ordered by package and vuln ID. The rematch's `existing` input is `listVulns(db)`, every source, because a match takes over a row of another source with the same key.
+- **Rows.** `package_id` is the package node ID as the rematch got it. Readers count only `open` rows. A row's package may be tombstoned until a rematch with a complete package set fixes it, so rules join `vulns` to live `package` nodes, as CF-001 does.
+- **Coverage.** `vulns` is `complete` when the result is: every listed package parsed, no match is unknown (undecidable version or severity), no advisory record was rejected, the KEV catalog was read, and both the package set and the feed were complete. Otherwise it is `partial`, with a detail made of counts and fixed words only, joined by `; `, at most 1,000 characters: `unknown matches: <n>`, `unparsed packages: <n>`, `rejected advisories: <n>`, `no KEV catalog`, `package set not complete`, `advisory feed not complete`. The detail holds no text from advisories or the scanned account. Decided rows are written either way.
+- **An incomplete feed.** The feed is not complete when the mirror is missing or its sync failed, was partial or is older than 48 hours ([decision 0009](../decisions/0009-advisory-mirror-egress.md)). The caller then passes the records it has, or none (`readOsvFeed([])`), with `feedComplete: false`; without a readable KEV catalog it passes `kev: null`. Then no row is fixed because its advisory is missing, and `vulns` is `partial`.
+- **Rules.** A rule that reads `vulns` must list `vulns` in `requires` (the compiler enforces it); CF-001 also lists `packages`. A rule runs only when every input it requires is `complete` in the scan, so a scan whose rematch was incomplete, failed or did not run before the rules leaves CF-001 `not_evaluated`, and its findings neither open nor resolve.
 
 ## Exposure semantics (evaluator contract)
 
