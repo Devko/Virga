@@ -21,16 +21,39 @@ import { parseArgs } from "node:util";
 
 export const MIN_AGE_DAYS = 14;
 
-export interface Exception {
-  /** The exact lockfile entry: name@version, or the lockfile key of a non-registry package. */
-  package: string;
-  reason: string;
-}
+/**
+ * A failure the project accepts (R8-03). An exception is bound to the failure
+ * it names and, for a package not from the registry, to its exact resolution;
+ * it never accepts an integrity mismatch or a version the check could not
+ * verify.
+ */
+export type Exception =
+  | {
+      /** name@version from the registry, or pnpm@<version> for the pnpm package.json pins. */
+      package: string;
+      /**
+       * Younger than 14 days. The check reaches this only after the locked
+       * integrity matched the registry's, so it accepts only the registry's bytes.
+       */
+      accepts: "too_young";
+      reason: string;
+    }
+  | {
+      /** The lockfile key of a package not resolved from the npm registry. */
+      package: string;
+      accepts: "not_registry";
+      /**
+       * Its resolution exactly as the lockfile records it: the tarball and its
+       * integrity, the repository and commit, or the directory.
+       */
+      resolution: Readonly<Record<string, string>>;
+      reason: string;
+    };
 
 /**
- * Versions the project accepts although they fail the check, for example a
- * security fix that cannot wait 14 days. One entry per exact version, each with
- * a comment and a reason. The check names entries it no longer needs.
+ * Failures the project accepts, for example a security fix that cannot wait
+ * 14 days. One entry per exact version, each with a comment and a reason. The
+ * check names entries it no longer needs.
  */
 export const EXCEPTIONS: readonly Exception[] = [];
 
@@ -51,6 +74,8 @@ export interface LockedPackage {
   registry: boolean;
   /** For a registry package: the lockfile's integrity, compared with the registry's digest. */
   integrity?: string;
+  /** For any other package: its resolution, which an exception must name exactly (R8-03). */
+  resolution?: Readonly<Record<string, string>>;
 }
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -315,7 +340,8 @@ function lockedPackage(key: string, resolution: Map<string, string>): LockedPack
     [...resolution.keys()].every((field) => field === "integrity" || field === "tarball") &&
     (tarball === undefined ||
       tarball === `${REGISTRY}/${name}/-/${name.slice(name.indexOf("/") + 1)}-${version}.tgz`);
-  return registry ? { key, name, version, registry, integrity } : { key, name, version, registry };
+  if (registry) return { key, name, version, registry, integrity };
+  return { key, name, version, registry, resolution: Object.fromEntries(resolution) };
 }
 
 /** pnpm's removeSuffix: a dependency path without its peer and patch suffix (its packages key). */
@@ -828,7 +854,10 @@ export interface CheckOptions {
 
 export interface Failure {
   package: string;
-  /** `mismatch`: the integrity is not the registry's; no exception accepts it. */
+  /**
+   * `mismatch`: the integrity is not the registry's. No exception accepts a
+   * mismatch or `unverified` (R8-03).
+   */
   reason: "too_young" | "not_registry" | "unverified" | "mismatch";
   detail: string;
 }
@@ -1021,6 +1050,80 @@ function versionProblem(
 const byPackage = (a: { package: string }, b: { package: string }) =>
   a.package < b.package ? -1 : a.package > b.package ? 1 : 0;
 
+export class ExceptionError extends CheckError {}
+
+const EXCEPTION_KEY = /^(@[^@/]+\/)?[^@/]+@\S+$/;
+
+/** Why the check cannot apply an exception, or undefined (R8-03). */
+function exceptionProblem(exception: Record<string, unknown>): string | undefined {
+  const { package: key, accepts, resolution, reason } = exception;
+  if (typeof key !== "string" || !EXCEPTION_KEY.test(key)) {
+    return "does not name an exact lockfile key (name@version) or pnpm@<version>";
+  }
+  if (accepts === "too_young") {
+    if (Object.hasOwn(exception, "resolution")) {
+      return "accepts too_young, which applies to the registry's version only, and names a resolution; an exception for a package not from the registry accepts not_registry";
+    }
+  } else if (accepts === "not_registry") {
+    if (!isRecord(resolution)) {
+      return "names no resolution; an exception for a package not from the registry names its resolution exactly as the lockfile records it";
+    }
+    if (Object.values(resolution).some((value) => typeof value !== "string")) {
+      return "names a resolution with a value that is not a string";
+    }
+    if (!["tarball", "commit", "directory"].some((field) => Object.hasOwn(resolution, field))) {
+      return "names no tarball, commit or directory in its resolution";
+    }
+    if (Object.hasOwn(resolution, "tarball") && !Object.hasOwn(resolution, "integrity")) {
+      return "names a tarball without its integrity, so it would accept whatever that URL serves";
+    }
+  } else {
+    return 'must accept "too_young" or "not_registry"; no exception accepts an integrity mismatch or a version the check could not verify';
+  }
+  if (typeof reason !== "string" || reason.trim() === "") return "gives no reason";
+  return undefined;
+}
+
+function checkExceptions(exceptions: readonly Exception[]): void {
+  for (const exception of exceptions) {
+    const fields: Record<string, unknown> = isRecord(exception) ? exception : {};
+    const problem = exceptionProblem(fields);
+    if (problem === undefined) continue;
+    const key = fields.package;
+    const shown =
+      typeof key === "string" && EXCEPTION_KEY.test(key) ? key : preview(String(key ?? ""));
+    throw new ExceptionError(`EXCEPTIONS: the exception for ${shown} ${problem}`);
+  }
+}
+
+function sameResolution(
+  a: Readonly<Record<string, string>>,
+  b: Readonly<Record<string, string>>,
+): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
+  );
+}
+
+/**
+ * Whether `exception` accepts `problem` (R8-03): the same package and the
+ * failure it names, and for a package not from the registry the resolution
+ * locked (`resolution`) exactly. An integrity mismatch or a version the check
+ * could not verify is never accepted.
+ */
+function excepts(
+  exception: Exception,
+  problem: Failure,
+  resolution: Readonly<Record<string, string>> | undefined,
+): boolean {
+  if (problem.reason === "mismatch" || problem.reason === "unverified") return false;
+  if (exception.package !== problem.package || exception.accepts !== problem.reason) return false;
+  if (exception.accepts === "too_young") return true;
+  return resolution !== undefined && sameResolution(exception.resolution, resolution);
+}
+
 export async function checkReleaseAge(
   lockfile: string,
   options: CheckOptions = {},
@@ -1034,6 +1137,7 @@ export async function checkReleaseAge(
   const attempts = Math.max(1, Math.floor(options.attempts ?? 3));
   const retryDelayMs = options.retryDelayMs ?? 1_000;
 
+  checkExceptions(exceptions);
   const packages = parseLockfile(lockfile);
   const pins = options.packageJson === undefined ? [] : parsePackageManager(options.packageJson);
   const wanted = new Map<string, Set<string>>();
@@ -1088,9 +1192,9 @@ export async function checkReleaseAge(
     }
   }
 
-  const accepted = new Set(exceptions.map((exception) => exception.package));
+  const resolutions = new Map(packages.map((locked) => [locked.key, locked.resolution]));
   const isExcepted = (problem: Failure) =>
-    problem.reason !== "mismatch" && accepted.has(problem.package);
+    exceptions.some((exception) => excepts(exception, problem, resolutions.get(problem.package)));
   const failures = problems.filter((problem) => !isExcepted(problem)).sort(byPackage);
   const excepted = problems
     .filter(isExcepted)

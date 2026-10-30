@@ -41,9 +41,11 @@ When a locked version is too young, remove it from `pnpm-lock.yaml` and run `pnp
 
 Exceptions are for versions the project accepts although they fail the check, for example a security fix that cannot wait 14 days:
 
-- Add an entry to `EXCEPTIONS` in `scripts/check-release-age.ts`: `package` is the exact lockfile key (`name@version`, or the key of a package that is not from the registry) or, for the pnpm in `packageManager`, `pnpm@<version>`. `reason` says why, and a comment above it gives the context.
+- Add an entry to `EXCEPTIONS` in `scripts/check-release-age.ts`: `package` is the exact lockfile key (`name@version`, or the key of a package that is not from the registry) or, for the pnpm in `packageManager`, `pnpm@<version>`. `accepts` names the failure it accepts, `reason` says why, and a comment above it gives the context.
+- For a version from the registry, `accepts` is `too_young`. The check reaches that failure only after the locked integrity matched the registry's, so the exception accepts only the registry's bytes for that version (review R8-03).
+- For a package that is not from the registry, `accepts` is `not_registry` and `resolution` is its resolution exactly as `pnpm-lock.yaml` records it: the tarball with its integrity, the repository and commit, or the directory. The check compares it with the locked resolution, so the exception accepts no other source under the same key.
 - One entry covers one exact version. A newer version needs its own entry.
-- An exception never accepts an integrity mismatch.
+- An exception never accepts an integrity mismatch or a version the check could not verify. The check refuses an exception that names another failure, or a tarball without its integrity.
 - The check prints each accepted failure as `excepted` and names entries that no longer match a failure, because the version is gone or old enough. Remove those.
 - pnpm resolves a version younger than `minimumReleaseAge` only if `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` exempts the package.
 - Adding an exception is the maintainer's decision.

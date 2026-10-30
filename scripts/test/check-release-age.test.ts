@@ -6,6 +6,7 @@ import {
   type CheckOptions,
   checkReleaseAge,
   EXCEPTIONS,
+  type Exception,
   LockfileError,
   type MainOptions,
   main,
@@ -202,20 +203,32 @@ describe("parseLockfile", () => {
         name: "tar-dep",
         version: "https://example.com/tar-dep-1.0.0.tgz",
         registry: false,
+        resolution: { tarball: "https://example.com/tar-dep-1.0.0.tgz" },
       },
       {
         key: "git-dep@git+https://github.com/x/git-dep.git#0123abc",
         name: "git-dep",
         version: "git+https://github.com/x/git-dep.git#0123abc",
         registry: false,
+        resolution: { commit: "0123abc", repo: "https://github.com/x/git-dep.git", type: "git" },
       },
       {
         key: "dir-dep@file:../dir-dep",
         name: "dir-dep",
         version: "file:../dir-dep",
         registry: false,
+        resolution: { directory: "../dir-dep", type: "directory" },
       },
-      { key: "@jsr/std__fs@1.0.0", name: "@jsr/std__fs", version: "1.0.0", registry: false },
+      {
+        key: "@jsr/std__fs@1.0.0",
+        name: "@jsr/std__fs",
+        version: "1.0.0",
+        registry: false,
+        resolution: {
+          integrity: "sha512-AAAA",
+          tarball: "https://npm.jsr.io/~/11/@jsr/std__fs/1.0.0.tgz",
+        },
+      },
     ]);
   });
 
@@ -526,7 +539,9 @@ describe("R6-03: the locked integrity is the one the registry publishes", () => 
     });
     const result = await checkReleaseAge(
       text,
-      options(fetch, { exceptions: [{ package: "a@1.0.0", reason: "not for this" }] }),
+      options(fetch, {
+        exceptions: [{ package: "a@1.0.0", accepts: "too_young", reason: "not for this" }],
+      }),
     );
     expect(result.failures).toEqual([
       {
@@ -656,9 +671,9 @@ describe("checkReleaseAge", () => {
       text,
       options(fetch, {
         exceptions: [
-          { package: "a@1.0.0", reason: "security fix" },
-          { package: "b@1.0.0", reason: "no longer needed" },
-          { package: "c@1.0.0", reason: "gone from the lockfile" },
+          { package: "a@1.0.0", accepts: "too_young", reason: "security fix" },
+          { package: "b@1.0.0", accepts: "too_young", reason: "no longer needed" },
+          { package: "c@1.0.0", accepts: "too_young", reason: "gone from the lockfile" },
         ],
       }),
     );
@@ -674,7 +689,9 @@ describe("checkReleaseAge", () => {
     const { fetch } = mockFetch({ a: { "1.0.1": ago(2) } });
     const result = await checkReleaseAge(
       text,
-      options(fetch, { exceptions: [{ package: "a@1.0.0", reason: "older fix" }] }),
+      options(fetch, {
+        exceptions: [{ package: "a@1.0.0", accepts: "too_young", reason: "older fix" }],
+      }),
     );
     expect(result.failures).toMatchObject([{ package: "a@1.0.1", reason: "too_young" }]);
   });
@@ -687,7 +704,16 @@ describe("checkReleaseAge", () => {
     const { fetch, urls } = mockFetch({});
     const result = await checkReleaseAge(
       text,
-      options(fetch, { exceptions: [{ package: "dir-dep@file:../dir-dep", reason: "local" }] }),
+      options(fetch, {
+        exceptions: [
+          {
+            package: "dir-dep@file:../dir-dep",
+            accepts: "not_registry",
+            resolution: { directory: "../dir-dep", type: "directory" },
+            reason: "local",
+          },
+        ],
+      }),
     );
     expect(result.failures).toEqual([
       {
@@ -785,6 +811,196 @@ describe("checkReleaseAge", () => {
     const result = await checkReleaseAge(text, options(fetch, { concurrency: 3 }));
     expect(result).toMatchObject({ checked: 12, failures: [] });
     expect(peak).toBe(3);
+  });
+});
+
+describe("R8-03: an exception accepts only the failure and the resolution it names", () => {
+  /** The review's exception: a@1.0.0, published two days ago, as a security fix. */
+  const YOUNG_A: Exception = { package: "a@1.0.0", accepts: "too_young", reason: "security fix" };
+  /** a 1.0.0 two days old and 1.0.1 one day old, each with the sha512 digest registryEntry locks. */
+  const REGISTRY_A: Registry = { a: { "1.0.0": ago(2), "1.0.1": ago(1) } };
+  const withYoungA = async (entry: string) => {
+    const { fetch } = mockFetch(REGISTRY_A);
+    return checkReleaseAge(lockfile([entry]), options(fetch, { exceptions: [YOUNG_A] }));
+  };
+
+  it("R8-03: still accepts a@1.0.0 from the registry with the registry's integrity", async () => {
+    const result = await withYoungA(registryEntry("a@1.0.0"));
+    expect(result.failures).toEqual([]);
+    expect(result.excepted).toEqual([
+      { package: "a@1.0.0", detail: "published 2026-10-28T12:00:00.000Z, 2.0 days ago" },
+    ]);
+  });
+
+  it("R8-03: an exception for a@1.0.0 does not accept a foreign tarball", async () => {
+    const result = await withYoungA(
+      "  a@1.0.0:\n    resolution: {integrity: sha512-AAAA, tarball: https://attacker.invalid/a-1.0.0.tgz}",
+    );
+    expect(result.failures).toMatchObject([{ package: "a@1.0.0", reason: "not_registry" }]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: an exception for a@1.0.0 does not accept a tarball without integrity", async () => {
+    const result = await withYoungA(
+      "  a@1.0.0:\n    resolution: {tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz}",
+    );
+    expect(result.failures).toMatchObject([{ package: "a@1.0.0", reason: "not_registry" }]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: an exception for a@1.0.0 does not accept a sha384 integrity with version: 1.0.1", async () => {
+    const result = await withYoungA(
+      `  a@1.0.0:\n    resolution: {integrity: sha384-${"B".repeat(64)}}\n    version: 1.0.1`,
+    );
+    expect(result.failures).toEqual([
+      {
+        package: "a@1.0.0",
+        reason: "unverified",
+        detail: "the registry publishes no sha384 digest for this version to compare",
+      },
+    ]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: a non-registry exception accepts only the exact resolution it names", async () => {
+    const TAR = "tar-dep@https://example.com/tar-dep-1.0.0.tgz";
+    const GIT = "git-dep@git+https://github.com/x/git-dep.git#0123abc";
+    const DIR = "dir-dep@file:../dir-dep";
+    const text = lockfile([
+      `  ${TAR}:\n    resolution: {integrity: sha512-AAAA, tarball: https://example.com/tar-dep-1.0.0.tgz}\n    version: 1.0.0`,
+      `  ${GIT}:\n    resolution: {commit: 0123abc, repo: https://github.com/x/git-dep.git, type: git}\n    version: 1.0.0`,
+      `  ${DIR}:\n    resolution: {directory: ../dir-dep, type: directory}\n    version: 1.0.0`,
+    ]);
+    const exception = (key: string, resolution: Record<string, string>): Exception => ({
+      package: key,
+      accepts: "not_registry",
+      resolution,
+      reason: "a fork with the fix",
+    });
+    const check = (exceptions: Exception[]) =>
+      checkReleaseAge(text, options(mockFetch({}).fetch, { exceptions }));
+    const repo = "https://github.com/x/git-dep.git";
+
+    const exact = await check([
+      exception(TAR, {
+        tarball: "https://example.com/tar-dep-1.0.0.tgz",
+        integrity: "sha512-AAAA",
+      }),
+      exception(GIT, { commit: "0123abc", repo, type: "git" }),
+      exception(DIR, { directory: "../dir-dep", type: "directory" }),
+    ]);
+    expect(exact.failures).toEqual([]);
+    expect(exact.excepted.map((e) => e.package)).toEqual([DIR, GIT, TAR]);
+
+    const other = await check([
+      exception(TAR, {
+        tarball: "https://example.com/tar-dep-1.0.0.tgz",
+        integrity: "sha512-BBBB",
+      }),
+      exception(TAR, {
+        tarball: "https://example.com/tar-dep-1.0.1.tgz",
+        integrity: "sha512-AAAA",
+      }),
+      exception(GIT, { commit: "4567def", repo, type: "git" }),
+      exception(GIT, { commit: "0123abc", repo }),
+      exception(DIR, { directory: "../other", type: "directory" }),
+      exception(DIR, { directory: "../dir-dep", type: "directory", path: "x" }),
+    ]);
+    expect(other.failures.map((f) => [f.package, f.reason])).toEqual([
+      [DIR, "not_registry"],
+      [GIT, "not_registry"],
+      [TAR, "not_registry"],
+    ]);
+    expect(other.excepted).toEqual([]);
+  });
+
+  it("R8-03: an exception accepts only the failure it names", async () => {
+    const text = lockfile([
+      registryEntry("a@1.0.0"),
+      "  dir-dep@file:../dir-dep:\n    resolution: {directory: ../dir-dep, type: directory}\n    version: 1.0.0",
+    ]);
+    const { fetch } = mockFetch(REGISTRY_A);
+    const result = await checkReleaseAge(
+      text,
+      options(fetch, {
+        exceptions: [
+          {
+            package: "a@1.0.0",
+            accepts: "not_registry",
+            resolution: {
+              integrity: "sha512-AAAA",
+              tarball: "https://registry.npmjs.org/a/-/a-1.0.0.tgz",
+            },
+            reason: "the registry tarball",
+          },
+          { package: "dir-dep@file:../dir-dep", accepts: "too_young", reason: "local" },
+        ],
+      }),
+    );
+    expect(result.failures.map((f) => [f.package, f.reason])).toEqual([
+      ["a@1.0.0", "too_young"],
+      ["dir-dep@file:../dir-dep", "not_registry"],
+    ]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: refuses an exception it cannot apply, and never one for unverified or mismatch", async () => {
+    const refuses = async (exception: unknown, message: RegExp) => {
+      const { fetch } = mockFetch(REGISTRY_A);
+      const check = checkReleaseAge(
+        lockfile([registryEntry("a@1.0.0")]),
+        options(fetch, { exceptions: [exception as Exception] }),
+      );
+      await expect(check).rejects.toThrow(message);
+    };
+    const NEVER =
+      /^EXCEPTIONS: the exception for a@1\.0\.0 must accept "too_young" or "not_registry"; no exception accepts an integrity mismatch or a version the check could not verify$/;
+    for (const accepts of ["unverified", "mismatch", undefined, "TOO_YOUNG"]) {
+      await refuses({ package: "a@1.0.0", accepts, reason: "fix" }, NEVER);
+    }
+    await refuses(
+      {
+        ...YOUNG_A,
+        resolution: { tarball: "https://example.com/a.tgz", integrity: "sha512-AAAA" },
+      },
+      /^EXCEPTIONS: the exception for a@1\.0\.0 accepts too_young, which applies to the registry's version only, and names a resolution/,
+    );
+    const foreign = (resolution: unknown) => ({
+      package: "a@1.0.0",
+      accepts: "not_registry",
+      resolution,
+      reason: "fork",
+    });
+    await refuses(
+      foreign(undefined),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names no resolution/,
+    );
+    await refuses(foreign("../a"), /^EXCEPTIONS: the exception for a@1\.0\.0 names no resolution/);
+    await refuses(
+      foreign({ tarball: "https://example.com/a.tgz" }),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names a tarball without its integrity/,
+    );
+    await refuses(
+      foreign({ type: "directory" }),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names no tarball, commit or directory/,
+    );
+    await refuses(
+      foreign({ directory: 1, type: "directory" }),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names a resolution with a value that is not a string/,
+    );
+    await refuses(
+      { ...YOUNG_A, reason: " " },
+      /^EXCEPTIONS: the exception for a@1\.0\.0 gives no reason/,
+    );
+    await refuses(
+      { ...YOUNG_A, package: "a" },
+      /^EXCEPTIONS: the exception for "a" does not name an exact lockfile key/,
+    );
+    const { code, err } = await runMain(checkout(), {
+      exceptions: [{ package: "a@1.0.0", accepts: "unverified" } as unknown as Exception],
+    });
+    expect(code).toBe(1);
+    expect(err).toEqual([expect.stringMatching(/^error: EXCEPTIONS: the exception for a@1\.0\.0/)]);
   });
 });
 
@@ -957,7 +1173,7 @@ describe("R6-04: the pnpm version package.json pins", () => {
 
   it("R6-04: the exception list applies to the pnpm version", async () => {
     const result = await check(manifest({ packageManager: "pnpm@10.34.9" }), {
-      exceptions: [{ package: "pnpm@10.34.9", reason: "security fix" }],
+      exceptions: [{ package: "pnpm@10.34.9", accepts: "too_young", reason: "security fix" }],
     });
     expect(result.failures).toEqual([]);
     expect(result.excepted).toMatchObject([{ package: "pnpm@10.34.9" }]);
@@ -1353,6 +1569,12 @@ describe("EXCEPTIONS", () => {
       expect(exception.package).toMatch(/^(@[^@/]+\/)?[^@/]+@\S+$/);
       expect(exception.reason.trim()).not.toBe("");
     }
+  });
+
+  it("R8-03: each names the failure it accepts and, for a non-registry package, its resolution", async () => {
+    const { fetch } = mockFetch({});
+    const check = checkReleaseAge(lockfile([]), options(fetch, { exceptions: EXCEPTIONS }));
+    await expect(check).resolves.toMatchObject({ failures: [] });
   });
 });
 
