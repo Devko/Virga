@@ -45,12 +45,12 @@ Every read from a scanned account goes through the broker, which allows only rea
 - Network access to `registry.npmjs.org` for the release-age check.
 
 ```sh
-node scripts/check-release-age.ts
+node scripts/check-release-age.ts --fresh-checkout
 corepack enable
 pnpm install --frozen-lockfile
 ```
 
-The first command is the release-age check ([CONTRIBUTING.md](../../CONTRIBUTING.md)): every version in `pnpm-lock.yaml` and the pnpm version that `package.json` pins must have been published at least 14 days ago, with the integrity the registry publishes. It runs on Node alone and imports nothing from `node_modules`. Run it before anything installs or starts the checkout's pnpm, and not as `pnpm check:release-age`: that runs the pnpm the commit pins before the check has dated it. `--frozen-lockfile` installs exactly what the check dated, or nothing. It also refuses settings in the root `.npmrc` other than `save-exact=true` and `engine-strict=true`, any `.npmrc` below the root, and any `pnpm` field or `resolutions` in `package.json` ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
+The first command is the release-age check ([CONTRIBUTING.md](../../CONTRIBUTING.md)): every version in `pnpm-lock.yaml` and the pnpm version that `package.json` pins must have been published at least 14 days ago, with the integrity the registry publishes. It runs on Node alone and imports nothing from `node_modules`. Run it before anything installs or starts the checkout's pnpm, and not as `pnpm check:release-age`: that runs the pnpm the commit pins before the check has dated it. `--frozen-lockfile` installs exactly what the check dated, or nothing. It also refuses settings in the root `.npmrc` other than `save-exact=true` and `engine-strict=true`, any `.npmrc` below the root, any `pnpm` field or `resolutions` in `package.json`, and a pnpmfile, a `.pnp.cjs`, a `package.yaml` or a `package.json5` anywhere in the checkout ([CONTRIBUTING.md](../../CONTRIBUTING.md)). `--fresh-checkout` also refuses any `node_modules`: a fresh clone has none, and pnpm could take committed package files as installed. Leave the flag out in a checkout where you installed before, as in [Updates](#updates).
 
 ## The deploy token
 
@@ -201,7 +201,7 @@ They do not protect against build code that:
 - changes the third-party packages an app bundles from `node_modules`: `virga-web` bundles `agents`, `@modelcontextprotocol/server` and `zod`, and the deploy records neither their files nor their `package.json`. Only Wrangler's own packages are recorded (step 2);
 - keeps running and changes a file between the last check and the moment Wrangler reads it.
 
-So the build code must be trusted as far as the token is, and it is covered by the supply chain checks instead: `pnpm install --frozen-lockfile` installs exactly the versions and integrity hashes in `pnpm-lock.yaml`, and the release-age check (`node scripts/check-release-age.ts`) refuses versions younger than 14 days ([CONTRIBUTING.md](../../CONTRIBUTING.md)). These checks hold only where the check runs before the install: CI runs it before any job installs, the [deploy workflow](#deploy-from-ci) before its deploy job, and on a workstation you run it before `pnpm install` ([Prerequisites](#prerequisites), [Updates](#updates)). Prefer to deploy from [CI](#deploy-from-ci). The builds run there in the same step as the token too, but each run starts on a fresh runner from a fresh checkout, nothing a build leaves behind reaches a later run, and the runner holds no other credentials of yours. On a workstation, deploy from a fresh clone, as a user that holds no other credentials you care about.
+So the build code must be trusted as far as the token is, and it is covered by the supply chain checks instead: `pnpm install --frozen-lockfile` installs exactly the versions and integrity hashes in `pnpm-lock.yaml`, and the release-age check (`node scripts/check-release-age.ts`) refuses versions younger than 14 days ([CONTRIBUTING.md](../../CONTRIBUTING.md)). These checks hold only where the check runs before the install: CI runs it before any job installs, the [deploy workflow](#deploy-from-ci) before its deploy job, and on a workstation you run it before `pnpm install` ([Prerequisites](#prerequisites), [Updates](#updates)). Prefer to deploy from [CI](#deploy-from-ci). The builds run there in the same step as the token too, but each run starts on a fresh runner from a fresh checkout, nothing a build leaves behind reaches a later run, and the runner holds no other credentials of yours. On a workstation, deploy from a fresh clone, as a user that holds no other credentials you care about. Run the check there as `node scripts/check-release-age.ts --fresh-checkout`.
 
 ### Behind a proxy
 
@@ -238,7 +238,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-      - run: node scripts/check-release-age.ts
+      - run: node scripts/check-release-age.ts --fresh-checkout
 
   # No package cache: the install takes nothing another run wrote.
   deploy:
@@ -260,7 +260,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
 
-- **`release-age` first.** `pnpm/action-setup` installs the pnpm that `package.json` names, and `pnpm install` installs the packages that the builds and Wrangler run beside the token. Both jobs check out the commit the workflow runs for, so the deploy job installs only what the check dated. Keep `needs: release-age` on every job that installs or deploys. Never set `continue-on-error` in the `release-age` job or its steps, and never give a job that needs it an `if:` with `always()`, `failure()` or `cancelled()`: GitHub would then run the job although the check failed (H-1). `scripts/test/guide.test.ts` checks this example for both.
+- **`release-age` first.** `pnpm/action-setup` installs the pnpm that `package.json` names, and `pnpm install` installs the packages that the builds and Wrangler run beside the token. Both jobs check out the commit the workflow runs for, so the deploy job installs only what the check dated. Keep `needs: release-age` on every job that installs or deploys. Never set `continue-on-error` in the `release-age` job or its steps, and never give a job that needs it an `if:` with `always()`, `failure()` or `cancelled()`: GitHub would then run the job although the check failed (H-1). `scripts/test/guide.test.ts` checks this example with the guard that checks CI's workflows (`scripts/test/workflow-guard.ts`), on the parsed YAML (R10-03).
 - **No cache.** Neither job sets `cache:` on `setup-node` or restores a pnpm store.
 - **The generated rules.** The deploy itself compiles `rules/` and refuses `packages/rules/src/*.gen.ts` that are not the compiler's output (step 6), so the workflow needs no `pnpm rules:check`.
 - **Deploy branch.** Restrict the environment to the branch you deploy, and protect that branch so that only reviewed commits that passed CI reach it.
@@ -510,6 +510,8 @@ What stays behind:
 | `apps/<app>/package.json cannot be read: …` | The file is not JSON. Restore it from git |
 | `apps/<app>/.npmrc: pnpm reads it for every command run in apps/<app> …` | Remove the file. pnpm settings belong in the root `.npmrc`, where the release-age check allows only `save-exact=true` and `engine-strict=true`. With `use-node-version` and `node-mirror:release`, pnpm would download a Node from that mirror and run the build with it. Before the builds, the file is in your checkout; after them, a build created it |
 | `error: .npmrc line <n>: …` or `error: apps/<app>/.npmrc: only the root may hold .npmrc …` from `node scripts/check-release-age.ts` | The root `.npmrc` holds a setting other than `save-exact=true` and `engine-strict=true`, or a directory below the root holds an `.npmrc`, where `lockfile-dir` would install from a lockfile the check never dated and `use-node-version` with `node-mirror` would download and run a Node.js runtime (R9-01, R9-02). Remove it unless you added it yourself; to add a setting, extend the check first |
+| `error: <path>: a fresh checkout holds no node_modules (--fresh-checkout) …` from `node scripts/check-release-age.ts --fresh-checkout` | The checkout holds a `node_modules` directory. In a fresh clone the commit added it: pnpm could take its files as installed, and the check never dated them, so do not install from that commit. In a checkout where you installed before, run the check without `--fresh-checkout` |
+| `error: .pnpmfile.cjs: pnpm loads .pnpmfile.cjs on every command …` (or a `.pnp.cjs`, `package.yaml` or `package.json5`) from `node scripts/check-release-age.ts` | The checkout holds a file that pnpm loads as code or reads as a manifest, which the project does not use (R10-01, R10-02). Unless you added it yourself, treat the commit as untrusted and run no pnpm command in that checkout |
 | `packages/rules/src/rules.gen.ts is not what the rule compiler makes of rules/ …` (or `fixtures.gen.ts`) | Run `pnpm rules:build` and review the diff in `packages/rules/src/*.gen.ts` before you commit it: a change there that no change in `rules/` explains, such as a statement after a rule's SQL, was made by hand or by a tool. If `git status` shows a change there that you did not make, a build or another process wrote it: treat the checkout as compromised |
 | `the rules in rules/ fail the rule compiler …` | A rule or fixture fails. `pnpm rules:check` shows the same errors; fix the rule or fixture, run `pnpm rules:build` and commit both |
 | `…/packages/rules/src/rules.gen.ts changed after the deploy checked it; refusing to run Wrangler` (or `fixtures.gen.ts`) | A generated rule module changed between the check in step 6 and a Wrangler call, for example from a process a build left running. Find what changed it, then run the deploy again |
