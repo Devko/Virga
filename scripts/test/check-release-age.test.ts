@@ -1017,10 +1017,10 @@ describe("CI workflow", () => {
   const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
 
   /** The text of each job under `jobs:`, by job name. */
-  function jobs(): Map<string, string> {
+  function jobs(text: string): Map<string, string> {
     const result = new Map<string, string>();
     let name: string | undefined;
-    for (const line of workflow.slice(workflow.indexOf("\njobs:\n")).split("\n").slice(2)) {
+    for (const line of text.slice(text.indexOf("\njobs:\n")).split("\n").slice(2)) {
       const header = /^ {2}([\w-]+):$/.exec(line);
       if (header?.[1] !== undefined) {
         name = header[1];
@@ -1032,17 +1032,89 @@ describe("CI workflow", () => {
     return result;
   }
 
-  it("R4-07: runs the check in its own job, before every job that installs", () => {
-    const all = jobs();
-    const check = all.get("release-age") ?? "";
+  /** The jobs a job needs, from `needs: a` or `needs: [a, b]`. */
+  function needs(job: string): string[] {
+    const [, one, list] = /^ {4}needs: (?:([\w-]+)|\[([^\]]*)\])$/m.exec(job) ?? [];
+    if (one !== undefined) return [one];
+    return list === undefined ? [] : list.split(",").map((name) => name.trim());
+  }
+
+  /**
+   * A job that installs packages or runs a package manager: pnpm/action-setup
+   * (which installs pnpm itself), a setup-node package cache, or any pnpm, npm,
+   * npx, yarn or corepack command.
+   */
+  const INSTALLS = /uses: pnpm\/action-setup@|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
+
+  /** Jobs other than release-age that install without waiting for it. */
+  const ungated = (text: string) =>
+    [...jobs(text)]
+      .filter(([name, job]) => name !== "release-age" && INSTALLS.test(job))
+      .filter(([, job]) => !needs(job).includes("release-age"))
+      .map(([name]) => name);
+
+  it("R4-07: runs the check in its own job, which installs nothing and runs no package code", () => {
+    const check = jobs(workflow).get("release-age") ?? "";
     expect(check).toContain("- run: node scripts/check-release-age.ts\n");
-    expect(check).not.toContain("pnpm install");
-    const installing = [...all].filter(([, text]) => text.includes("pnpm install"));
+    expect(check).not.toMatch(INSTALLS);
+    expect(needs(check)).toEqual([]);
+  });
+
+  it("R4-07, R6-04: every job that installs packages needs the release-age job", () => {
+    const installing = [...jobs(workflow)].filter(([, job]) => INSTALLS.test(job));
     expect(installing.map(([name]) => name)).toEqual(["check", "deploy-dry-run"]);
-    for (const [, text] of installing) {
-      expect(text).toContain("    needs: release-age\n");
-      expect(text).not.toContain("check-release-age");
-    }
+    expect(ungated(workflow)).toEqual([]);
+  });
+
+  it("R4-07, R6-04: finds a job that installs before the check, whatever it runs", () => {
+    const sha = "0".repeat(40);
+    const synthetic = [
+      "name: CI",
+      "",
+      "jobs:",
+      "  release-age:",
+      "    steps:",
+      "      - run: node scripts/check-release-age.ts",
+      "  setup-only:",
+      "    steps:",
+      `      - uses: pnpm/action-setup@${sha}`,
+      "  lint:",
+      "    needs: build",
+      "    steps:",
+      "      - run: pnpm lint",
+      "  cached:",
+      "    steps:",
+      `      - uses: actions/setup-node@${sha}`,
+      "        with:",
+      "          cache: npm",
+      "  npm-ci:",
+      "    steps:",
+      "      - run: npm ci",
+      "  gated:",
+      "    needs: [build, release-age]",
+      "    steps:",
+      "      - run: npm ci && npx tsc",
+      "  plain:",
+      "    steps:",
+      "      - run: node --version",
+      "",
+    ].join("\n");
+    expect(ungated(synthetic)).toEqual(["setup-only", "lint", "cached", "npm-ci"]);
+  });
+
+  it("R6-04: pnpm/action-setup takes the pnpm version from packageManager, which the check dates", () => {
+    // A version input would bypass package.json, and with it the check.
+    const steps = [...workflow.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)];
+    expect(steps.length).toBeGreaterThan(0);
+    for (const [, inputs] of steps) expect(inputs).not.toMatch(/\bversion:/);
+  });
+
+  it("R4-07: the check imports nothing from node_modules, since CI runs it before any install", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "check-release-age.ts"), "utf8");
+    const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((match) => match[1]);
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) expect(specifier).toMatch(/^node:/);
+    expect(source).not.toMatch(/\bimport\(|\brequire\(/);
   });
 
   it("pins every action by commit SHA and grants read-only permissions", () => {

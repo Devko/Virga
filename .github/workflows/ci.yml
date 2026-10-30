@@ -12,10 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # R4-07: every version in pnpm-lock.yaml was published at least 14 days
-  # ago. minimumReleaseAge does not apply to an install from the lockfile, so
-  # this runs before any job installs. The only job that needs the registry;
-  # it installs nothing and runs no package code.
+  # R4-07, R6-03, R6-04: every version in pnpm-lock.yaml, and the pnpm version
+  # in package.json packageManager, was published at least 14 days ago, and
+  # each locked integrity is the registry's. minimumReleaseAge does not apply
+  # to an install from the lockfile, and pnpm/action-setup installs the pnpm
+  # that packageManager names (so it gets no version input), so every job that
+  # installs needs this one. The only job that needs the registry; it installs
+  # nothing and runs no package code.
   release-age:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
