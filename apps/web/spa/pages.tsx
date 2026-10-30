@@ -81,13 +81,15 @@ function ScanButton({ accountId, onStarted }: { accountId: string; onStarted: ()
   );
 }
 
-/** Saves a blob as a file: a temporary link with `download`, clicked, then revoked. */
+/** Saves a blob as a file: a temporary link with `download`, clicked, then removed and revoked. */
 function saveFile(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = name;
+  document.body.append(link);
   link.click();
+  link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 

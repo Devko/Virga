@@ -216,6 +216,6 @@ The tool audit trail ([design spec](../concept/design-spec.md), "Audit trail") i
 
 No column holds a request body, a token, a header value or a string from a scanned account: `Admin.recordToolCall` checks every field against the shapes above and refuses the row otherwise, and `CHECK` constraints repeat the bounds.
 
-Retention is 90 days. The hourly `DispatchWorkflow` runs a step `audit:purge` after it has started the due scans: it deletes rows older than 90 days before the dispatch time, oldest first, in batches of 5,000 and at most 20 batches per run, so a backlog clears over the following hours. A purge that still fails after the step's retries is logged and leaves the dispatch result intact (`auditPurged: null`).
+The rows hold personal data (the emails of the people who used the tool). Removing an account does not delete its rows: the trail records the removal too, and its rows expire like all others. Retention is 90 days. The hourly `DispatchWorkflow` runs a step `audit:purge` after it has started the due scans: it deletes rows older than 90 days before the dispatch time, oldest first, in batches of 5,000 and at most 20 batches per run, so a backlog clears over the following hours. A purge that still fails after the step's retries is logged and leaves the dispatch result intact (`auditPurged: null`).
 
 `Admin.listToolCalls({ limit, cursor })` returns `{ entries, cursor }`, newest first, `limit` 1 to 200 (default 50); `cursor` is the `id` of the last row of the previous page. The web Worker serves it to admins only (`GET /api/audit`).
