@@ -30,4 +30,34 @@ describe("compileParams", () => {
   it("rejects positional placeholders", () => {
     expect(() => compileParams("SELECT ?")).toThrow(/named/);
   });
+
+  describe("R6-02: bracket and backtick identifiers are quoted", () => {
+    const TAIL = "UPDATE meta SET value = 'forged' WHERE key = 'current_scan'";
+
+    it.each([
+      ["[x--]", "[x--]"],
+      ["[x/*]", "[x/*]"],
+      ["`x--`", "`x--`"],
+    ])("reads no comment in %s, so a statement after it is refused", (_, name) => {
+      const sql = `SELECT 1 AS ${name}; ${TAIL}`;
+      expect(() => compileParams(sql)).toThrow(/exactly one statement/);
+    });
+
+    it.each([
+      ["[x--];", "SELECT 1 AS [x--];\n", "SELECT 1 AS [x--]"],
+      ["[a;b]", "SELECT 1 AS [a;b]", "SELECT 1 AS [a;b]"],
+      ["`a;b`", "SELECT 1 AS `a;b`", "SELECT 1 AS `a;b`"],
+      ["[a:b] and `c:d`", "SELECT 1 AS [a:b], 2 AS `c:d`", "SELECT 1 AS [a:b], 2 AS `c:d`"],
+    ])("keeps %s as one identifier", (_, sql, out) => {
+      expect(compileParams(sql)).toEqual({ sql: out, order: [] });
+    });
+
+    it("has no escape inside brackets: the first ] ends the identifier", () => {
+      expect(() => compileParams(`SELECT 1 AS [a]]; ${TAIL}`)).toThrow(/exactly one statement/);
+    });
+
+    it("rejects an unterminated bracket identifier", () => {
+      expect(() => compileParams("SELECT 1 AS [x")).toThrow(/unterminated \[/);
+    });
+  });
 });

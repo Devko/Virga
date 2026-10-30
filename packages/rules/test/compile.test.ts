@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { compileRules } from "../src/compile.ts";
+import { REVIEW_RULES, reviewFixtures } from "./review-rules.ts";
 
 const SELECT_SCRIPTS = `SELECT 'CF-999' AS rule_id, 'CF-999:' || id AS fingerprint, 'low' AS severity,
        id AS subject_id, COALESCE(props ->> '$.decided', 1) AS decided
@@ -288,6 +289,56 @@ RETURNING 'CF-999' AS rule_id, fingerprint, 'low' AS severity, fingerprint AS su
     expect((await compile(ALL_FIXTURES, "[workers]", sql)).errors).toEqual([
       "CF-999: writes to exposure; a rule may only read",
     ]);
+  });
+});
+
+/** Writes a rules directory with the given rule file and fixtures, and compiles it. */
+async function compileSource(id: string, source: string, fixtures: Record<string, string>) {
+  root = mkdtempSync(join(tmpdir(), "virga-rules-"));
+  const dir = join(root, id);
+  mkdirSync(join(dir, "fixtures"), { recursive: true });
+  writeFileSync(join(dir, "rule.sql"), source);
+  for (const [file, content] of Object.entries(fixtures)) {
+    writeFileSync(join(dir, "fixtures", file), content);
+  }
+  return compileRules(root);
+}
+
+describe("compileRules: one statement (R6-02)", () => {
+  it.each(Object.entries(REVIEW_RULES))("refuses the review's %s", async (id, source) => {
+    const result = await compileSource(id, source, reviewFixtures(id));
+    expect(result.errors).toEqual([`${id}/rule.sql: a rule must contain exactly one statement`]);
+    expect(result.rules).toEqual([]);
+    expect(result.fixtures).toEqual([]);
+  });
+
+  it("refuses a statement after [x--]; on the same line", async () => {
+    const sql = `${SELECT_SCRIPTS.replace("FROM nodes", "FROM nodes AS [x--]")}; DELETE FROM findings`;
+    expect((await compile(ALL_FIXTURES, "[workers]", sql)).errors).toEqual([
+      "CF-999/rule.sql: a rule must contain exactly one statement",
+    ]);
+  });
+
+  it("refuses a statement after a backtick identifier holding --", async () => {
+    const sql = `${SELECT_SCRIPTS.replace("FROM nodes", "FROM nodes AS `x--`")}; DELETE FROM findings`;
+    expect((await compile(ALL_FIXTURES, "[workers]", sql)).errors).toEqual([
+      "CF-999/rule.sql: a rule must contain exactly one statement",
+    ]);
+  });
+
+  it("accepts [x--]; at the end and drops the semicolon", async () => {
+    const sql = `${SELECT_SCRIPTS} AND id NOT IN (SELECT id FROM nodes AS [x--] WHERE false);`;
+    const result = await compile(ALL_FIXTURES, "[workers]", sql);
+    expect(result.errors).toEqual([]);
+    expect(result.rules[0]?.sql.endsWith("WHERE false)")).toBe(true);
+  });
+
+  it.each(["[a;b]", "`a;b`", "[a:b]"])("keeps %s as one column name", async (name) => {
+    const sql = SELECT_SCRIPTS.replace(" AS decided", ` AS decided, 1 AS ${name}`);
+    const result = await compile(ALL_FIXTURES, "[workers]", sql);
+    expect(result.errors).toEqual([]);
+    expect(result.rules[0]?.sql).toContain(`1 AS ${name}`);
+    expect(result.rules[0]?.paramOrder).toEqual([]);
   });
 });
 
