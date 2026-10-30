@@ -237,8 +237,8 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 - When the ID would exceed 512 characters, the path part becomes `sha256:<hex of the path>` (R5-05). The full path stays in `path`, and no rule is dropped for its length.
 - A pair that cannot have that ID gets `<tunnel_id>:sha256:<hex of the JSON array [hostname, path]>`. This happens when an earlier pair already holds the ID (a hostname containing `:`, or a literal path that reads `sha256:<hex>`), or when the hostname alone makes the ID too long. If that ID is taken too, which only a crafted rule can cause, the chunk fails with an error and the class gets a signal.
 - A tunnel yields at most 1,000 `tunnel_hostname` nodes (R5-06). Nodes are kept in rule order, and for a rule without a hostname in sorted hostname order; shadowed rules and rules without a hostname that answer with `http_status` do not count. Beyond that, the tunnel gets `ingress_truncated: true`, and the evaluator returns `unknown` for every entry point of that tunnel.
-- The same holds for size (round 7): the props of a tunnel's emitted `tunnel_hostname` nodes, counted as UTF-8 bytes of their JSON, add up to at most 1 MiB. The node that would pass the budget and every node after it are not emitted, and the tunnel gets `ingress_truncated: true`.
-- A truncated tunnel makes its chunk report `truncated`, so `tunnels` coverage is `partial` for the scan ([decision 0005](../decisions/0005-truncated-collection-coverage.md), round 7). The class is not swept, and rules that require `tunnels` are `not_evaluated`, so no finding of an entry point that was left out resolves.
+- The same holds for size: the props of a tunnel's emitted `tunnel_hostname` nodes, counted as UTF-8 bytes of their canonical JSON as the write path counts them, add up to at most 1 MiB. The node that would pass the budget and every node after it are not emitted, and the tunnel gets `ingress_truncated: true`.
+- A truncated tunnel makes its chunk report `truncated`, so `tunnels` coverage is `partial` for the scan ([decision 0005](../decisions/0005-truncated-collection-coverage.md)). The reasons read `tunnel <id>: ingress has more than 1000 entry points` or `tunnel <id>: ingress has more than 1048576 bytes of entry point props`. The class is not swept, and rules that require `tunnels` are `not_evaluated`, so no finding of an entry point that was left out resolves.
 - `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
 - For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
@@ -268,8 +268,8 @@ Known limits of the per-rule model, and which way each errs:
 - Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
 - A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
 - A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
-- Until the byte budget lands (round 7), the cap bounds the number of nodes, not their size. One path-only rule with a path near the props limit, expanded over 1,000 hostnames, yields about 64 MB of props for one tunnel.
-- Until round 7 implements decision 0005, a truncated tunnel leaves `tunnels` coverage `complete`: the sweep deletes entry points that an earlier scan emitted past the cap, and their CF-004 findings resolve.
+- One node whose own props exceed the 64 KB limit (a path of more than about 64 KB) is not truncation: the write path refuses the whole `tunnels` chunk, so the class ends `error` or `partial` and the other tunnels of that chunk are not refreshed. This errs toward `not evaluated`.
+- Decision 0005 is coarse: one truncated tunnel keeps every tunnel node of the account at its last props and stops CF-004, CF-010 and CF-011 for the account.
 
 ### tokens
 
@@ -427,6 +427,8 @@ What the scan records, and what rules and the evaluator may rely on:
 - **Coverage per class and scan:**
   - `complete`: all chunks were written
   - `partial`: some chunks were written before one failed; collection of a class stops at the first failed chunk. Also `partial`: every chunk was written, but one reported `truncated` because it left resources of the class out ([decision 0005](../decisions/0005-truncated-collection-coverage.md)); collection continues after such a chunk, and the coverage row names the reason
+    - A chunk reports it as `CollectorOutput.truncated: string[]`, one reason per unit, at most 100 reasons of at most 1,024 characters (`TRUNCATED_LIMITS`). A chunk outside these limits is refused like other invalid output.
+    - The coverage detail reads `truncated (<count>): <reasons joined by "; ">`, at most 20 reasons and 1,000 characters, and is untrusted. It follows a failed chunk's error when both apply. The scan summary's class entry has `truncated: <count>`.
   - `no_permission`: the API answered 401 or 403
   - `error`: anything else
 - **Sweep** runs only for `complete` classes. A sweep never moves the current scan. The write path refuses the sweep of a scan that is not current.

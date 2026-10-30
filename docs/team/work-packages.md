@@ -110,6 +110,24 @@ The integrator adds the CF-024 fixtures for the `unread` and `unknown` entries o
 | `web-removing` | The `removing` state in the SPA (notice, retry, no Start scan) and in the MCP `list_accounts` description | `apps/web/**` | Render and route tests |
 | `review-6` | Read-only verification of R4-01 to R4-07 and R5-01 to R5-08; review of the round 5 and round 6 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
 
+Round 7 status (2026-10-30): all four packages are merged.
+
+- Decision 0005 and the 1 MiB props budget per tunnel are implemented, with an e2e test in which a finding past the cap stays open.
+- Wrangler's environment comes from an allowlist. `NODE_OPTIONS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and `OPENSSL_CONF` stop the deploy, also in a dry run. `assets.directory` must stay inside the app directory.
+- The SPA and the MCP tools show the `removing` state.
+- The [round 6 verification](../reviews/2026-10-30-verification-round-6.md) confirms R4-01, R4-03, R4-06, R5-01 to R5-06 and R5-08. It rates R4-02, R4-04, R4-05, R4-07 and R5-07 as partly fixed, and found R6-01 to R6-07.
+
+## Packages for phase 1, round 8
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `deploy-build` | R6-01: builds first, then the checks; the checked config bytes compared before every Wrangler call; Wrangler run from a verified location; symlinks in `spa/public` refused | `scripts/**` except `check-release-age.ts` and its test, `docs/operator/**`, `apps/web/vite.config.ts` | A test in which a build rewrites the config fails the deploy; the dry run passes |
+| `supply-chain-2` | R6-03: a strict lockfile reader; R6-04: the pnpm version in `packageManager` under the age rule | `scripts/check-release-age.ts`, its test, `.github/workflows/**`, `CONTRIBUTING.md` | Tests for the three lockfile layouts and a young pnpm |
+| `rules-5` | R6-02: bracket identifiers in the parameter scan, no statement tail, and rule runs that write nothing at run time | `packages/rules/**`, `packages/graph/**` | Compile tests with `[x--];` and `[a;b]`; a runtime test in workerd |
+| `collectors-5` | R6-05 (a Pages value that is null or not a string is uninspected), R6-06 (R2 responses without `domain` or `domains`), a `tunnel_hostname` over the props limit counted as truncation | `packages/collectors/**`, `rules/CF-021/fixtures/**`, `rules/CF-024/fixtures/**` | Collector tests and undecided fixtures per case |
+| `core-web-5` | R6-07 (`last_scan_at` only for a run the index holds); the MCP and SPA text for a `partial` class with resources left out; removal offered for a `removing` account whose summary fails | `apps/core/**`, `apps/web/**` except `vite.config.ts` | Tests per case |
+| `review-7` | Read-only review of the round 7 changes | none (report only) | New findings verified with a concrete input |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.

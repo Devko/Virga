@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 3 review](2026-10-30-security-review-round-3.md) fixed? (2) review of the round 4 changes, at commit 2a5c436
-- Status: R5-01 to R5-08 fixed in round 6 of the [work packages](../team/work-packages.md); not yet verified by a review. Leftovers are listed below the table
+- Status: R5-01 to R5-08 fixed in round 6 of the [work packages](../team/work-packages.md). The [round 6 verification](2026-10-30-verification-round-6.md) confirms all of them except R5-07, which is partly fixed (a Pages value that is null or not a string, R6-05). Round 7 closed the R5-03 and R5-06 leftovers below; the others remain
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |

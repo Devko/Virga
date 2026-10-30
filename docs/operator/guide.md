@@ -356,7 +356,7 @@ Where to look:
 The removal runs in this order:
 
 1. The broker deletes the stored token, then the account's rate budget (`TokenIntake.remove`). A scan that still runs gets no more API access.
-2. Core marks the account `removing` in the index, deletes its whole graph (nodes, history and findings), then its index rows (`accounts`, `scan_runs`) (`Admin.removeAccount`, R5-08). Until the last step the account stays listed with status `removing`. From the first step on, the dispatcher and **Start scan** start no scan of it, and a scan that begins then, for example one queued before the removal, stops at its first step without an API call or a write (R4-03). A scan that still runs is refused at its next write once the graph is deleted.
+2. Core marks the account `removing` in the index, deletes its whole graph (nodes, history and findings), then its index rows (`accounts`, `scan_runs`) (`Admin.removeAccount`, R5-08). Until the last step the account stays listed with status `removing`; the UI marks it **removal pending**, hides **Start scan**, and offers **Remove account again…**, which finishes the removal. From the first step on, the dispatcher and **Start scan** start no scan of it, and a scan that begins then, for example one queued before the removal, stops at its first step without an API call or a write (R4-03). A scan that still runs is refused at its next write once the graph is deleted.
 
 | Response | Meaning |
 | --- | --- |
@@ -447,6 +447,7 @@ What stays behind:
 | A class shows `no_permission` | A permission group is missing; see [the inventory table](#inventory-profile). Rules that need the class show `not evaluated` |
 | `workers` is `no_permission` although the token has Workers Metadata Read-Only | The version detail endpoint, see [above](#inventory-profile) (**verify**) |
 | `storage` is `no_permission` or `partial` | D1 Read, Workers KV Storage Read or Workers R2 Storage Read is missing |
+| `tunnels` is `partial` with every chunk done and the detail `truncated (…)` | A remotely managed tunnel's ingress yields more than 1,000 entry points, or more than 1 MiB of their props: rules without a hostname are expanded per hostname ([decision 0005](../decisions/0005-truncated-collection-coverage.md)). CF-004, CF-010 and CF-011 stay `not evaluated`, and the tunnels' earlier entry points and findings are kept, until the ingress fits. Reduce the rules without a hostname, or split the tunnel |
 | Scans pause and continue later | The rate budget: 1,200 REST requests per 5 minutes per token, shared with everything else that uses the same token. The broker keeps a margin and waits instead of risking the 5-minute block |
 | A scan stays `running` | A scan running longer than 12 hours counts as hung and is replaced by the next one (decision 0002) |
 | Nothing is scanned | The account is `paused`, or the token was removed. Check the index row and onboard again |

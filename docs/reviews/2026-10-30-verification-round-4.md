@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 2 review](2026-10-30-security-review.md) fixed? (2) review of the round 3 changes, at commit c5f076c
-- Status: R4-01 to R4-07 fixed in round 5 of the [work packages](../team/work-packages.md), except the collector half of R4-02 (an `r2.dev` domain whose `enabled` cannot be read), which was fixed in round 6 (`tunnels-limits`, 3bf63ef). No review has verified the round 5 and round 6 fixes yet: the [round 5 verification](2026-10-30-verification-round-5.md) reviewed the round 4 code.
+- Status: R4-01 to R4-07 fixed in round 5 of the [work packages](../team/work-packages.md), except the collector half of R4-02 (an `r2.dev` domain whose `enabled` cannot be read), which was fixed in round 6 (`tunnels-limits`, 3bf63ef). The [round 6 verification](2026-10-30-verification-round-6.md) confirms R4-01, R4-03 and R4-06 and rates R4-02, R4-04, R4-05 and R4-07 as partly fixed; their rest continues as R6-02 to R6-04 and R6-06.
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |
