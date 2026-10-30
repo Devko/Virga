@@ -342,6 +342,14 @@ export function dotEnvFiles(dir: string): string[] {
 export const dotEnvProblem = (path: string) =>
   `${path}: Wrangler would load it into its environment, where it can change the API host, the Worker name or the environment that is deployed. Remove it; the deploy takes settings only from its own environment`;
 
+/**
+ * The forms of a secret value that output can hold: as set, and trimmed, as
+ * tools use a value read from a file with its trailing newline. Output is
+ * redacted line by line, so a value with a newline would never match.
+ */
+export const secretForms = (value: string): string[] =>
+  [...new Set([value, value.trim()])].filter((form) => form !== "");
+
 /** Replaces known secret values and anything shaped like a Cloudflare credential. */
 export function redact(text: string, secrets: readonly string[]): string {
   let out = text;

@@ -30,6 +30,7 @@ import {
   proxyNotice,
   RefusedError,
   redact,
+  secretForms,
   unsafeProblems,
 } from "./lib/run.ts";
 import {
@@ -114,7 +115,10 @@ async function main(): Promise<number> {
     }
   }
 
-  secrets.push(token);
+  // Before anything runs, the builds included: the token, and every web
+  // setting the deploy may upload, each also trimmed.
+  secrets.push(...secretForms(token));
+  for (const name of WEB_SETTINGS) secrets.push(...secretForms(process.env[name] ?? ""));
   const credentials = dryRun ? "none" : "token";
   for (const line of proxyNotice(process.env)) console.log(line);
   const dropped = droppedSettings(process.env, credentials);

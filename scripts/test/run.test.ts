@@ -27,6 +27,7 @@ import {
   proxyNotice,
   type RunnerOptions,
   redact,
+  secretForms,
   UNSAFE_VARS,
   unsafeVars,
   type WranglerCommand,
@@ -46,6 +47,21 @@ describe("redact", () => {
 
   it("leaves short values alone so it never redacts common words", () => {
     expect(redact("a b c", ["a"])).toBe("a b c");
+  });
+
+  it("deploy environment: redacts a value read with a trailing newline, in the form it is used", () => {
+    const set = "R10-REDACT-MARKER-0123456789\n";
+    const line = "Authorization: Bearer R10-REDACT-MARKER-0123456789";
+    // Output is redacted line by line, so the value as set never matches.
+    expect(redact(line, [set])).toBe(line);
+    expect(secretForms(set)).toEqual([set, "R10-REDACT-MARKER-0123456789"]);
+    expect(redact(line, secretForms(set))).toBe("Authorization: Bearer [redacted]");
+    expect(secretForms("  padded-value-0123  ")).toEqual([
+      "  padded-value-0123  ",
+      "padded-value-0123",
+    ]);
+    expect(secretForms("plain-value-0123")).toEqual(["plain-value-0123"]);
+    expect(secretForms("")).toEqual([]);
   });
 });
 
