@@ -80,7 +80,7 @@ Derived inputs: `exposure` (exposure evaluator), and from phase 2 `packages` and
 | `number` | number \| null | Version number |
 | `created_on` | string \| null | |
 | `source` | string \| null | `wrangler`, `dashboard`, `api`, ... |
-| `plain_text_vars` | `{ name, kind, looks_secret, secret_pattern }[]` | Bindings that keep their value in plain text, without the values: `plain_text` (field `text`) and `json` (field `json`, every string and object key tested). `kind` is the binding type. `secret_pattern` is the strongest match in the order `cfat_`, `cfut_`, `cfk_`, `aws_access_key`, `private_key`, `high_entropy`, or `null`. `looks_secret` is `null` when there was no value to inspect |
+| `plain_text_vars` | `{ name, kind, looks_secret, secret_pattern }[]` | Bindings that keep their value in plain text, without the values: `plain_text` (field `text`) and `json` (field `json`, every string and object key tested). `kind` is the binding type. `secret_pattern` is the strongest match in the order `cfat_`, `cfut_`, `cfk_`, `aws_access_key`, `private_key`, `high_entropy`, or `null`. `looks_secret` is `null` when there was no value to inspect: a `plain_text` binding whose `text` is not a string, or a `json` binding without `json` (R6-05) |
 | `secret_names` | string[] | Names of `secret_text` bindings |
 
 Which versions: every version with traffic in the current deployment, and every version a preview URL points to. Phase 1 does not list the full version history.
@@ -111,14 +111,14 @@ Emitted only when the script has `preview_urls: true`.
 | `production_branch` | string \| null | |
 | `subdomain` | string | `<project>.pages.dev` |
 | `preview_deployments` | string | `all`, `none` or `custom`, from the preview branch settings |
-| `plain_text_vars` | `{ name, environment, kind, looks_secret, secret_pattern }[]` | Plain-text env vars of the preview and production configs, sorted by environment, then name. Secret env vars are never read and values are never stored; `looks_secret` is `null` when the API returns no value. What the API did not return is recorded, not dropped (R5-07): see below |
+| `plain_text_vars` | `{ name, environment, kind, looks_secret, secret_pattern }[]` | Plain-text env vars of the preview and production configs, sorted by environment, then name. Secret env vars are never read and values are never stored; `looks_secret` is `null` when the API returns no string value: `value` missing, `null` or of another type (R6-05). What the API did not return is recorded, not dropped (R5-07): see below |
 
 Two entry shapes mark what could not be read, both with `looks_secret` and `secret_pattern` `null`:
 
 - `kind: "unread"`, `name: null`: the environment has no `env_vars` object (no `deployment_configs`, no config for the environment, or `env_vars` missing, `null` or not an object). One entry per such environment.
 - `kind: "unknown"`: a variable that is neither `plain_text` nor `secret_text`. Its value is not read.
 
-A variable whose value is `null`, the API's delete marker, yields nothing.
+A variable that is itself `null` in `env_vars` (`{ "NAME": null }`, the API's delete marker) yields nothing. A `plain_text` variable whose `value` is `null` is an entry with `looks_secret: null`.
 
 `pages_domain` — native ID: custom domain or `<project>.pages.dev`; name: same. Props: `project`, `status`.
 
@@ -137,7 +137,7 @@ A variable whose value is `null`, the API's delete marker, yields nothing.
 | `enabled` | boolean \| null | `null` when the API omits the field or sends another type |
 | `zone_id` | string \| null | |
 
-Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted unless the API says `enabled: false`; `enabled` is `null` when the flag is missing or not a boolean (R4-02). CF-021 version 3 and the exposure evaluator already treat any `enabled` other than `false` as possibly public, for custom and `r2.dev` domains: CF-021 returns an undecided row, and the evaluator decides the domain `unknown`.
+Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted unless the API says `enabled: false`; `enabled` is `null` when the flag is missing or not a boolean (R4-02). A managed response without a string `domain` while `enabled` is not `false`, or a custom domains response whose `domains` is not an array, fails the `storage` chunk instead of reading as no entry point (R6-06): the class is not `complete`, so CF-021 is `not_evaluated` and its findings stay as they are. CF-021 version 3 and the exposure evaluator already treat any `enabled` other than `false` as possibly public, for custom and `r2.dev` domains: CF-021 returns an undecided row, and the evaluator decides the domain `unknown`.
 
 `d1_database` — native ID: database UUID; name: database name. Props: `created_at` (string \| null).
 
@@ -238,8 +238,8 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 - A pair that cannot have that ID gets `<tunnel_id>:sha256:<hex of the JSON array [hostname, path]>`. This happens when an earlier pair already holds the ID (a hostname containing `:`, or a literal path that reads `sha256:<hex>`), or when the hostname alone makes the ID too long. If that ID is taken too, which only a crafted rule can cause, the chunk fails with an error and the class gets a signal.
 - A tunnel yields at most 1,000 `tunnel_hostname` nodes (R5-06). Nodes are kept in rule order, and for a rule without a hostname in sorted hostname order; shadowed rules and rules without a hostname that answer with `http_status` do not count. Beyond that, the tunnel gets `ingress_truncated: true`, and the evaluator returns `unknown` for every entry point of that tunnel.
 - The same holds for size: the props of a tunnel's emitted `tunnel_hostname` nodes, counted as UTF-8 bytes of their canonical JSON as the write path counts them, add up to at most 1 MiB. The node that would pass the budget and every node after it are not emitted, and the tunnel gets `ingress_truncated: true`.
-- A node whose own props would exceed the graph's props limit (64 KB) is not emitted either, and the tunnel gets `ingress_truncated: true` (round 8). Later nodes that fit are still emitted.
-- A truncated tunnel makes its chunk report `truncated`, so `tunnels` coverage is `partial` for the scan ([decision 0005](../decisions/0005-truncated-collection-coverage.md)). The reasons read `tunnel <id>: ingress has more than 1000 entry points` or `tunnel <id>: ingress has more than 1048576 bytes of entry point props`. The class is not swept, and rules that require `tunnels` are `not_evaluated`, so no finding of an entry point that was left out resolves.
+- A node whose own props would exceed the graph's props limit (`LIMITS.propsBytes`, 65,536 bytes of canonical JSON) is not emitted either, nor its `ROUTES_TO` edge, and the tunnel gets `ingress_truncated: true` (round 8). It counts toward neither the 1,000-node cap nor the byte budget, and later nodes that fit are still emitted. The IDs of the other nodes are the same as without the limit.
+- A truncated tunnel makes its chunk report `truncated`, so `tunnels` coverage is `partial` for the scan ([decision 0005](../decisions/0005-truncated-collection-coverage.md)). There is one reason per tunnel. It reads `tunnel <id>: ingress has more than 1000 entry points`, `tunnel <id>: ingress has more than 1048576 bytes of entry point props`, or `tunnel <id>: ingress has an entry point with more than 65536 bytes of props`. When an oversized node and one of the other two limits both apply, the reason names both, joined by ` and `: `tunnel <id>: ingress has more than 1000 entry points and an entry point with more than 65536 bytes of props`. The class is not swept, and rules that require `tunnels` are `not_evaluated`, so no finding of an entry point that was left out resolves.
 - `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
 - For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
@@ -269,7 +269,6 @@ Known limits of the per-rule model, and which way each errs:
 - Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
 - A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
 - A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
-- Until round 8, one node whose own props exceed the 64 KB limit (a path of more than about 64 KB) is not truncation: the write path refuses the whole `tunnels` chunk, so the class ends `error` or `partial` and the other tunnels of that chunk are not refreshed. This errs toward `not evaluated`.
 - Decision 0005 is coarse: one truncated tunnel keeps every tunnel node of the account at its last props and stops CF-004, CF-010 and CF-011 for the account.
 
 ### tokens
