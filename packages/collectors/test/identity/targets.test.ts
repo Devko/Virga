@@ -120,6 +120,48 @@ describe("appTargets", () => {
     }
   });
 
+  const publicPaths = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      behavior: "public",
+      path_pattern: `/p${String(i).padStart(3, "0")}`,
+    }));
+
+  it("R2-06: keeps every override of a Worker or all-Workers target, verbatim", () => {
+    const overrides = publicPaths(21);
+    const long = { behavior: "public", path_pattern: `/${"q".repeat(511)}` };
+    const destinations = [
+      { type: "all_workers", overrides },
+      { type: "worker", worker_id: "w1", overrides: [...overrides, long] },
+    ];
+    expect(appTargets({ destinations }, scripts)).toEqual([
+      { kind: "all_workers", scope: "all", overrides },
+      { kind: "worker", script: "my-worker", scope: "all", overrides: [...overrides, long] },
+    ]);
+    const hundred = publicPaths(100);
+    expect(
+      appTargets({ destinations: [{ type: "all_workers", overrides: hundred }] }, null),
+    ).toEqual([{ kind: "all_workers", scope: "all", overrides: hundred }]);
+  });
+
+  it("R2-06: maps more overrides than the limit to other, keeping what scopes it", () => {
+    const overrides = publicPaths(101);
+    const destinations = [
+      { type: "all_workers", overrides },
+      { type: "all_preview_workers", overrides },
+      { type: "worker", worker_id: "w1", overrides },
+      { type: "public", uri: "a.example.com/app", overrides },
+    ];
+    const targets = appTargets({ destinations }, scripts);
+    expect(targets.map((t) => t.kind)).toEqual(["other", "other", "other", "other"]);
+    // The evaluator limits an `other` target by its API type, Worker ID or host.
+    expect(targets.map((t) => (t.kind === "other" ? t.raw : null))).toEqual([
+      expect.objectContaining({ type: "all_preview_workers" }),
+      expect.objectContaining({ type: "all_workers" }),
+      expect.objectContaining({ type: "public", uri: "a.example.com/app" }),
+      expect.objectContaining({ type: "worker", worker_id: "w1" }),
+    ]);
+  });
+
   it("maps Worker destinations to the script, or to other when it cannot be resolved", () => {
     const destinations = [
       { type: "worker", worker_id: "w1" },
