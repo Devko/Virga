@@ -83,21 +83,15 @@ export function d1ScanIndex(db: D1Database): ScanIndex {
 
     async finishRun(run: ScanRunEnd) {
       await db.batch([
+        // Only a running row, which beginRun wrote: a scan instance that runs
+        // again after it ended (R2-07) keeps the first result, and a removed
+        // account gets no row back.
         db
           .prepare(
-            `INSERT INTO scan_runs (id, account_id, started_at, finished_at, status, summary)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (id) DO UPDATE SET finished_at = excluded.finished_at,
-               status = excluded.status, summary = excluded.summary`,
+            `UPDATE scan_runs SET finished_at = ?, status = ?, summary = ?
+             WHERE id = ? AND account_id = ? AND status = 'running'`,
           )
-          .bind(
-            run.id,
-            run.accountId,
-            run.startedAt,
-            run.finishedAt,
-            run.status,
-            JSON.stringify(run.summary),
-          ),
+          .bind(run.finishedAt, run.status, JSON.stringify(run.summary), run.id, run.accountId),
         // Never move last_scan_at back, e.g. when an older instance finishes late.
         db
           .prepare(

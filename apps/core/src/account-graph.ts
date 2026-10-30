@@ -19,7 +19,7 @@ import {
   sweep,
 } from "@virga/graph";
 import { RULES, type RuleHit, runRule } from "@virga/rules";
-import { describe } from "./errors.ts";
+import { describe, StaleScanError } from "./errors.ts";
 import { checkOutput } from "./graph/chunk.ts";
 import { DEFAULT_EVALUATORS, type Evaluators } from "./graph/evaluators.ts";
 import { getFinding, graphSummary, listFindings, neighborhood } from "./graph/read.ts";
@@ -36,8 +36,28 @@ import type {
   ChunkCounters,
   ExposureCounters,
   RulesCounters,
+  ScanEnd,
   ScanGraph,
 } from "./scan/types.ts";
+
+/**
+ * Scan-scoped writes come only from the running scan that is current in the
+ * graph (R2-07). A scan marked failed as stale, or one a newer scan took
+ * over, may still have a Workflow instance that retries steps: its chunks
+ * would mark nodes as seen by it, and the newer scan's sweep would tombstone
+ * them. Call it synchronously before the write, after any await.
+ */
+function assertCurrent(db: SqlRunner, scanId: string): void {
+  const row = scanRow(db, scanId);
+  if (row?.status !== "running" || row.current !== scanId) throw new StaleScanError(scanId);
+}
+
+const scanRow = (db: SqlRunner, scanId: string) =>
+  db.query<{ status: ScanEnd | "running"; current: string | null }>(
+    `SELECT status, (SELECT value FROM meta WHERE key = 'current_scan') AS current
+     FROM scans WHERE id = ?`,
+    scanId,
+  )[0];
 
 /**
  * The security graph of one scanned account. One instance per account, named
@@ -79,7 +99,9 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
   }
 
   async applyBatch(batch: Batch): Promise<BatchResult> {
-    return applyBatch(this.db, await prepareBatch(batch));
+    const prepared = await prepareBatch(batch);
+    assertCurrent(this.db, batch.scanId);
+    return applyBatch(this.db, prepared);
   }
 
   /** Writes one collector chunk: nodes and edges, signals, and (single chunk only) insights. */
@@ -96,6 +118,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
       nodes: output.nodes,
       edges: output.edges,
     });
+    assertCurrent(this.db, scanId);
     const written = applyBatch(this.db, batch);
     if (signals.length > 0) setSignals(this.db, signals, batch.at);
     if (insights) replaceInsights(this.db, insights, batch.at);
@@ -109,6 +132,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     chunks?: { total: number; done: number },
     detail?: string | null,
   ): void {
+    assertCurrent(this.db, scanId);
     recordCoverage(this.db, {
       scanId,
       resourceClass,
@@ -120,6 +144,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
   }
 
   sweep(scanId: string, resourceClass: string): SweepResult {
+    assertCurrent(this.db, scanId);
     return sweep(this.db, scanId, resourceClass);
   }
 
@@ -129,6 +154,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
    * retrying a deterministic evaluator would not help.
    */
   computeExposure(scanId: string): ExposureCounters {
+    assertCurrent(this.db, scanId);
     try {
       const rows = this.evaluators.exposure(this.db);
       replaceExposure(this.db, rows);
@@ -155,6 +181,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
       opened: 0,
       resolved: 0,
     };
+    assertCurrent(this.db, scanId);
     try {
       for (const run of this.evaluators.rules(this.db, this.evaluators.ruleSet, scanId)) {
         counters.rules++;
@@ -171,8 +198,19 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     }
   }
 
-  finishScan(scanId: string, status: "complete" | "failed", at = Date.now()): void {
-    finishScan(this.db, scanId, status, at);
+  /**
+   * Ends a running scan and returns the status it ended with; a running scan
+   * that is no longer current ends `failed`. A scan that already ended keeps
+   * its status, so a retried step changes nothing and a scan marked failed
+   * as stale stays failed.
+   */
+  finishScan(scanId: string, status: ScanEnd, at = Date.now()): ScanEnd {
+    const row = scanRow(this.db, scanId);
+    if (!row) throw new StaleScanError(scanId);
+    if (row.status !== "running") return row.status;
+    const end = row.current === scanId ? status : "failed";
+    finishScan(this.db, scanId, end, at);
+    return end;
   }
 
   /** Runs one compiled rule. One call per rule keeps each request well below the CPU limit. */

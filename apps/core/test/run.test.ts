@@ -10,7 +10,7 @@ import { d1ScanIndex } from "../src/index-db.ts";
 import { STALE_SCAN_MS } from "../src/scan/policy.ts";
 import { runScan } from "../src/scan/run.ts";
 import { fakeStep } from "./fake-step.ts";
-import { type ApiState, apiRoutes, bucket, initialState, ZONE_A } from "./fixtures/api.ts";
+import { type ApiState, apiRoutes, bucket, initialState, record, ZONE_A } from "./fixtures/api.ts";
 import {
   type FakeEvaluators,
   fakeEvaluators,
@@ -34,7 +34,13 @@ interface Harness {
   id(name: string): string;
   scan(
     name: string,
-    options?: { collectors?: readonly Collector[]; now?: number; replay?: Map<string, unknown> },
+    options?: {
+      collectors?: readonly Collector[];
+      now?: number;
+      replay?: Map<string, unknown>;
+      /** Runs before the step of that name. */
+      before?: Record<string, () => Promise<unknown>>;
+    },
   ): Promise<{
     summary: Awaited<ReturnType<typeof runScan>>;
     steps: ReturnType<typeof fakeStep>;
@@ -58,9 +64,15 @@ async function harness(evaluators = fakeEvaluators()): Promise<Harness> {
       const scanId = id(name);
       const steps = fakeStep(options.replay);
       const now = options.now ?? NOW;
+      const before = options.before ?? {};
       const summary = await runScan(
         {
-          step: steps.step,
+          step: {
+            async do(name, config, callback) {
+              await before[name]?.();
+              return steps.step.do(name, config, callback);
+            },
+          },
           graph: () => stub,
           index: d1ScanIndex(env.INDEX),
           reader: (id) => {
@@ -334,6 +346,103 @@ describe("runScan", () => {
       { id: "other", status: "failed" },
       { id: h.id("s2"), status: "complete" },
     ]);
+  });
+
+  it("R2-07: a scan marked failed as stale stops at its next write, without coverage, sweep, exposure or rules", async () => {
+    const h = await harness();
+    // While A collects its second chunk, it has run for more than 12 hours
+    // and the next scan of the account takes over.
+    const workers: Collector<number> = {
+      resourceClass: "workers",
+      permissions: [],
+      plan: async () => [[1], [2]],
+      async collect(_ctx, [i]) {
+        if (i === 2) {
+          expect(await h.stub.beginScan(h.id("B"), "full", NOW + STALE_SCAN_MS + 1)).toEqual({
+            started: true,
+          });
+        }
+        return { nodes: [{ type: "worker_script", nativeId: `w${i}`, name: `w${i}` }], edges: [] };
+      },
+    };
+    const { summary, steps } = await h.scan("A", { collectors: [workers, dnsStub] });
+
+    expect(steps.names()).toEqual([
+      "begin",
+      "plan:workers",
+      "collect:workers:1",
+      "collect:workers:2",
+      "finish",
+    ]);
+    expect(steps.record("collect:workers:2")?.attempts).toBe(1);
+    expect(summary).toMatchObject({ status: "failed", finishedAt: NOW + 60_000 });
+    expect(summary.detail).toMatch(/StaleScanError: scan A-[0-9a-f]+ is not the running scan/);
+    expect(summary.classes.workers).toMatchObject({ chunks: 2, done: 1 });
+    expect(summary.classes.dns).toBeUndefined();
+    expect(h.evaluators.calls).toEqual({ exposure: 0, rules: [] });
+    expect(await sql(h.stub, "SELECT id, seen_scan FROM nodes")).toEqual([
+      { id: "worker_script:w1", seen_scan: h.id("A") },
+    ]);
+    expect(await sql(h.stub, "SELECT count(*) AS n FROM coverage")).toEqual([{ n: 0 }]);
+    expect(await sql(h.stub, "SELECT id, status FROM scans ORDER BY started_at")).toEqual([
+      { id: h.id("A"), status: "failed" },
+      { id: h.id("B"), status: "running" },
+    ]);
+    const run = await scanRun(h.id("A"));
+    expect(run).toMatchObject({ status: "failed", finished_at: NOW + 60_000 });
+    expect(JSON.parse(run?.summary ?? "{}")).toMatchObject({ status: "failed" });
+  });
+
+  it("R2-07: a scan marked failed as stale before its finish step ends failed in the index too", async () => {
+    const h = await harness();
+    const takeover = () => h.stub.beginScan(h.id("B"), "full", NOW + STALE_SCAN_MS + 1);
+    const { summary } = await h.scan("A", { before: { finish: takeover } });
+    expect(summary.rules?.status).toBe("complete");
+    expect(summary.status).toBe("failed");
+    expect(summary.detail).toMatch(/marked failed as stale/);
+    expect(await sql(h.stub, "SELECT id, status FROM scans ORDER BY started_at")).toEqual([
+      { id: h.id("A"), status: "failed" },
+      { id: h.id("B"), status: "running" },
+    ]);
+    expect((await scanRun(h.id("A")))?.status).toBe("failed");
+  });
+
+  it("R2-07: a superseded scan that runs again writes nothing and keeps its index row", async () => {
+    const h = await harness();
+    const first = await h.scan("A");
+    expect(first.summary.status).toBe("partial");
+    // B sees a record that A did not.
+    const extra = record("a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3", "new.example.com", "198.51.100.6");
+    h.state.records[ZONE_A]?.push(extra);
+    await h.scan("B", { now: NOW + 3_600_000 });
+
+    // A's instance runs again from the start, for example restarted by hand.
+    const again = await h.scan("A");
+    expect(again.steps.names()).toEqual([
+      "begin",
+      "plan:storage",
+      "collect:storage:1",
+      "coverage:storage",
+      "finish",
+    ]);
+    expect(again.summary.status).toBe("failed");
+    expect(again.summary.detail).toMatch(/StaleScanError/);
+    expect(await liveNodes(h, "dns_record")).toEqual([
+      "dns_record:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "dns_record:a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "dns_record:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "dns_record:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+    ]);
+    expect(await sql(h.stub, "SELECT id, status FROM scans ORDER BY started_at")).toEqual([
+      { id: h.id("A"), status: "complete" },
+      { id: h.id("B"), status: "complete" },
+    ]);
+    expect(await scanRun(h.id("A"))).toMatchObject({
+      status: "partial",
+      finished_at: NOW + 60_000,
+    });
+    expect(JSON.parse((await scanRun(h.id("A")))?.summary ?? "{}").status).toBe("partial");
+    expect(await lastScanAt(h.accountId)).toBe(NOW + 3_600_000);
   });
 
   it("replays to the same steps without repeating work", async () => {

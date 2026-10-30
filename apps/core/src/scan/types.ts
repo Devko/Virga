@@ -35,7 +35,14 @@ export interface RulesCounters {
 
 export type BeginResult = { started: true } | { started: false; running: string };
 
-/** The calls the scan makes on the account's graph object (AccountGraph). */
+/** How a scan ends in the graph's `scans` table. */
+export type ScanEnd = "complete" | "failed";
+
+/**
+ * The calls the scan makes on the account's graph object (AccountGraph).
+ * Every call but `beginScan` throws `StaleScanError` once the scan is no
+ * longer the running scan of the account.
+ */
 export interface ScanGraph {
   beginScan(scanId: string, kind: "full", at: number): Awaitable<BeginResult>;
   writeChunk(
@@ -54,7 +61,8 @@ export interface ScanGraph {
   sweep(scanId: string, resourceClass: string): Awaitable<SweepResult>;
   computeExposure(scanId: string): Awaitable<ExposureCounters>;
   evaluateRules(scanId: string): Awaitable<RulesCounters>;
-  finishScan(scanId: string, status: "complete" | "failed", at: number): Awaitable<void>;
+  /** Returns the status the scan ended with, which is `failed` if it was ended as stale. */
+  finishScan(scanId: string, status: ScanEnd, at: number): Awaitable<ScanEnd>;
 }
 
 /** Per-class result of a scan. */
@@ -92,6 +100,8 @@ export interface ScanSummary {
   rules: RulesCounters | null;
   /** Set when status is `skipped`. */
   running?: string;
+  /** Set when the scan was stopped because it is no longer the running scan of the account. */
+  detail?: string;
 }
 
 export interface ScanRunStart {

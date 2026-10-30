@@ -28,6 +28,8 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
 
 The scan is `complete` when every class and exposure are complete, `partial` when rules ran on incomplete input, `failed` when rules did not run, and `skipped` when another scan was running. Evaluator failures are results, not retried exceptions.
 
+Only the running scan that is current in the graph may write (R2-07). `writeChunk`, `applyBatch`, `recordCoverage`, `sweep`, `computeExposure` and `evaluateRules` throw `StaleScanError` for any other scan: one marked failed as stale, one that ended, or one a newer scan took over. Otherwise a stale instance that retries a chunk would mark live nodes as seen by itself, and the newer scan's sweep would tombstone them. The scan treats the refusal as a step result, not a retry: it stops, leaves the graph as it is, and ends its `scan_runs` row `failed` with the reason in `summary.detail`. `finishScan` returns the status the scan ended with; a scan marked failed as stale stays failed. `finishRun` only ends a `running` row, so an instance that runs again after its scan ended keeps the first result.
+
 ## Dispatch
 
 `DispatchWorkflow` runs on its schedule and starts the scans that are due: active accounts whose last scan started at least `cadence_hours` UTC hour slots ago, without a running scan. Each step `dispatch:<n>` selects 100 accounts and calls `createBatch`. Instance IDs are `scan-<accountId>-<yyyymmddhh>`, so a retried step or a second dispatch in the same hour skips existing instances (code 10405) instead of starting a scan twice.
