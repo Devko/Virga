@@ -31,7 +31,8 @@
 -- findings stay separate (own fingerprints and subjects, and a change on one
 -- side never opens or resolves a finding on the other), but without complete
 -- `pages` coverage no Worker finding opens or resolves either. A separate
--- rule ID for Pages would remove that coupling.
+-- rule ID for Pages would remove that coupling. See
+-- docs/decisions/0004-cf-024-scope.md; revisited after S-05.
 WITH
 worker_var AS (
   SELECT v.props ->> '$.script_node_id'   AS subject_id,

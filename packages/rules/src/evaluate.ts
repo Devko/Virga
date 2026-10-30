@@ -75,9 +75,9 @@ export interface RuleRunSummary {
  * `findings.evidence`. Text that parses as a JSON array (`json_group_array`,
  * `json_array`) is stored parsed, any other value as returned. Text from the
  * scanned account belongs inside such an array, so a name that happens to
- * look like JSON is never mistaken for one. Lists keep at most 100 items and
- * strings at most 2,048 characters, also inside list items that are objects
- * or lists; `_truncated` maps each shortened list to its full length.
+ * look like JSON is never mistaken for one. Lists keep at most 100 items;
+ * strings keep at most 2,048 characters, also inside list items that are
+ * objects or lists. `_truncated` maps each shortened list to its full length.
  * Evidence still larger than 256 KB makes the run an `error`.
  *
  * `finding_nodes` holds `subject_id` with role `subject`, plus every node ID

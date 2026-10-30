@@ -165,6 +165,8 @@ Three Workers in phase 1, a scanner container in phase 2. Each binding is grante
 
 The vault and the account index live in separate D1 databases. A D1 binding cannot be read-only, so the vault binding exists only on the broker.
 
+The deploy script enforces this topology (R5-02). Each Worker's Wrangler config may use only the keys listed for it in `CONFIG_KEYS` and `NESTED_KEYS` (`scripts/lib/topology.ts`); unsafe bindings, preview bindings, named environments and custom build commands are refused. `virga-web` binds no Workflows, and no Worker binds another Worker's Durable Object or Workflow classes.
+
 ## Repository layout (proposal)
 
 ```

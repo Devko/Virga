@@ -47,7 +47,8 @@ Requirements: Node.js 22.18 or later (runs TypeScript sources directly) and pnpm
 
 ```sh
 pnpm install
-pnpm ci            # lint, rule check, typecheck, tests
+pnpm run ci        # lint, rule check, typecheck, tests
+pnpm check:release-age  # after lockfile changes; needs network
 pnpm build         # build the web UI
 pnpm deploy:dry-run
 pnpm rules:build   # after changing anything in rules/

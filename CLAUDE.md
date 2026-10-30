@@ -36,6 +36,7 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 - The inventory token profile uses the Workers Metadata Read-Only role. Workers Scripts Read reads code; D1 Read and KV Read reach data.
 - Worker versions carry `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) in the Workers API (beta). It does not separate dev from production dependencies.
 - MCP: `createMcpHandler` from `agents/mcp/server`. `McpAgent` is deprecated.
+- Wrangler 4.151.0 loads `.env` and `.env.local` from its working directory for every command, with no flag to turn that off (`--env-file` replaces the default list), and parses configs with jsonc-parser 3.2.0, which reads a `__proto__` member as the prototype. `scripts/lib` depends on both (R5-01, R5-03); re-check them on a Wrangler upgrade.
 - A Worker with Static Assets does not receive `ctx.access` (an internal router Worker sits in front), and `ctx.access` does not cross service bindings or RPC. The web Worker therefore verifies the Access JWT itself and only compares `ctx.access` when present (S-08).
 
 ## Commands
