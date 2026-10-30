@@ -5,7 +5,9 @@
 // pnpm-workspace.yaml applies only when pnpm resolves a version; an install
 // from the lockfile, as in CI, takes whatever the lockfile holds. A version the
 // check cannot date (not from the registry, no publish time, registry error)
-// fails too. Needs network access to registry.npmjs.org and nothing else.
+// fails too, and so does a locked integrity that is not the registry's digest
+// for the version dated (R6-03). Needs network access to registry.npmjs.org and
+// nothing else.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
@@ -36,6 +38,8 @@ export interface LockedPackage {
   version: string;
   /** Resolved from the npm registry by integrity, so the registry knows its publish time. */
   registry: boolean;
+  /** For a registry package: the lockfile's integrity, compared with the registry's digest. */
+  integrity?: string;
 }
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -300,7 +304,7 @@ function lockedPackage(key: string, resolution: Map<string, string>): LockedPack
     [...resolution.keys()].every((field) => field === "integrity" || field === "tarball") &&
     (tarball === undefined ||
       tarball === `${REGISTRY}/${name}/-/${name.slice(name.indexOf("/") + 1)}-${version}.tgz`);
-  return { key, name, version, registry };
+  return registry ? { key, name, version, registry, integrity } : { key, name, version, registry };
 }
 
 /** pnpm's removeSuffix: a dependency path without its peer and patch suffix (its packages key). */
@@ -519,7 +523,8 @@ export interface CheckOptions {
 
 export interface Failure {
   package: string;
-  reason: "too_young" | "not_registry" | "unverified";
+  /** `mismatch`: the integrity is not the registry's; no exception accepts it. */
+  reason: "too_young" | "not_registry" | "unverified" | "mismatch";
   detail: string;
 }
 
@@ -529,11 +534,13 @@ export interface CheckResult {
   failures: Failure[];
   /** Failures the exception list accepts. */
   excepted: { package: string; detail: string }[];
-  /** Exceptions that match no failure: the version is gone or old enough. */
+  /** Exceptions that match no problem: the version is gone or old enough. */
   unusedExceptions: string[];
 }
 
-type PublishTimes = { times: Record<string, unknown> } | { error: string };
+type RegistryDocument =
+  | { times: Record<string, unknown>; dists: Map<string, unknown> }
+  | { error: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -547,13 +554,15 @@ function requestError(error: unknown): string {
   return `registry request failed: ${message.slice(0, 200)}${typeof cause === "string" ? ` (${cause})` : ""}`;
 }
 
-async function fetchPublishTimes(
+/** Publish times, and the `dist` of each version in `versions`, from the full registry document. */
+async function fetchDocument(
   name: string,
+  versions: ReadonlySet<string>,
   fetchImpl: typeof fetch,
   timeoutMs: number,
   attempts: number,
   retryDelayMs: number,
-): Promise<PublishTimes> {
+): Promise<RegistryDocument> {
   // Only the full document has `time`; the abbreviated install document does not.
   const url = `${REGISTRY}/${name.replace("/", "%2F")}`;
   let error = "registry request failed";
@@ -586,11 +595,72 @@ async function fetchPublishTimes(
       error = requestError(cause);
       continue;
     }
-    const times = isRecord(body) ? body.time : undefined;
-    if (!isRecord(times)) return { error: "the registry document has no publish times" };
-    return { times };
+    if (!isRecord(body) || !isRecord(body.time)) {
+      return { error: "the registry document has no publish times" };
+    }
+    const manifests = isRecord(body.versions) ? body.versions : {};
+    const dists = new Map<string, unknown>();
+    for (const version of versions) {
+      const manifest = Object.hasOwn(manifests, version) ? manifests[version] : undefined;
+      if (isRecord(manifest)) dists.set(version, manifest.dist);
+    }
+    return { times: body.time, dists };
   }
   return { error };
+}
+
+interface Digest {
+  algorithm: string;
+  hex: string;
+}
+
+/** A subresource integrity hash as pnpm records it: `sha512-<base64>`. */
+function sriDigest(value: string): Digest | undefined {
+  const [, algorithm, base64] =
+    /^(sha1|sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(value) ?? [];
+  if (algorithm === undefined || base64 === undefined) return undefined;
+  return { algorithm, hex: Buffer.from(base64, "base64").toString("hex") };
+}
+
+/** The digests the registry publishes for a version: dist.integrity and the sha1 dist.shasum. */
+function publishedDigests(dist: unknown): Digest[] {
+  if (!isRecord(dist)) return [];
+  const digests: Digest[] = [];
+  if (typeof dist.integrity === "string") {
+    for (const part of dist.integrity.split(/\s+/)) {
+      const digest = sriDigest(part);
+      if (digest) digests.push(digest);
+    }
+  }
+  if (typeof dist.shasum === "string" && /^[0-9a-f]{40}$/i.test(dist.shasum)) {
+    digests.push({ algorithm: "sha1", hex: dist.shasum.toLowerCase() });
+  }
+  return digests;
+}
+
+/**
+ * Whether `digest` names the bytes the registry publishes for the version
+ * checked. pnpm installs whatever matches the lockfile's integrity, from
+ * whichever registry or tarball URL it ends up using (.npmrc, a version field
+ * in the entry), so only this ties the installed bytes to the publish time.
+ */
+function digestProblem(
+  digest: Digest,
+  dist: unknown,
+  what: string,
+): Omit<Failure, "package"> | undefined {
+  const published = publishedDigests(dist).filter((d) => d.algorithm === digest.algorithm);
+  if (published.length === 0) {
+    return {
+      reason: "unverified",
+      detail: `the registry publishes no ${digest.algorithm} digest for this version to compare`,
+    };
+  }
+  if (published.some((d) => d.hex === digest.hex)) return undefined;
+  return {
+    reason: "mismatch",
+    detail: `${what} is not the ${digest.algorithm} digest the registry publishes for this version, so pnpm would install other bytes than the version checked`,
+  };
 }
 
 async function forEachLimited<T>(
@@ -641,12 +711,18 @@ export async function checkReleaseAge(
   const retryDelayMs = options.retryDelayMs ?? 1_000;
 
   const packages = parseLockfile(lockfile);
-  const names = [...new Set(packages.filter((p) => p.registry).map((p) => p.name))];
-  const documents = new Map<string, PublishTimes>();
-  await forEachLimited(names, concurrency, async (name) => {
+  const wanted = new Map<string, Set<string>>();
+  for (const locked of packages) {
+    if (!locked.registry) continue;
+    const versions = wanted.get(locked.name) ?? new Set<string>();
+    versions.add(locked.version);
+    wanted.set(locked.name, versions);
+  }
+  const documents = new Map<string, RegistryDocument>();
+  await forEachLimited([...wanted], concurrency, async ([name, versions]) => {
     documents.set(
       name,
-      await fetchPublishTimes(name, fetchImpl, timeoutMs, attempts, retryDelayMs),
+      await fetchDocument(name, versions, fetchImpl, timeoutMs, attempts, retryDelayMs),
     );
   });
 
@@ -665,17 +741,27 @@ export async function checkReleaseAge(
       problems.push({ package: locked.key, reason: "unverified", detail: document.error });
       continue;
     }
-    const problem = ageProblem(document.times[locked.version], now, minAgeMs);
+    const age = ageProblem(document.times[locked.version], now, minAgeMs);
+    const digest = locked.integrity === undefined ? undefined : sriDigest(locked.integrity);
+    const dist = document.dists.get(locked.version);
+    const problem =
+      age?.reason === "unverified"
+        ? age
+        : digest === undefined
+          ? { reason: "unverified" as const, detail: "the lockfile's integrity cannot be read" }
+          : (digestProblem(digest, dist, "the lockfile's integrity") ?? age);
     if (problem) problems.push({ package: locked.key, ...problem });
   }
 
   const accepted = new Set(exceptions.map((exception) => exception.package));
-  const failures = problems.filter((problem) => !accepted.has(problem.package)).sort(byPackage);
+  const isExcepted = (problem: Failure) =>
+    problem.reason !== "mismatch" && accepted.has(problem.package);
+  const failures = problems.filter((problem) => !isExcepted(problem)).sort(byPackage);
   const excepted = problems
-    .filter((problem) => accepted.has(problem.package))
+    .filter(isExcepted)
     .map((problem) => ({ package: problem.package, detail: problem.detail }))
     .sort(byPackage);
-  const used = new Set(excepted.map((entry) => entry.package));
+  const used = new Set(problems.map((problem) => problem.package));
   const unusedExceptions = exceptions
     .map((exception) => exception.package)
     .filter((key) => !used.has(key))
@@ -694,6 +780,7 @@ const LABELS: Record<Failure["reason"], string> = {
   too_young: "too young",
   not_registry: "not checked",
   unverified: "not verified",
+  mismatch: "integrity mismatch",
 };
 
 export async function main(options: MainOptions = {}): Promise<number> {

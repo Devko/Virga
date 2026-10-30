@@ -97,13 +97,50 @@ function reviewLayout(layout: "flow" | "comment" | "indent"): string {
   return `${head}packages:\n${changed}snapshots:\n${snapshots}`;
 }
 
-const REVIEW_REGISTRY = {
-  "@types/node": { "26.6.6": "2026-10-28T18:36:00.000Z" },
-  "undici-types": { "8.9.0": "2026-06-01T00:00:00.000Z" },
+/** The registry as the review saw it, publishing the review lockfile's integrity. */
+const REVIEW_REGISTRY: Registry = {
+  "@types/node": () =>
+    Response.json(
+      registryDocument(
+        "@types/node",
+        { "26.6.6": "2026-10-28T18:36:00.000Z" },
+        { "26.6.6": { integrity: TYPES_NODE_INTEGRITY } },
+      ),
+    ),
+  "undici-types": () =>
+    Response.json(
+      registryDocument(
+        "undici-types",
+        { "8.9.0": "2026-06-01T00:00:00.000Z" },
+        { "8.9.0": { integrity: UNDICI_TYPES_INTEGRITY } },
+      ),
+    ),
 };
 
 const registryEntry = (key: string) =>
   `  ${key}:\n    resolution: {integrity: sha512-AAAA}\n    engines: {node: '>=14.17'}`;
+
+/**
+ * A registry document as the npm registry serves it: publish times and each
+ * version's dist, with the integrity registryEntry locks unless `dists` says otherwise.
+ */
+function registryDocument(
+  name: string,
+  times: Record<string, string>,
+  dists: Record<string, unknown> = {},
+) {
+  const versions = Object.fromEntries(
+    Object.keys(times).map((version) => [
+      version,
+      {
+        name,
+        version,
+        dist: dists[version] ?? { integrity: "sha512-AAAA" },
+      },
+    ]),
+  );
+  return { name, time: { created: ago(1000), modified: ago(1), ...times }, versions };
+}
 
 /** Registry documents by package name; a function builds the response itself. */
 type Registry = Record<string, Record<string, string> | (() => Response | Promise<Response>)>;
@@ -117,7 +154,7 @@ function mockFetch(registry: Registry) {
     const doc = registry[name];
     if (doc === undefined) return new Response('{"error":"Not found"}', { status: 404 });
     if (typeof doc === "function") return doc();
-    return Response.json({ name, time: { created: ago(1000), modified: ago(1), ...doc } });
+    return Response.json(registryDocument(name, doc));
   }) as typeof globalThis.fetch;
   return { fetch, urls };
 }
@@ -141,8 +178,20 @@ describe("parseLockfile", () => {
       "  '@jsr/std__fs@1.0.0':\n    resolution: {integrity: sha512-AAAA, tarball: https://npm.jsr.io/~/11/@jsr/std__fs/1.0.0.tgz}",
     ]);
     expect(parseLockfile(text)).toEqual([
-      { key: "@types/node@22.20.5", name: "@types/node", version: "22.20.5", registry: true },
-      { key: "typescript@6.0.3", name: "typescript", version: "6.0.3", registry: true },
+      {
+        key: "@types/node@22.20.5",
+        name: "@types/node",
+        version: "22.20.5",
+        registry: true,
+        integrity: "sha512-AAAA",
+      },
+      {
+        key: "typescript@6.0.3",
+        name: "typescript",
+        version: "6.0.3",
+        registry: true,
+        integrity: "sha512-AAAA",
+      },
       {
         key: "tar-dep@https://example.com/tar-dep-1.0.0.tgz",
         name: "tar-dep",
@@ -460,6 +509,81 @@ describe("R6-03: the lockfile is read strictly", () => {
   });
 });
 
+describe("R6-03: the locked integrity is the one the registry publishes", () => {
+  it("R6-03: a locked integrity that is not the registry's fails, even with an exception", async () => {
+    const text = lockfile([registryEntry("a@1.0.0")]);
+    const { fetch } = mockFetch({
+      a: () =>
+        Response.json(
+          registryDocument("a", { "1.0.0": ago(30) }, { "1.0.0": { integrity: "sha512-BBBB" } }),
+        ),
+    });
+    const result = await checkReleaseAge(
+      text,
+      options(fetch, { exceptions: [{ package: "a@1.0.0", reason: "not for this" }] }),
+    );
+    expect(result.failures).toEqual([
+      {
+        package: "a@1.0.0",
+        reason: "mismatch",
+        detail:
+          "the lockfile's integrity is not the sha512 digest the registry publishes for this version, so pnpm would install other bytes than the version checked",
+      },
+    ]);
+    expect(result.excepted).toEqual([]);
+    expect(result.unusedExceptions).toEqual([]);
+  });
+
+  it("R6-03: a version field that makes pnpm fetch a younger version fails", async () => {
+    // pnpm 10.28.0 takes the version for the tarball URL from a version field
+    // of the entry (nameVerFromPkgSnapshot), not from the key.
+    const young = `sha512-${"C".repeat(86)}==`;
+    const text = lockfile([
+      `  typescript@6.0.3:\n    resolution: {integrity: ${young}}\n    version: 6.1.0`,
+    ]);
+    const { fetch } = mockFetch({
+      typescript: () =>
+        Response.json(
+          registryDocument(
+            "typescript",
+            { "6.0.3": ago(40), "6.1.0": ago(1) },
+            { "6.1.0": { integrity: young } },
+          ),
+        ),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    expect(result.failures).toMatchObject([{ package: "typescript@6.0.3", reason: "mismatch" }]);
+  });
+
+  it("R6-03: a version without a digest to compare is not verified", async () => {
+    const text = lockfile([registryEntry("a@1.0.0"), registryEntry("b@1.0.0")]);
+    const shasum = "0102030405060708090a0b0c0d0e0f1011121314";
+    const { fetch } = mockFetch({
+      a: () => Response.json(registryDocument("a", { "1.0.0": ago(30) }, { "1.0.0": { shasum } })),
+      b: () => Response.json({ name: "b", time: { "1.0.0": ago(30) }, versions: {} }),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    const detail = "the registry publishes no sha512 digest for this version to compare";
+    expect(result.failures).toEqual([
+      { package: "a@1.0.0", reason: "unverified", detail },
+      { package: "b@1.0.0", reason: "unverified", detail },
+    ]);
+  });
+
+  it("R6-03: compares a sha1 integrity with the registry's shasum", async () => {
+    const text = lockfile([
+      "  old@1.0.0:\n    resolution: {integrity: sha1-AQIDBAUGBwgJCgsMDQ4PEBESExQ=}",
+    ]);
+    const shasum = "0102030405060708090A0B0C0D0E0F1011121314";
+    const { fetch } = mockFetch({
+      old: () =>
+        Response.json(registryDocument("old", { "1.0.0": ago(3000) }, { "1.0.0": { shasum } })),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    expect(result.failures).toEqual([]);
+  });
+});
+
 describe("checkReleaseAge", () => {
   it("R4-07: fails on a locked version published two days ago", async () => {
     // The review's scenario: @types/node 26.6.6 in the lockfile, published 2026-10-28.
@@ -605,7 +729,7 @@ describe("checkReleaseAge", () => {
         calls += 1;
         if (calls === 1) return new Response("busy", { status: 503 });
         if (calls === 2) throw new TypeError("fetch failed");
-        return Response.json({ time: { "1.0.0": ago(30) } });
+        return Response.json(registryDocument("a", { "1.0.0": ago(30) }));
       },
     });
     const result = await checkReleaseAge(text, options(fetch, { attempts: 3 }));
@@ -650,7 +774,7 @@ describe("checkReleaseAge", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       inFlight -= 1;
       const name = String(input).split("/").pop();
-      return Response.json({ name, time: { "1.0.0": ago(30) } });
+      return Response.json(registryDocument(String(name), { "1.0.0": ago(30) }));
     }) as typeof globalThis.fetch;
     const result = await checkReleaseAge(text, options(fetch, { concurrency: 3 }));
     expect(result).toMatchObject({ checked: 12, failures: [] });
