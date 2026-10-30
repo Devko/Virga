@@ -17,7 +17,10 @@ export interface VaultEntry {
   profile: TokenProfile;
   keyVersion: number;
   expiresOn: string | null;
+  /** When the token last passed the write check, at onboarding or a recheck. */
   checkedAt: number;
+  /** A call runs a recheck of the token until this time (TM-04), or null. */
+  recheckUntil: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -33,6 +36,7 @@ interface Row {
   token_ciphertext: number[];
   expires_on: string | null;
   checked_at: number;
+  recheck_until: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -44,6 +48,7 @@ const entryOf = (row: Row): VaultEntry => ({
   keyVersion: row.key_version,
   expiresOn: row.expires_on,
   checkedAt: row.checked_at,
+  recheckUntil: row.recheck_until ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -79,7 +84,8 @@ export async function putToken(db: D1Database, master: MasterKey, entry: PutToke
          key_version = excluded.key_version, key_iv = excluded.key_iv,
          wrapped_key = excluded.wrapped_key, token_iv = excluded.token_iv,
          token_ciphertext = excluded.token_ciphertext, expires_on = excluded.expires_on,
-         checked_at = excluded.checked_at, updated_at = excluded.updated_at`,
+         checked_at = excluded.checked_at, recheck_until = NULL,
+         updated_at = excluded.updated_at`,
     )
     .bind(
       entry.accountId,
@@ -122,26 +128,76 @@ export async function getToken(
   return { entry: entryOf(row), token };
 }
 
-/** Records a passed recheck. */
+/**
+ * Claims the recheck of a token for one call (TM-04). It succeeds only while
+ * the row still holds the token and check time the caller saw, and no other
+ * claim runs. A claim lapses at `until`, so a call that dies does not block
+ * the account.
+ */
+export async function claimRecheck(
+  db: D1Database,
+  seen: VaultEntry,
+  now: number,
+  until: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE vault_tokens SET recheck_until = ?
+       WHERE account_id = ? AND token_id = ? AND checked_at = ?
+         AND (recheck_until IS NULL OR recheck_until <= ?)`,
+    )
+    .bind(until, seen.accountId, seen.tokenId, seen.checkedAt, now)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/** Ends a claim from claimRecheck. A newer claim is left alone. */
+export async function releaseRecheck(
+  db: D1Database,
+  accountId: string,
+  until: number,
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE vault_tokens SET recheck_until = NULL WHERE account_id = ? AND recheck_until = ?",
+    )
+    .bind(accountId, until)
+    .run();
+}
+
+/** Records a passed recheck of the token `tokenId`, and ends any claim. */
 export async function markChecked(
   db: D1Database,
   accountId: string,
+  tokenId: string,
   expiresOn: string | null,
   now: number,
 ): Promise<void> {
   await db
     .prepare(
-      "UPDATE vault_tokens SET expires_on = ?, checked_at = ?, updated_at = ? WHERE account_id = ?",
+      `UPDATE vault_tokens SET expires_on = ?, checked_at = ?, recheck_until = NULL, updated_at = ?
+       WHERE account_id = ? AND token_id = ?`,
     )
-    .bind(expiresOn, now, now, accountId)
+    .bind(expiresOn, now, now, accountId, tokenId)
     .run();
 }
 
-export async function deleteToken(db: D1Database, accountId: string): Promise<boolean> {
-  const result = await db
-    .prepare("DELETE FROM vault_tokens WHERE account_id = ?")
-    .bind(accountId)
-    .run();
+/**
+ * Deletes the token of an account. With `tokenId`, only that token, so a
+ * failed recheck does not delete a token stored meanwhile.
+ */
+export async function deleteToken(
+  db: D1Database,
+  accountId: string,
+  tokenId?: string,
+): Promise<boolean> {
+  const statement =
+    tokenId === undefined
+      ? db.prepare("DELETE FROM vault_tokens WHERE account_id = ?").bind(accountId)
+      : db
+          .prepare("DELETE FROM vault_tokens WHERE account_id = ? AND token_id = ?")
+          .bind(accountId, tokenId);
+  const result = await statement.run();
   return result.meta.changes > 0;
 }
 

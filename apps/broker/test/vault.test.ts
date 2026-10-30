@@ -2,7 +2,16 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { importMasterKey, openToken, rewrapToken, sealToken, VaultError } from "../src/crypto.ts";
 import { loadMasterKey } from "../src/master-key.ts";
-import { deleteToken, getEntry, getToken, putToken, rotateMasterKey } from "../src/vault.ts";
+import {
+  claimRecheck,
+  deleteToken,
+  getEntry,
+  getToken,
+  markChecked,
+  putToken,
+  releaseRecheck,
+  rotateMasterKey,
+} from "../src/vault.ts";
 import { ACCOUNT_ID, OTHER_ACCOUNT_ID, TOKEN_ID } from "./fixtures/tokens.ts";
 import { NEXT_MASTER_KEY, TEST_MASTER_KEY, TEST_TOKEN } from "./helpers.ts";
 
@@ -126,6 +135,58 @@ describe("vault in D1", () => {
     await store(ACCOUNT_ID);
     expect(await deleteToken(env.VAULT, ACCOUNT_ID)).toBe(true);
     expect(await deleteToken(env.VAULT, ACCOUNT_ID)).toBe(false);
+    expect(await getEntry(env.VAULT, ACCOUNT_ID)).toBeNull();
+  });
+
+  const entryOf = async (accountId: string) => {
+    const entry = await getEntry(env.VAULT, accountId);
+    if (!entry) throw new Error(`no entry for ${accountId}`);
+    return entry;
+  };
+
+  it("TM-04: gives the recheck claim to one caller until it lapses", async () => {
+    await store(ACCOUNT_ID);
+    const seen = await entryOf(ACCOUNT_ID);
+    expect(seen.recheckUntil).toBeNull();
+    expect(await claimRecheck(env.VAULT, seen, 2_000, 5_000)).toBe(true);
+    expect(await claimRecheck(env.VAULT, seen, 2_000, 5_000)).toBe(false);
+    expect(await claimRecheck(env.VAULT, seen, 4_999, 9_000)).toBe(false);
+    expect((await entryOf(ACCOUNT_ID)).recheckUntil).toBe(5_000);
+    // The claim lapses, so a call that died does not block the account.
+    expect(await claimRecheck(env.VAULT, seen, 5_000, 9_000)).toBe(true);
+    // The first caller's release leaves the second claim alone.
+    await releaseRecheck(env.VAULT, ACCOUNT_ID, 5_000);
+    expect((await entryOf(ACCOUNT_ID)).recheckUntil).toBe(9_000);
+    await releaseRecheck(env.VAULT, ACCOUNT_ID, 9_000);
+    expect((await entryOf(ACCOUNT_ID)).recheckUntil).toBeNull();
+  });
+
+  it("TM-04: does not claim a token that was checked again or replaced", async () => {
+    await store(ACCOUNT_ID);
+    const seen = await entryOf(ACCOUNT_ID);
+    await markChecked(env.VAULT, ACCOUNT_ID, TOKEN_ID, "2026-12-15T00:00:00Z", 3_000);
+    expect(await claimRecheck(env.VAULT, seen, 4_000, 9_000)).toBe(false);
+    const checked = await entryOf(ACCOUNT_ID);
+    expect(checked).toMatchObject({ checkedAt: 3_000, expiresOn: "2026-12-15T00:00:00Z" });
+    const replaced = { ...checked, tokenId: "0".repeat(32) };
+    expect(await claimRecheck(env.VAULT, replaced, 4_000, 9_000)).toBe(false);
+    expect(await claimRecheck(env.VAULT, checked, 4_000, 9_000)).toBe(true);
+    // A passed check clears the claim, and so does storing a token.
+    await markChecked(env.VAULT, ACCOUNT_ID, TOKEN_ID, null, 6_000);
+    expect((await entryOf(ACCOUNT_ID)).recheckUntil).toBeNull();
+    expect(await claimRecheck(env.VAULT, await entryOf(ACCOUNT_ID), 7_000, 9_000)).toBe(true);
+    await store(ACCOUNT_ID);
+    expect((await entryOf(ACCOUNT_ID)).recheckUntil).toBeNull();
+  });
+
+  it("TM-04: leaves a replaced token alone when given the old token ID", async () => {
+    await store(ACCOUNT_ID);
+    const other = "0".repeat(32);
+    await markChecked(env.VAULT, ACCOUNT_ID, other, null, 5_000);
+    expect((await entryOf(ACCOUNT_ID)).checkedAt).toBe(1_000);
+    expect(await deleteToken(env.VAULT, ACCOUNT_ID, other)).toBe(false);
+    expect(await getEntry(env.VAULT, ACCOUNT_ID)).not.toBeNull();
+    expect(await deleteToken(env.VAULT, ACCOUNT_ID, TOKEN_ID)).toBe(true);
     expect(await getEntry(env.VAULT, ACCOUNT_ID)).toBeNull();
   });
 
