@@ -67,6 +67,11 @@ export const PURGE_STEPS = 50;
 // marks: an email or a client ID has none of them.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
 const NOT_IN_IDENTITY = /[\u0000-\u0020\u007f-\u00a0\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/;
+// A surrogate without its partner: the string is not well-formed Unicode, and
+// D1 may store U+FFFD in its place. With the `u` flag the pattern reads code
+// points, so a pair is one character and does not match. The same answer as
+// `!value.isWellFormed()` (ES2024), which the es2023 lib does not declare.
+const LONE_SURROGATE = /\p{Surrogate}/u;
 const ACTION = /^[A-Za-z0-9_ /{}.-]{1,100}$/;
 const OUTCOME = /^[a-z0-9_]{1,32}$/;
 const CURSOR = /^[1-9][0-9]{0,15}$/;
@@ -79,7 +84,8 @@ export function checkToolCall(input: ToolCall): ToolCall {
     typeof identity !== "string" ||
     identity === "" ||
     identity.length > MAX_IDENTITY ||
-    NOT_IN_IDENTITY.test(identity)
+    NOT_IN_IDENTITY.test(identity) ||
+    LONE_SURROGATE.test(identity)
   ) {
     throw new TypeError("invalid identity");
   }

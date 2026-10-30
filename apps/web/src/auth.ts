@@ -54,19 +54,25 @@ export const MAX_IDENTITY = 320;
 // or a client ID has none of them.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
 const NOT_IN_IDENTITY = /[\u0000-\u0020\u007f-\u00a0\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/;
+// A surrogate without its partner: the string is not well-formed Unicode, and
+// D1 may store U+FFFD in its place. With the `u` flag the pattern reads code
+// points, so a pair is one character and does not match. The same answer as
+// `!value.isWellFormed()` (ES2024), which the es2023 lib does not declare.
+const LONE_SURROGATE = /\p{Surrogate}/u;
 
 /**
  * Whether core's audit trail can store `value` as an identity: the rule of
  * `checkToolCall` in apps/core/src/audit.ts, mirrored because the Worker
  * does not bundle core; test/identity.test.ts compares the two. The Access
  * check refuses any other identity, so every identity it lets through is
- * recorded (R9-04).
+ * recorded (R9-04), as written (R10 hardening: well-formed).
  */
 export const isIdentity = (value: unknown): value is string =>
   typeof value === "string" &&
   value !== "" &&
   value.length <= MAX_IDENTITY &&
-  !NOT_IN_IDENTITY.test(value);
+  !NOT_IN_IDENTITY.test(value) &&
+  !LONE_SURROGATE.test(value);
 
 interface AccessConfig {
   teamDomain: string;
