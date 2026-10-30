@@ -2,7 +2,12 @@
 
 - Date: 2026-10-30
 - Scope: review of the round 7 changes (merges of `collectors-4`, `deploy-env` and `web-removing`), at commit b8a29c1
-- Status: R7-01 and R7-02 open; both are in `UNSAFE_VARS` in `scripts/lib/run.ts`
+- Status: R7-01 and R7-02 fixed in round 8 by the integrator; not yet verified by a review
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R7-01 | integrator | 58e72bd | `scripts/test/run.test.ts` (R7-01: `unsafeVars` names `NODE_DEBUG` and `NODE_DEBUG_NATIVE`; a child Node process runs the real `processRunner({credentials: 'token'})` with `NODE_DEBUG=child_process` and `*`, and its stderr never holds the token); `scripts/test/deploy.test.ts` (R7-01: refused in a dry run, before any config is read). `processRunner` itself starts nothing while an `UNSAFE_VARS` entry is set |
+| R7-02 | integrator | 58e72bd | `scripts/test/run.test.ts` and `deploy.test.ts` (R7-02: `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `DYLD_VERSIONED_LIBRARY_PATH`, `DYLD_VERSIONED_FRAMEWORK_PATH` and `NODE_COMPILE_CACHE`, on Linux, macOS and Windows) |
 
 ## Summary
 
