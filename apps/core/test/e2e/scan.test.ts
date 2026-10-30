@@ -256,8 +256,15 @@ describe("first scan of the seeded account", () => {
     );
     expect(rows.map((r) => r.hostname).sort()).toEqual([
       "app.example.com",
+      "dash.example.com",
+      "dash.example.com",
       "git.example.com",
+      "kb.example.com",
+      "kb.example.com",
+      "ops.example.com",
+      "ops.example.com",
       "ssh.example.com",
+      "vault.example.com",
       "wiki.example.com",
     ]);
     for (const r of rows) {
@@ -267,6 +274,26 @@ describe("first scan of the seeded account", () => {
         `tunnel_hostname:${r.tunnel}:${r.hostname}${r.path}`,
       ]).toContain(r.id);
     }
+  });
+
+  it("R3-02: emits an entry point per hostname for ingress rules without a hostname", async () => {
+    const rows = await sql<{ entry: string; via_fallthrough: number; access_required: number }>(
+      stub,
+      `SELECT (props ->> '$.hostname') || (props ->> '$.path') AS entry,
+              props ->> '$.via_fallthrough' AS via_fallthrough,
+              props ->> '$.access_required' AS access_required
+       FROM nodes WHERE type = 'tunnel_hostname' AND deleted_at IS NULL ORDER BY entry`,
+    );
+    // The catch-all of the ops tunnel does not reach vault.example.com, whose
+    // rule takes every path; catch-alls with a status code yield nothing.
+    expect(rows.filter((r) => r.via_fallthrough === 1)).toEqual([
+      { entry: "dash.example.com^/debug", via_fallthrough: 1, access_required: 0 },
+      { entry: "kb.example.com^/debug", via_fallthrough: 1, access_required: 0 },
+      { entry: "ops.example.com", via_fallthrough: 1, access_required: 0 },
+    ]);
+    expect(rows.filter((r) => r.via_fallthrough !== 1).every((r) => r.via_fallthrough === 0)).toBe(
+      true,
+    );
   });
 
   describe("exposure", () => {
@@ -343,6 +370,16 @@ describe("first scan of the seeded account", () => {
   });
 
   describe("no findings for the clean counterparts", () => {
+    it("has every clean subject in the graph", async () => {
+      const ids = CLEAN.map((c) => resolve(c.subject));
+      const found = await sql<{ id: string }>(
+        stub,
+        "SELECT id FROM nodes WHERE deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))",
+        JSON.stringify(ids),
+      );
+      expect(found.map((r) => r.id).sort()).toEqual([...new Set(ids)].sort());
+    });
+
     for (const c of CLEAN) {
       it(`${c.rule}: ${c.case}`, () => {
         const hits = first.findings.filter(

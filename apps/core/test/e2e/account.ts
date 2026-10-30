@@ -107,6 +107,7 @@ const APP_BILLING = "c4e8c2f5-30af-4391-a3e6-fe7ce5482ae7";
 const APP_STATUS = "94ccd251-b1f4-4bdd-8071-6cb2f16c95f5";
 const APP_API = "ee819a64-4567-4250-a6fe-2d35d4ffe1ce";
 const APP_API_HEALTH = "c09732be-87aa-4ea0-bbde-21e117e5cd87";
+const APP_KB = "5d3b8e1f-6c2a-4f9d-8b7e-0a4c2e6f8d1b";
 
 const POLICY_STAFF = "5233833d-2d68-4b2c-8981-f1ee893bd074";
 const POLICY_EMPLOYEES = "23995aac-33ab-4c01-a865-8830dd8c3407";
@@ -117,6 +118,8 @@ const GROUP_STAFF = "a30a625c-bfd9-453e-aed1-f299024f1314";
 
 const TUNNEL_EDGE = "958098ee-467d-4161-a056-47df6b3dd0d6";
 const TUNNEL_TEAM = "4c7d2b1e-8a3f-4e6d-9b5c-2f1a0e9d8c7b";
+const TUNNEL_DEBUG = "a1e5c9d3-7b2f-4a8e-b6d0-3c9f1e7a5b2d";
+const TUNNEL_OPS = "e8b2f6a4-1d9c-4e3b-a7f5-9d2c6b0e4a1f";
 
 /** What tests may change between scans. */
 export interface AccountState {
@@ -473,6 +476,7 @@ const APPS: { app: ReturnType<typeof app>; policies: ReturnType<typeof policy>[]
     policies: [staff],
   },
   { app: app(APP_TUNNEL, "Internal app", [publicUri("app.example.com")]), policies: [employees] },
+  { app: app(APP_KB, "Knowledge base", [publicUri("kb.example.com")]), policies: [employees] },
   { app: app(APP_REPORTS, "Reports", [publicUri("reports.example.com")]), policies: [everyone] },
   { app: app(APP_BILLING, "Billing", [publicUri("billing.example.com")]), policies: [employees] },
   { app: app(APP_STATUS, "Status page", [publicUri("status.example.com")]), policies: [bypass] },
@@ -535,6 +539,49 @@ const TUNNEL_CONFIGS: Record<string, { name: string; config: object }> = {
           originRequest: originAccess,
         },
         { service: "http_status:404" },
+      ],
+    },
+  },
+  // R3-02, case A: a rule without a hostname matches every hostname, so
+  // /debug of each hostname below reaches localhost:6060.
+  [TUNNEL_DEBUG]: {
+    name: "debug",
+    config: {
+      ingress: [
+        // CF-004 seeded on dash.example.com; clean on kb.example.com, where an Access app decides.
+        { path: "^/debug", service: "http://localhost:6060" },
+        // CF-004 clean: the token check covers the rest of the hostname.
+        {
+          hostname: "dash.example.com",
+          service: "http://localhost:3000",
+          originRequest: originAccess,
+        },
+        { hostname: "kb.example.com", service: "http://localhost:4000" },
+        { service: "http_status:404" },
+      ],
+    },
+  },
+  // R3-02, case B: every path of ops.example.com but /admin falls through
+  // to the catch-all origin.
+  [TUNNEL_OPS]: {
+    name: "ops",
+    config: {
+      ingress: [
+        // CF-004 clean: the token check covers /admin.
+        {
+          hostname: "ops.example.com",
+          path: "^/admin",
+          service: "http://localhost:9000",
+          originRequest: originAccess,
+        },
+        // CF-004 clean: takes every path, so the catch-all never applies to it.
+        {
+          hostname: "vault.example.com",
+          service: "http://localhost:8200",
+          originRequest: originAccess,
+        },
+        // CF-004 seeded on ops.example.com.
+        { service: "http://localhost:8080" },
       ],
     },
   },
@@ -763,11 +810,12 @@ export function fakeAccount(
 export const SECRET_VALUES = [FAKE_TOKEN, FAKE_SECRET, FAKE_SCIM_PASSWORD, FAKE_CLIENT_ID];
 
 /**
- * A tunnel hostname node ID (here without a path) in the form of the graph
- * contract as of round 1, `<hostname><path>`. The test maps it to the ID the
- * collector emits, so the round 2 form `<tunnel_id>:<hostname><path>` passes too.
+ * A tunnel hostname node ID in the form of the graph contract as of round 1,
+ * `<hostname><path>`. The test maps it to the ID the collector emits, so the
+ * round 2 form `<tunnel_id>:<hostname><path>` passes too. Each hostname and
+ * path appears in one tunnel only, so the mapping is unique.
  */
-const tunnelHostname = (hostname: string) => `tunnel_hostname:${hostname}`;
+const tunnelHostname = (hostnameAndPath: string) => `tunnel_hostname:${hostnameAndPath}`;
 
 export interface SeededCase {
   rule: string;
@@ -802,6 +850,18 @@ export const SEEDED: SeededCase[] = [
     case: "R3-01: SSH origin under a top-level access block that cloudflared does not enforce",
     fingerprint: `CF-004:${tunnelHostname("git.example.com")}`,
     severity: "critical",
+  },
+  {
+    rule: "CF-004",
+    case: "R3-02: path-only rule before a hostname rule that requires an Access token",
+    fingerprint: `CF-004:${tunnelHostname("dash.example.com^/debug")}`,
+    severity: "high",
+  },
+  {
+    rule: "CF-004",
+    case: "R3-02: catch-all origin behind a path-restricted hostname that requires an Access token",
+    fingerprint: `CF-004:${tunnelHostname("ops.example.com")}`,
+    severity: "high",
   },
   {
     rule: "CF-007",
@@ -871,6 +931,26 @@ export const CLEAN: CleanCase[] = [
     rule: "CF-004",
     case: "R3-01: tunnel hostname whose own rule requires an Access token",
     subject: tunnelHostname("wiki.example.com"),
+  },
+  {
+    rule: "CF-004",
+    case: "R3-02: hostname rule that requires an Access token next to a path-only rule",
+    subject: tunnelHostname("dash.example.com"),
+  },
+  {
+    rule: "CF-004",
+    case: "R3-02: path-only rule on a hostname behind an Access app",
+    subject: tunnelHostname("kb.example.com^/debug"),
+  },
+  {
+    rule: "CF-004",
+    case: "R3-02: path-restricted hostname rule that requires an Access token",
+    subject: tunnelHostname("ops.example.com^/admin"),
+  },
+  {
+    rule: "CF-004",
+    case: "R3-02: hostname rule that requires an Access token on every path, before a catch-all origin",
+    subject: tunnelHostname("vault.example.com"),
   },
   {
     rule: "CF-007",
@@ -1004,6 +1084,36 @@ export const EXPOSURE: ExposureExpectation[] = [
     case: "R3-01: the rule's own access block requires the token",
     entry: tunnelHostname("wiki.example.com"),
     rows: [originRow(tunnelHostname("wiki.example.com"))],
+  },
+  {
+    case: "R3-02: a path-only rule is public on a hostname without an Access app",
+    entry: tunnelHostname("dash.example.com^/debug"),
+    rows: [row("public", null, "/debug*")],
+  },
+  {
+    case: "R3-02: the hostname rule's own token check decides the hostname rule only",
+    entry: tunnelHostname("dash.example.com"),
+    rows: [originRow(tunnelHostname("dash.example.com"))],
+  },
+  {
+    case: "R3-02: an Access app on the hostname covers a path-only rule",
+    entry: tunnelHostname("kb.example.com^/debug"),
+    rows: [row("access", `access_app:${APP_KB}`, "/debug*")],
+  },
+  {
+    case: "R3-02: a path-restricted hostname rule with its own token check",
+    entry: tunnelHostname("ops.example.com^/admin"),
+    rows: [originRow(tunnelHostname("ops.example.com^/admin"), "/admin*")],
+  },
+  {
+    case: "R3-02: the catch-all origin is public on the path-restricted hostname",
+    entry: tunnelHostname("ops.example.com"),
+    rows: [row("public", null)],
+  },
+  {
+    case: "R3-02: a hostname rule for every path keeps the catch-all away",
+    entry: tunnelHostname("vault.example.com"),
+    rows: [originRow(tunnelHostname("vault.example.com"))],
   },
   {
     case: "enabled r2.dev domain",
