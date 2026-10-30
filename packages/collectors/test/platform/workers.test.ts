@@ -193,6 +193,46 @@ describe("workers collector", () => {
     }
   });
 
+  it("R6-05: records a plain_text binding whose text is not a string as uninspected", async () => {
+    const plain = (name: string, text: unknown) => ({ name, type: "plain_text", text });
+    const bindings = [
+      plain("NULL", null),
+      plain("OBJECT", { redacted: true }),
+      plain("HOLDS_TOKEN", { value: FAKE_TOKEN }),
+      plain("ARRAY", [FAKE_TOKEN]),
+      plain("NUMBER", 42),
+      plain("FLAG", true),
+      // Controls: strings are inspected, an empty one too, and json keeps its walk.
+      plain("CF_TOKEN", FAKE_TOKEN),
+      plain("API_BASE", PLAIN_URL),
+      plain("BLANK", ""),
+      { name: "CONFIG", type: "json", json: { api_key: FAKE_TOKEN } },
+    ];
+    const version = { ...versionMy2, resources: { ...versionMy2.resources, bindings } };
+    const { output } = await run(workersCollector, {
+      ...routes,
+      [`${scripts}/my-worker/versions/${V_MY_2}`]: envelope(version),
+    });
+    const verdict = (kind: string, looks: boolean | null, pattern: string | null = null) => ({
+      kind,
+      looks_secret: looks,
+      secret_pattern: pattern,
+    });
+    expect(node(output, `worker_version:${V_MY_2}`).props?.plain_text_vars).toEqual([
+      { name: "API_BASE", ...verdict("plain_text", false) },
+      { name: "ARRAY", ...verdict("plain_text", null) },
+      { name: "BLANK", ...verdict("plain_text", false) },
+      { name: "CF_TOKEN", ...verdict("plain_text", true, "cfat_") },
+      { name: "CONFIG", ...verdict("json", true, "cfat_") },
+      { name: "FLAG", ...verdict("plain_text", null) },
+      { name: "HOLDS_TOKEN", ...verdict("plain_text", null) },
+      { name: "NULL", ...verdict("plain_text", null) },
+      { name: "NUMBER", ...verdict("plain_text", null) },
+      { name: "OBJECT", ...verdict("plain_text", null) },
+    ]);
+    expect(JSON.stringify(output)).not.toContain(FAKE_TOKEN);
+  });
+
   it("emits BINDS edges for every binding with a node, keyed by binding name", async () => {
     const { output } = await run(workersCollector, routes);
     const v1 = `worker_version:${V_MY_1}`;
