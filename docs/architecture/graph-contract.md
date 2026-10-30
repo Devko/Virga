@@ -228,7 +228,7 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `tunnel_type` | string | `cfd_tunnel` or `warp_connector` (Mesh) |
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
-| `ingress_truncated` | boolean | `true` when the ingress yields more than 1,000 entry points and the rest were not emitted; always `false` for locally managed tunnels and Mesh nodes |
+| `ingress_truncated` | boolean | `true` when the ingress yields more entry points than the cap or the byte budget allows and the rest were not emitted; always `false` for locally managed tunnels and Mesh nodes |
 
 `tunnel_hostname` — native ID: `<tunnel_id>:<hostname>:<path>`; name: hostname.
 
@@ -237,6 +237,7 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 - When the ID would exceed 512 characters, the path part becomes `sha256:<hex of the path>` (R5-05). The full path stays in `path`, and no rule is dropped for its length.
 - A pair that cannot have that ID gets `<tunnel_id>:sha256:<hex of the JSON array [hostname, path]>`. This happens when an earlier pair already holds the ID (a hostname containing `:`, or a literal path that reads `sha256:<hex>`), or when the hostname alone makes the ID too long. If that ID is taken too, which only a crafted rule can cause, the chunk fails with an error and the class gets a signal.
 - A tunnel yields at most 1,000 `tunnel_hostname` nodes (R5-06). Nodes are kept in rule order, and for a rule without a hostname in sorted hostname order; shadowed rules and rules without a hostname that answer with `http_status` do not count. Beyond that, the tunnel gets `ingress_truncated: true`, and the evaluator returns `unknown` for every entry point of that tunnel.
+- The same holds for size (round 7): the props of a tunnel's emitted `tunnel_hostname` nodes, counted as UTF-8 bytes of their JSON, add up to at most 1 MiB. The node that would pass the budget and every node after it are not emitted, and the tunnel gets `ingress_truncated: true`.
 - `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
 - For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
@@ -266,7 +267,7 @@ Known limits of the per-rule model, and which way each errs:
 - Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
 - A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
 - A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
-- The cap bounds the number of nodes, not their size. One path-only rule with a path near the props limit, expanded over 1,000 hostnames, still yields a very large chunk. The chunk then fails with a signal rather than silently, but it can stall the `tunnels` class.
+- Until the byte budget lands (round 7), the cap bounds the number of nodes, not their size. One path-only rule with a path near the props limit, expanded over 1,000 hostnames, yields about 64 MB of props for one tunnel.
 - When every emitted node of a truncated tunnel answers with `http_status`, CF-004 has no row for the tunnel and does not see the truncation.
 
 ### tokens
