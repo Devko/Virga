@@ -1,5 +1,6 @@
-import type { CollectorOutput } from "@virga/collectors";
+import { type CollectorOutput, TRUNCATED_LIMITS } from "@virga/collectors";
 import { type InsightRow, LIMITS, type SignalRow } from "@virga/graph";
+import { type Untrusted, untrusted } from "../untrusted.ts";
 
 // prepareBatch checks nodes and edges. Signals and insights carry strings
 // from the scanned account too, so they get the same kind of limits here.
@@ -50,10 +51,26 @@ function checkInsight(insight: InsightRow): InsightRow {
   };
 }
 
+/**
+ * Reasons for resources a chunk left out (decision 0005). They reach the
+ * scan summary and the coverage row, and can name IDs from the account.
+ */
+function checkTruncated(value: unknown): Untrusted<string>[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new TypeError("truncated must be an array");
+  if (value.length > TRUNCATED_LIMITS.reasons) {
+    throw new RangeError(`more than ${TRUNCATED_LIMITS.reasons} truncated reasons`);
+  }
+  return value.map((reason) =>
+    untrusted(text(reason, TRUNCATED_LIMITS.length, "truncated reason")),
+  );
+}
+
 export interface CheckedOutput {
   output: CollectorOutput;
   signals: SignalRow[];
   insights: InsightRow[] | null;
+  truncated: Untrusted<string>[];
 }
 
 /**
@@ -70,5 +87,5 @@ export function checkOutput(output: CollectorOutput, singleChunk: boolean): Chec
     throw new TypeError("insights must come from a collector with a single chunk");
   }
   const insights = output.insights === undefined ? null : output.insights.map(checkInsight);
-  return { output, signals, insights };
+  return { output, signals, insights, truncated: checkTruncated(output.truncated) };
 }

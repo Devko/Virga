@@ -134,6 +134,58 @@ describe("scan steps in AccountGraph", () => {
     expect(await rows(stub, "SELECT count(*) AS n FROM nodes")).toEqual([{ n: 0 }]);
   });
 
+  it("0005: returns the reasons a chunk gives for resources it left out", async () => {
+    const stub = freshGraph();
+    await stub.beginScan("s1", "full", 1);
+    const tunnel = { type: "tunnel" as const, nativeId: "t1", name: "edge" };
+    const reasons = ["tunnel t1: ingress has more than 1000 entry points"];
+    expect(
+      await stub.writeChunk(
+        "s1",
+        "tunnels",
+        { nodes: [tunnel], edges: [], truncated: reasons },
+        { singleChunk: false },
+      ),
+    ).toEqual({ nodes: 1, edges: 0, changed: 1, signals: 0, insights: 0, truncated: reasons });
+    // Nothing left out: the counters stay as they were.
+    expect(
+      await stub.writeChunk(
+        "s1",
+        "tunnels",
+        { nodes: [tunnel], edges: [], truncated: [] },
+        { singleChunk: false },
+      ),
+    ).toEqual({ nodes: 1, edges: 0, changed: 0, signals: 0, insights: 0 });
+  });
+
+  it("0005: rejects truncated reasons that are not short strings, or too many", async () => {
+    const stub = freshGraph();
+    await stub.beginScan("s1", "full", 1);
+    const write = (truncated: unknown) =>
+      failure(
+        stub.writeChunk(
+          "s1",
+          "tunnels",
+          { nodes: [{ type: "tunnel", nativeId: "t1" }], edges: [], truncated } as never,
+          { singleChunk: true },
+        ),
+      );
+    expect(await write("tunnel t1")).toMatch(/TypeError: truncated must be an array/);
+    expect(await write([42])).toMatch(/TypeError: truncated reason must be a string/);
+    expect(await write([""])).toMatch(/TypeError: truncated reason must be a string/);
+    expect(await write(["x".repeat(1025)])).toMatch(
+      /RangeError: truncated reason longer than 1024 characters/,
+    );
+    expect(await write(Array.from({ length: 101 }, (_, i) => `tunnel t${i}`))).toMatch(
+      /RangeError: more than 100 truncated reasons/,
+    );
+    // A refused chunk writes nothing.
+    expect(await rows(stub, "SELECT count(*) AS n FROM nodes")).toEqual([{ n: 0 }]);
+    // At the limits it is accepted.
+    const most = Array.from({ length: 100 }, (_, i) => `${i}`.padEnd(1024, "x"));
+    expect(await write(most)).toBe("resolved");
+  });
+
   it("computes exposure and records its coverage, also when the evaluator fails", async () => {
     const stub = freshGraph();
     await stub.beginScan("s1", "full", 1);
