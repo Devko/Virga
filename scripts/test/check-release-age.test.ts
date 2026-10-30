@@ -1,17 +1,20 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   type CheckOptions,
   checkReleaseAge,
   EXCEPTIONS,
   LockfileError,
+  type MainOptions,
   main,
   PackageJsonError,
   parseLockfile,
   parsePackageManager,
+  parseWorkspace,
 } from "../check-release-age.ts";
-import { REPO_ROOT } from "./helpers.ts";
+import { put, REPO_ROOT } from "./helpers.ts";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const DAY = 86_400_000;
@@ -1001,6 +1004,235 @@ describe("R6-04: the pnpm version package.json pins", () => {
     expect(pins).toEqual([
       { field: "packageManager", version: expect.stringMatching(/^\d+\.\d+\.\d+$/) },
     ]);
+  });
+});
+
+/** A workspace file in the layout the repository uses. */
+const WORKSPACE = [
+  "packages:",
+  "  - apps/*",
+  "  - packages/*",
+  "",
+  "onlyBuiltDependencies:",
+  "  - esbuild",
+  "",
+  "# Only resolve versions released at least 14 days ago.",
+  "minimumReleaseAge: 20160",
+  "",
+].join("\n");
+
+const checkouts: string[] = [];
+afterEach(() => {
+  for (const root of checkouts.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+/**
+ * A checkout in a temporary directory: package.json, pnpm-lock.yaml and
+ * pnpm-workspace.yaml that pass, with `files` (paths relative to the root) over them.
+ */
+function checkout(files: Record<string, string> = {}): string {
+  const root = mkdtempSync(join(tmpdir(), "virga-release-age-"));
+  checkouts.push(root);
+  const all: Record<string, string> = {
+    "package.json": manifest({ packageManager: "pnpm@10.28.0" }),
+    "pnpm-lock.yaml": lockfile([]),
+    "pnpm-workspace.yaml": WORKSPACE,
+    ...files,
+  };
+  for (const [path, text] of Object.entries(all)) put(join(root, path), text);
+  return root;
+}
+
+/** main on a checkout, with pnpm 10.28.0 in the registry. */
+async function runMain(root: string, extra: Partial<MainOptions> = {}) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const { fetch } = mockFetch(PNPM_REGISTRY);
+  const code = await main({
+    root,
+    fetch,
+    now: NOW,
+    exceptions: [],
+    retryDelayMs: 0,
+    log: (line) => out.push(line),
+    error: (line) => err.push(line),
+    ...extra,
+  });
+  return { code, out, err };
+}
+
+/** main exits 1 with one error line that matches `message`. */
+async function refusedBy(root: string, message: RegExp) {
+  const { code, out, err } = await runMain(root);
+  expect({ code, out, err }).toEqual({ code: 1, out: [], err: [expect.stringMatching(message)] });
+}
+
+const PASSES = {
+  code: 0,
+  out: [
+    "ok: all 0 locked package versions and pnpm 10.28.0 (packageManager) were published at least 14 days before 2026-10-30T12:00:00.000Z",
+  ],
+  err: [],
+};
+
+describe("R8-01: config dependencies are refused", () => {
+  /** A config dependency as pnpm declares one: version and integrity. */
+  const PLUGIN = `pnpm-plugin-young: 1.0.0+sha512-${"A".repeat(86)}==`;
+  const workspace = (text: string) => checkout({ "pnpm-workspace.yaml": text });
+  const CONFIG_DEPENDENCIES =
+    /configDependencies: pnpm installs config dependencies outside the lockfile/;
+
+  it("R8-01: refuses configDependencies as a block key in pnpm-workspace.yaml", async () => {
+    await refusedBy(
+      workspace(`${WORKSPACE}\nconfigDependencies:\n  ${PLUGIN}\n`),
+      new RegExp(`^error: pnpm-workspace\\.yaml line 11: ${CONFIG_DEPENDENCIES.source}`),
+    );
+    await refusedBy(
+      workspace(`configDependencies: {${PLUGIN}}\n${WORKSPACE}`),
+      new RegExp(`^error: pnpm-workspace\\.yaml line 1: ${CONFIG_DEPENDENCIES.source}`),
+    );
+  });
+
+  it("R8-01: refuses configDependencies as a quoted key", async () => {
+    for (const key of ["'configDependencies'", '"configDependencies"']) {
+      await refusedBy(
+        workspace(`packages:\n  - apps/*\n${key}:\n  ${PLUGIN}\n`),
+        /^error: pnpm-workspace\.yaml line 3: expected a setting written as "name:" or "name: value"/,
+      );
+    }
+  });
+
+  it("R8-01: refuses configDependencies in a flow map", async () => {
+    await refusedBy(
+      workspace(`{packages: [apps/*], configDependencies: {${PLUGIN}}}\n`),
+      /^error: pnpm-workspace\.yaml line 1: expected a setting/,
+    );
+    await refusedBy(
+      workspace(`packages: [apps/*, {configDependencies: {${PLUGIN}}}]\n`),
+      /^error: pnpm-workspace\.yaml line 1: write packages as a block sequence/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\n  - {configDependencies: {${PLUGIN}}}\n`),
+      /^error: pnpm-workspace\.yaml line 3: expected a "- " item/,
+    );
+  });
+
+  it("R8-01: refuses configDependencies under an anchor or merge key", async () => {
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\n<<: {configDependencies: {${PLUGIN}}}\n`),
+      /^error: pnpm-workspace\.yaml line 3: expected a setting/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\n<<:\n  configDependencies:\n    ${PLUGIN}\n`),
+      /^error: pnpm-workspace\.yaml line 3: expected a setting/,
+    );
+    await refusedBy(
+      workspace(`packages: &plugins\n  - apps/*\nminimumReleaseAge: *plugins\n`),
+      /^error: pnpm-workspace\.yaml line 1: "&", which starts an anchor/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\nminimumReleaseAge: *plugins\n`),
+      /^error: pnpm-workspace\.yaml line 3: "\*", which starts an anchor, alias/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - !!str apps/*\n`),
+      /^error: pnpm-workspace\.yaml line 2: "!", which starts an anchor, alias, tag/,
+    );
+  });
+
+  it("R8-01: refuses configDependencies nested under another key", async () => {
+    await refusedBy(
+      workspace(
+        `packages:\n  - apps/*\nonlyBuiltDependencies:\n  configDependencies:\n    ${PLUGIN}\n`,
+      ),
+      /^error: pnpm-workspace\.yaml line 4: expected a "- " item/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - configDependencies:\n      ${PLUGIN}\n`),
+      /^error: pnpm-workspace\.yaml line 2: expected a "- " item/,
+    );
+    await refusedBy(
+      workspace(`minimumReleaseAge: 20160\n  configDependencies: {${PLUGIN}}\n`),
+      /^error: pnpm-workspace\.yaml line 2: expected a "- " item/,
+    );
+  });
+
+  it("R8-01: refuses configDependencies and a pnpm field that is not an object in package.json", async () => {
+    const root = (pnpm: unknown) =>
+      checkout({ "package.json": manifest({ packageManager: "pnpm@10.28.0", pnpm }) });
+    await refusedBy(
+      root({ configDependencies: { "pnpm-plugin-young": `1.0.0+sha512-${"A".repeat(86)}==` } }),
+      /^error: package\.json pnpm\.configDependencies: pnpm installs config dependencies outside the lockfile/,
+    );
+    for (const pnpm of ["configDependencies", [], null]) {
+      await refusedBy(root(pnpm), /^error: package\.json pnpm is not an object/);
+    }
+    expect(await runMain(root({ overrides: {} }))).toEqual(PASSES);
+  });
+
+  it("R8-01: refuses settings that make pnpm read another lockfile or run code", async () => {
+    for (const setting of [
+      "gitBranchLockfile: true",
+      "sharedWorkspaceLockfile: false",
+      "lockfileDir: ..",
+      "pnpmfile: .pnpmfile.cjs",
+      "globalPnpmfile: /tmp/x.cjs",
+      "useNodeVersion: 22.0.0",
+      "packageExtensions:",
+    ]) {
+      await refusedBy(
+        workspace(`${WORKSPACE}${setting}\n`),
+        new RegExp(
+          `^error: pnpm-workspace\\.yaml line 10: ${setting.slice(0, setting.indexOf(":"))} is not a setting the check accepts`,
+        ),
+      );
+    }
+  });
+
+  it("R8-01: reads pnpm-workspace.yaml strictly", async () => {
+    const cases: [string, RegExp][] = [
+      ["packages:\n  - apps/*\npackages:\n  - packages/*\n", /line 3: packages appears twice/],
+      ["packages:\n  - apps/* # apps\n", /line 2: a comment after a value/],
+      ["packages:\n  -\tapps/*\n", /line 2: a tab/],
+      ["packages:\n\t- apps/*\n", /line 2: a tab/],
+      ["minimumReleaseAge: |\n  20160\n", /line 1: a block scalar/],
+      ["minimumReleaseAge:\n  20160\n", /line 1: minimumReleaseAge needs a value on its line/],
+      ["packages:\n    - apps/*\n", /line 2: expected a "- " item/],
+      ["packages:\n- apps/*\n", /line 2: expected a setting/],
+      ["packages:\n  - 'apps/*\n  - x'\n", /line 2: a quoted value that continues/],
+      ["---\npackages:\n  - apps/*\n", /line 1: expected a setting/],
+      ["packages :\n  - apps/*\n", /line 1: expected a setting/],
+      ["packages:\n  - apps/*:\n", /line 2: expected a "- " item/],
+      ["packages:\n  - - apps/*\n", /line 2: expected a "- " item/],
+    ];
+    for (const [text, message] of cases) {
+      await refusedBy(
+        workspace(text),
+        new RegExp(`^error: pnpm-workspace\\.yaml ${message.source}`),
+      );
+    }
+  });
+
+  it("R8-01: accepts the layout the repository uses, and the committed file", async () => {
+    expect(await runMain(checkout())).toEqual(PASSES);
+    const quoted = [
+      "﻿packages:\r\n  - 'apps/*'\r\n  - \"packages/*\"   ",
+      "  # not built",
+      "onlyBuiltDependencies: ",
+      "minimumReleaseAge: 20160",
+      "minimumReleaseAgeExclude:",
+      "  - '@scope/fix'",
+      "",
+    ].join("\n");
+    expect(await runMain(workspace(quoted))).toEqual(PASSES);
+    const committed = await runMain(REPO_ROOT, {
+      lockfile: lockfile([]),
+      packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
+    });
+    expect(committed).toEqual(PASSES);
+    const settings = parseWorkspace(readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"));
+    expect(settings.get("packages")).toContain("apps/*");
+    expect(settings.get("minimumReleaseAge")).toBe("20160");
   });
 });
 
