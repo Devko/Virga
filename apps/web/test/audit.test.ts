@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiAction } from "../src/audit.ts";
+import { MAX_MCP_BODY } from "../src/mcp.ts";
 import type { ToolCall } from "../src/rpc.ts";
 import { ADMIN, ORIGIN, VIEWER } from "./config.ts";
 import { ACCOUNT, auditPage, MARKUP, UNKNOWN_ACCOUNT } from "./fixtures.ts";
@@ -312,6 +313,53 @@ describe("tool audit trail: MCP", () => {
     ]);
     expect(calls).toEqual([]);
     for (const entry of audit.entries) expectStorable(entry);
+  });
+
+  it("refuses a tools/call too large to inspect with 413 and records it as refused (R9-03)", async () => {
+    // One call, padded with spaces to `size` bytes.
+    const padded = (name: string, size: number) => {
+      const json = JSON.stringify({
+        jsonrpc: "2.0",
+        id: nextId++,
+        method: "tools/call",
+        params: { name, arguments: { account_id: ACCOUNT } },
+      });
+      return json + " ".repeat(size - json.length);
+    };
+    const send = (rawBody: string) =>
+      call("/mcp", {
+        token: viewer,
+        rawBody,
+        headers: { accept: "application/json, text/event-stream" },
+        noOrigin: true,
+      });
+
+    for (const name of ["trigger_scan", "get_scan_summary"]) {
+      const response = await send(padded(name, MAX_MCP_BODY + 1));
+      expect(response.status, name).toBe(413);
+      expect(await response.json()).toMatchObject({ jsonrpc: "2.0", error: { code: -32000 } });
+    }
+    // Also above the MCP SDK's own limit of 4 MiB.
+    const big = await send(padded("get_scan_summary", 4 * 1024 * 1024 + 70_000));
+    expect(big.status).toBe(413);
+    // The bodies were not inspected, so nothing from them ran.
+    expect(calls).toEqual([]);
+    expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
+      ["unknown_tool", null, "refused"],
+      ["unknown_tool", null, "refused"],
+      ["unknown_tool", null, "refused"],
+    ]);
+    for (const entry of audit.entries) expectStorable(entry);
+
+    // Up to the limit, the call is inspected and runs as before.
+    audit.entries.length = 0;
+    const fits = await send(padded("get_scan_summary", MAX_MCP_BODY));
+    expect(fits.status).toBe(200);
+    await fits.arrayBuffer();
+    expect(calls.map((c) => c.method)).toEqual(["getScanSummary"]);
+    expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
+      ["get_scan_summary", ACCOUNT, "ok"],
+    ]);
   });
 
   it("records the service token of an MCP client", async () => {

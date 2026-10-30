@@ -96,6 +96,8 @@ export interface CallOptions {
   method?: string;
   token?: string | null;
   body?: unknown;
+  /** Sent as it is, in place of `body` as JSON. */
+  rawBody?: string;
   headers?: Record<string, string>;
   /** Sends no Origin with a body, like a non-browser client. */
   noOrigin?: boolean;
@@ -107,16 +109,14 @@ export interface CallOptions {
 export async function call(path: string, options: CallOptions = {}): Promise<Response> {
   const headers = new Headers(options.headers);
   if (options.token) headers.set("Cf-Access-Jwt-Assertion", options.token);
-  const method = options.method ?? (options.body === undefined ? "GET" : "POST");
-  if (options.body !== undefined) {
+  const body =
+    options.rawBody ?? (options.body === undefined ? undefined : JSON.stringify(options.body));
+  const method = options.method ?? (body === undefined ? "GET" : "POST");
+  if (body !== undefined) {
     if (!headers.has("content-type")) headers.set("content-type", "application/json");
     if (!headers.has("origin") && !options.noOrigin) headers.set("origin", ORIGIN);
   }
-  const request = new Request(`${ORIGIN}${path}`, {
-    method,
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const request = new Request(`${ORIGIN}${path}`, { method, headers, body });
   const ctx = createExecutionContext();
   const withAccess = options.access
     ? ({

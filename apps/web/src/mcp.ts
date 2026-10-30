@@ -193,18 +193,29 @@ export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
   return server;
 }
 
-// A tool call is far smaller; a larger body is not read twice.
-const MAX_CALL_BODY = 65_536;
+/**
+ * Request bodies larger than this are refused with 413 before the MCP SDK
+ * reads them (its own limit is 4 MiB). A tool call is far smaller, and every
+ * call that can run was read here first, so the audit trail always knows
+ * what a request asked for (R9-03).
+ */
+export const MAX_MCP_BODY = 65_536;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** The tool call a request body names, if it is one JSON-RPC `tools/call` request. */
-async function toolCallIn(request: Request): Promise<Omit<ToolCallOutcome, "outcome"> | null> {
+type Attempt = Omit<ToolCallOutcome, "outcome">;
+
+/**
+ * The tool call a request body names, if it is one JSON-RPC `tools/call`
+ * request; `too_large` for a body over MAX_MCP_BODY.
+ */
+async function toolCallIn(request: Request): Promise<Attempt | "too_large" | null> {
   if (request.method !== "POST" || request.body === null) return null;
+  if (Number(request.headers.get("content-length") ?? "0") > MAX_MCP_BODY) return "too_large";
   const body = request.clone().body;
-  const bytes = body === null ? null : await readLimited(body, MAX_CALL_BODY);
-  if (bytes === null) return null;
+  const bytes = body === null ? new Uint8Array() : await readLimited(body, MAX_MCP_BODY);
+  if (bytes === null) return "too_large";
   let message: unknown;
   try {
     message = JSON.parse(new TextDecoder().decode(bytes));
@@ -221,6 +232,20 @@ async function toolCallIn(request: Request): Promise<Omit<ToolCallOutcome, "outc
   };
 }
 
+/** The MCP SDK's answer to a body over its limit, with ours. */
+const tooLarge = () =>
+  Response.json(
+    {
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: `Payload Too Large: Request body must not exceed ${MAX_MCP_BODY} bytes`,
+      },
+      id: null,
+    },
+    { status: 413 },
+  );
+
 /**
  * Serves /mcp. A browser Origin must be the Worker's own host (the default
  * list would admit localhost pages), and no CORS headers are sent. The Host
@@ -228,7 +253,9 @@ async function toolCallIn(request: Request): Promise<Omit<ToolCallOutcome, "outc
  *
  * Every tool that runs lands in the audit trail with its outcome. A
  * `tools/call` request that runs no tool (an unknown tool, invalid input, a
- * refused Origin) lands there as `refused` once its answer has ended.
+ * refused Origin) lands there as `refused` once its answer has ended. A body
+ * over MAX_MCP_BODY runs nothing and lands there as one `refused` row with
+ * the tool `unknown_tool` and no account: nobody read what it asked for.
  */
 export async function handleMcp(
   request: Request,
@@ -244,6 +271,10 @@ export async function handleMcp(
     outcome: call.outcome,
   });
   const attempted = await toolCallIn(request);
+  if (attempted === "too_large") {
+    recordToolCall(env, ctx, entry({ tool: "unknown_tool", accountId: null, outcome: "refused" }));
+    return tooLarge();
+  }
   let ran = 0;
   const handler = createMcpHandler(
     () =>
