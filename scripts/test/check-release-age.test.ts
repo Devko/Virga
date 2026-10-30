@@ -1757,6 +1757,7 @@ describe("R9-01: the root .npmrc is read strictly", () => {
     const CODE = "makes pnpm run code the check does not read";
     const CREDENTIAL =
       "a registry credential, token helper or client certificate \\(the check prints neither key nor value\\)";
+    const UNKNOWN = "an unknown setting, whose key the check does not print";
     const cases: [string, string][] = [
       ["lockfile-dir=other", `lockfile-dir ${LOCKFILE}`],
       ["git-branch-lockfile=true", `git-branch-lockfile ${LOCKFILE}`],
@@ -1768,24 +1769,21 @@ describe("R9-01: the root .npmrc is read strictly", () => {
       ["lockfile=false", `lockfile ${LOCKFILE}`],
       ["use-node-version=23.0.0", `use-node-version ${RUNTIME}`],
       ["node-version=23.0.0", `node-version ${RUNTIME}`],
-      ["node-mirror:release=http://127.0.0.1:8080/", `node-mirror:release ${RUNTIME}`],
+      ["node-mirror:release=http://127.0.0.1:8080/", `node-mirror:<channel> ${RUNTIME}`],
       ["registry=https://registry.invalid/", `registry ${FETCH}`],
-      ["@virga:registry=https://registry.invalid/", `@virga:registry ${FETCH}`],
+      ["@virga:registry=https://registry.invalid/", `@<scope>:registry ${FETCH}`],
       ["strict-ssl=false", `strict-ssl ${FETCH}`],
       ["https-proxy=http://proxy.invalid/", `https-proxy ${FETCH}`],
       [`//registry.npmjs.org/:_authToken=${SECRET}`, CREDENTIAL],
       [`_authToken=${SECRET}`, CREDENTIAL],
       [`_auth=${SECRET}`, CREDENTIAL],
       ["//registry.npmjs.org/:tokenHelper=/tmp/helper", CREDENTIAL],
-      [
-        `${SECRET}=true`,
-        `the key on this line \\(not printed\\) is not a setting the check accepts`,
-      ],
+      [`${SECRET}=true`, UNKNOWN],
       ["pnpmfile=.pnpmfile.cjs", `pnpmfile ${CODE}`],
       ["global-pnpmfile=/tmp/x.cjs", `global-pnpmfile ${CODE}`],
       ["node-options=--require=./x.cjs", `node-options ${CODE}`],
       ["script-shell=/tmp/sh", `script-shell ${CODE}`],
-      ["ignore-scripts=false", "ignore-scripts is not a setting the check accepts"],
+      ["ignore-scripts=false", UNKNOWN],
     ];
     for (const [line, message] of cases) {
       const err = await refuses(`${NPMRC}${line}\n`, 3, new RegExp(`${message}.*${ONLY}`));
@@ -1808,8 +1806,8 @@ describe("R9-01: the root .npmrc is read strictly", () => {
       ["lockfile-dir\n", 1, "expected one key=value per line"],
       ["[registry]\nsave-exact=true\n", 1, "expected one key=value per line"],
       ["save-exact=true\nsave-exact=true\n", 2, "save-exact appears twice"],
-      ["save-exact[]=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
-      ["SAVE-EXACT=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
+      ["save-exact[]=true\n", 1, "an unknown setting, whose key the check does not print"],
+      ["SAVE-EXACT=true\n", 1, "an unknown setting, whose key the check does not print"],
       ["save-exact=true\rlockfile-dir=other\n", 2, "lockfile-dir makes pnpm install"],
       ["\u00A0# not a comment line\n", 1, "expected one key=value per line"],
     ];
@@ -1847,6 +1845,53 @@ describe("R9-02: only the root holds .npmrc", () => {
       checkout({ "apps/web/.npmrc": "" }),
       /^error: apps\/web\/\.npmrc: only the root may hold \.npmrc/,
     );
+  });
+});
+
+describe(".npmrc messages (round 10 hardening): a refused key is printed only from the known lists", () => {
+  /** A lowercase hex secret, shaped like a setting name. */
+  const HEX = "0123456789abcdef0123456789abcdef01234567";
+  const run = (line: string) => runMain(checkout({ ".npmrc": `save-exact=true\n${line}\n` }));
+
+  it(".npmrc messages: says an unknown setting, with its line number, for a key on no list", async () => {
+    for (const line of [
+      `${HEX}=true`,
+      `node-mirror-${HEX}=x`,
+      "ignore-scripts=false",
+      "lockfile-dirx=other",
+      "npm_SYNTHETICr10token=true",
+    ]) {
+      const { code, out, err } = await run(line);
+      expect({ code, out, err }, line).toEqual({
+        code: 1,
+        out: [],
+        err: [
+          expect.stringMatching(
+            /^error: \.npmrc line 2: an unknown setting, whose key the check does not print; /,
+          ),
+        ],
+      });
+      expect(err.join("\n")).not.toContain(line.slice(0, line.indexOf("=")));
+    }
+  });
+
+  it(".npmrc messages: prints a key on a list, and for a scope or channel only the setting", async () => {
+    const cases: [string, RegExp][] = [
+      ["lockfile-dir=other", /^error: \.npmrc line 2: lockfile-dir makes pnpm install/],
+      [
+        `@${HEX}:registry=https://registry.invalid/`,
+        /^error: \.npmrc line 2: @<scope>:registry changes where or how pnpm fetches packages/,
+      ],
+      [
+        `node-mirror:${HEX}=http://127.0.0.1:8080/`,
+        /^error: \.npmrc line 2: node-mirror:<channel> makes pnpm download and run a Node\.js runtime/,
+      ],
+    ];
+    for (const [line, message] of cases) {
+      const { code, err } = await run(line);
+      expect({ code, err }, line).toEqual({ code: 1, err: [expect.stringMatching(message)] });
+      expect(err.join("\n")).not.toContain(HEX);
+    }
   });
 });
 

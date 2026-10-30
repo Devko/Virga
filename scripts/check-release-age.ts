@@ -660,9 +660,6 @@ const NPMRC_SETTINGS: ReadonlyMap<string, string> = new Map([
 const npmrcError = (line: number, problem: string) =>
   new NpmrcError(`.npmrc line ${line}: ${problem}`);
 
-/** A key shaped like a setting name, which the check prints; any other key could be a credential. */
-const SETTING_NAME = /^@?[a-z0-9][a-z0-9._-]{0,63}(?::[a-z0-9._-]{1,63})?$/;
-
 const LOCKFILE_SETTINGS = new Set([
   "lockfile",
   "lockfile-dir",
@@ -686,7 +683,9 @@ const CREDENTIAL_SETTINGS =
 
 /**
  * Why the check refuses a key of .npmrc. Never names a value, and names the
- * key only if it is shaped like a setting name.
+ * key only from the lists above, since any other key could be a secret: for a
+ * scoped registry or a mirror channel, only the setting (`@<scope>:registry`,
+ * `node-mirror:<channel>`).
  */
 function npmrcKeyProblem(key: string): string {
   const accepted = [...NPMRC_SETTINGS].map(([name, value]) => `${name}=${value}`).join(" and ");
@@ -695,23 +694,22 @@ function npmrcKeyProblem(key: string): string {
   if (lower.startsWith("//") || CREDENTIAL_SETTINGS.test(lower)) {
     return `a registry credential, token helper or client certificate (the check prints neither key nor value): the repository holds no credentials, and pnpm runs a token helper as a command; ${only}`;
   }
-  if (!SETTING_NAME.test(key)) {
-    return `the key on this line (not printed) is not a setting the check accepts; ${only}`;
-  }
-  const name = key.replace(/:.*$/, "");
   if (LOCKFILE_SETTINGS.has(key)) {
     return `${key} makes pnpm install from a lockfile other than the root pnpm-lock.yaml the check dates, or without one; ${only}`;
   }
-  if (RUNTIME_SETTINGS.has(name)) {
-    return `${key} makes pnpm download and run a Node.js runtime the check does not date; ${only}`;
+  const [name = "", channel] = key.split(":");
+  if (RUNTIME_SETTINGS.has(name) && (channel === undefined || name === "node-mirror")) {
+    const shown = channel === undefined ? name : `${name}:<channel>`;
+    return `${shown} makes pnpm download and run a Node.js runtime the check does not date; ${only}`;
   }
-  if (FETCH_SETTINGS.has(key) || key.endsWith(":registry")) {
-    return `${key} changes where or how pnpm fetches packages, and the check dates versions on registry.npmjs.org; ${only}`;
+  if (FETCH_SETTINGS.has(key) || /^@[^:]+:registry$/.test(key)) {
+    const shown = key.startsWith("@") ? "@<scope>:registry" : key;
+    return `${shown} changes where or how pnpm fetches packages, and the check dates versions on registry.npmjs.org; ${only}`;
   }
   if (CODE_SETTINGS.has(key)) {
     return `${key} makes pnpm run code the check does not read: a pnpmfile, a shell or Node.js options for scripts; ${only}`;
   }
-  return `${key} is not a setting the check accepts; a setting can make pnpm install from another lockfile, fetch from another registry or run code the check does not date; ${only}`;
+  return `an unknown setting, whose key the check does not print; a setting can make pnpm install from another lockfile, fetch from another registry or run code the check does not date; ${only}`;
 }
 
 /**
