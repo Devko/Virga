@@ -20,7 +20,7 @@ export {
   readOsvFeed,
   readOsvRecord,
 } from "./osv.ts";
-export { type NpmPurl, parseNpmPurl } from "./purl.ts";
+export { type NpmPurl, npmNameKey, parseNpmPurl } from "./purl.ts";
 export {
   type RematchInput,
   type RematchResult,
@@ -29,4 +29,9 @@ export {
   type UnparsedPackage,
 } from "./rematch.ts";
 export { compareSemver, parseSemver, type SemVer } from "./semver.ts";
-export { type SeverityRank, severityRank } from "./severity.ts";
+export {
+  isMaliciousPackageAdvisory,
+  MALICIOUS_ID_PREFIX,
+  type SeverityRank,
+  severityRank,
+} from "./severity.ts";

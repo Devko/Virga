@@ -1,4 +1,5 @@
 import type { NpmAffected, OsvAdvisory, OsvEvent, OsvRange } from "./osv.ts";
+import { npmNameKey } from "./purl.ts";
 import { compareSemver, parseSemver, type SemVer } from "./semver.ts";
 
 /** Whether a package version is affected. `unknown` is never read as not affected. */
@@ -125,14 +126,16 @@ function lowestFixed(entries: readonly NpmAffected[], version: SemVer): string |
 
 /**
  * Matches an advisory against an npm package. Entries apply when their name
- * equals the package name exactly, or is the wildcard `*`. `affected` wins
- * over `unknown`, and `unknown` over `not_affected`.
+ * equals the package name without regard to ASCII case ({@link npmNameKey},
+ * R9-05), or is the wildcard `*`. `affected` wins over `unknown`, and
+ * `unknown` over `not_affected`.
  */
 export function matchAdvisory(advisory: OsvAdvisory, name: string, version: SemVer): AdvisoryMatch {
   const entries: NpmAffected[] = [];
+  const key = npmNameKey(name);
   let unknown = false;
   for (const entry of advisory.affected) {
-    if (entry.name !== name && entry.name !== "*") continue;
+    if (entry.name !== "*" && npmNameKey(entry.name) !== key) continue;
     const decision = evaluateEntry(entry, version);
     if (decision === "affected") entries.push(entry);
     else if (decision === "unknown") unknown = true;

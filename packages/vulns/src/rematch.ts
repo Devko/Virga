@@ -2,8 +2,8 @@ import type { VulnRecord } from "@virga/graph";
 import { isKnownExploited, type KevCatalog } from "./kev.ts";
 import { matchAdvisory } from "./match.ts";
 import type { AdvisoryFeed, OsvAdvisory } from "./osv.ts";
-import { parseNpmPurl } from "./purl.ts";
-import { type SeverityRank, severityRank } from "./severity.ts";
+import { npmNameKey, parseNpmPurl } from "./purl.ts";
+import { isMaliciousPackageAdvisory, type SeverityRank, severityRank } from "./severity.ts";
 
 export interface RematchInput {
   /** IDs of the live package nodes (`package:<purl>`). */
@@ -112,8 +112,15 @@ const sameRow = (a: VulnRecord, b: VulnRecord): boolean =>
   a.firstSeen === b.firstSeen &&
   JSON.stringify(a.aliases) === JSON.stringify(b.aliases);
 
-/** The rank over the entries that matched: critical decides, otherwise one unknown makes it unknown. */
-function rankOf(advisory: OsvAdvisory, entries: ReturnType<typeof matchAdvisory>["entries"]) {
+/**
+ * The rank over the entries that matched: critical decides, otherwise one
+ * unknown makes it unknown. A `MAL-` record is critical (decision 0008).
+ */
+function rankOf(
+  advisory: OsvAdvisory,
+  entries: ReturnType<typeof matchAdvisory>["entries"],
+): SeverityRank | null {
+  if (isMaliciousPackageAdvisory(advisory.id)) return 4;
   let best: SeverityRank = 0;
   let unknown = false;
   for (const entry of entries) {
@@ -131,6 +138,8 @@ function rankOf(advisory: OsvAdvisory, entries: ReturnType<typeof matchAdvisory>
  * - A decided match with a known severity is a row: new rows open with
  *   `first_seen = at`; an existing row keeps `first_seen`, a fixed one
  *   reopens, an ignored one stays ignored.
+ * - A match on a `MAL-` record (malware) ranks critical, whatever its
+ *   severity fields hold (decision 0008).
  * - A match that cannot be decided (a range or version that does not parse)
  *   or ranked (no CVSS v3 vector and no database severity) is reported in
  *   `unknown` and not written; an existing row for it stays as it is.
@@ -150,10 +159,11 @@ export function rematch(input: RematchInput): RematchResult {
   const { feed, kev, at } = input;
   const source = input.source ?? "osv";
 
+  // Advisories by npm name key: names match without regard to ASCII case (R9-05).
   const byName = new Map<string, OsvAdvisory[]>();
   const wildcard: OsvAdvisory[] = [];
   for (const advisory of feed.advisories) {
-    for (const name of new Set(advisory.affected.map((e) => e.name))) {
+    for (const name of new Set(advisory.affected.map((e) => npmNameKey(e.name)))) {
       if (name === "*") wildcard.push(advisory);
       else {
         const list = byName.get(name);
@@ -202,7 +212,7 @@ export function rematch(input: RematchInput): RematchResult {
       unparsed.add(packageId);
       continue;
     }
-    const candidates = new Set([...(byName.get(purl.name) ?? []), ...wildcard]);
+    const candidates = new Set([...(byName.get(npmNameKey(purl.name)) ?? []), ...wildcard]);
     for (const advisory of candidates) {
       const match = matchAdvisory(advisory, purl.name, purl.version);
       if (match.decision === "not_affected") continue;

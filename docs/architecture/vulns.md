@@ -8,7 +8,7 @@ The goal is the `vulns` input of CF-001 (and later CF-005): which package nodes 
 
 | Input | Form | Source |
 | --- | --- | --- |
-| Package nodes | Node IDs `package:<purl>`, npm purls such as `pkg:npm/%40scope/name@1.2.3` | Not built yet: the `workers` collector from `package_dependencies`, after [S-04](../spikes/S-04-worker-dependencies.md) |
+| Package nodes | Node IDs `package:<purl>`, npm purls in the data model's form (name in lower case), such as `pkg:npm/%40scope/name@1.2.3` | Not built yet: the `workers` collector from `package_dependencies`, after [S-04](../spikes/S-04-worker-dependencies.md) |
 | Advisories | One OSV record per JSON text, read with `readOsvFeed` | Not built yet: the advisory mirror |
 | KEV catalog | The CISA catalog JSON, read with `readKevCatalog` | Not built yet: the same mirror |
 | Existing rows | `listVulns(db)` | The `vulns` table |
@@ -21,11 +21,12 @@ The goal is the `vulns` input of CF-001 (and later CF-005): which package nodes 
 
 The reader follows [OSV schema 1.9.2](https://ossf.github.io/osv-schema/) (`OSV_SCHEMA_VERSION`). A record that declares a `schema_version` other than `1.x.y` is rejected.
 
-Advisory data is untrusted. `readOsvRecord` reads only what matching needs and checks it strictly; a record that breaks the schema or a limit is rejected as a whole, with a reason, and never used in part. Reasons hold a path and fixed words (`affected[2].ranges[0].events: no introduced event`), never text from the record. `summary`, `details`, `references` and `credits` are not read.
+Advisory data is untrusted. `readOsvRecord` reads only what matching needs and checks it strictly; a record that breaks the schema or a limit is rejected as a whole, with a reason, and never used in part. Reasons hold a path or an offset and fixed words (`affected[2].ranges[0].events: no introduced event`, `duplicate key at offset 812`), never text from the record. `summary`, `details`, `references` and `credits` are not read.
 
 | Field | Rule |
 | --- | --- |
 | Record | At most 4 MiB of UTF-8, checked before parsing; a JSON object |
+| Keys | No key twice in one object, at any depth, read or not; keys compare as JSON decodes them (R9 hardening). `JSON.parse` keeps the last value, so a second, empty `affected` would read as a record without npm entries, and its rows would become `fixed`. The rejection keeps the ID unless `id` is the repeated key |
 | `id` | Required; `^[a-zA-Z0-9:_.-]+$`, at most 128 characters. Without a readable ID the rejection has `id: null` |
 | `modified` | Required string, at most 64 characters |
 | `withdrawn` | Optional string. A valid withdrawn record matches nothing |
@@ -49,13 +50,13 @@ Version strings are not checked by the reader: `ECOSYSTEM` versions are uninterp
 - No qualifiers or subpath. A qualifier such as `repository_url` can name another registry, where the same name is another package.
 - An optional scope, `%40scope` or `@scope`, then the name. Each part uses the characters `encodeURIComponent` leaves alone; at most 214 characters together, as npm allows.
 - The version is percent-decoded and must be [SemVer 2.0.0](https://semver.org/spec/v2.0.0.html): no `v` or `=` prefix, no ranges. Numeric parts compare as strings, so numbers above 2^53 compare exactly.
-- The name keeps its case and is compared exactly. npm names are case sensitive, and old packages such as `JSONStream` have capitals. The collector must keep npm's spelling.
+- The name keeps its case, and matching compares names without regard to ASCII case (R9-05). The purl spec lowercases npm names, and every writer follows it ([data model](data-model.md#package-node-ids)): `scanner-io` writes `JSONStream` 1.3.1 as `pkg:npm/jsonstream@1.3.1`, while OSV keeps npm's spelling. npm refuses new names with capitals, so only old packages differ in case; matching both is an extra match, which is the safe direction. Only `A` to `Z` are folded (`npmNameKey`): npm names are ASCII, and Unicode folding would turn U+212A (KELVIN SIGN) into `k`, so an advisory name with it would name `keyv`.
 
 A package that does not parse is reported in `unparsed` with the reason and is not matched.
 
 ## Matching
 
-For a package and an advisory, every npm entry whose name equals the package name (or is `*`) is evaluated; the others do not apply. Three results: `affected`, `not_affected`, `unknown`.
+For a package and an advisory, every npm entry whose name equals the package name without regard to ASCII case (or is `*`) is evaluated; the others do not apply. The row keeps the package node ID as given. Three results: `affected`, `not_affected`, `unknown`.
 
 - **Ranges** follow the schema's evaluation pseudocode. With `limit` events, the version must be below one of them (`*` is infinity). Then the events are walked in version order, `introduced: "0"` first: `introduced` at or below the version starts an affected span, `fixed` at or below it ends one, `last_affected` below it ends one. At equal versions, `introduced` comes first, so `introduced: X, fixed: X` affects nothing and `introduced: X, last_affected: X` affects exactly X. Several spans in one range work, and the order of events in the record does not matter.
 - **`SEMVER` and `ECOSYSTEM`** are evaluated alike: npm versions are SemVer, ordered by SemVer precedence. Build metadata does not count.
@@ -69,6 +70,7 @@ For a package and an advisory, every npm entry whose name equals the package nam
 
 `severity_rank` is 0 none, 1 low, 2 medium, 3 high, 4 critical (data model). The entry's own `severity` applies when it has one, otherwise the top level.
 
+0. A record whose ID starts with `MAL-` (the OpenSSF malicious packages database, compared exactly) ranks 4, whatever its severity fields hold ([decision 0008](../decisions/0008-malicious-package-advisories.md)). Such records mark a version as malware and carry no severity; an unknown rank would keep CF-001 from running for the whole account and hide the package. A withdrawn `MAL-` record matches nothing, and a `MAL-` match whose version cannot be decided stays unknown. The `kev` flag comes from the CISA catalog as for any record.
 1. CVSS v3.0 and v3.1 vectors (`CVSS_V3`) decide when there is at least one. The base score follows the FIRST specifications, including each version's Roundup; temporal and environmental metrics are validated and ignored. The highest score counts: 0.0 none, 0.1 to 3.9 low, 4.0 to 6.9 medium, 7.0 to 8.9 high, 9.0 to 10.0 critical. A vector that does not parse makes the rank unknown, unless a valid vector already gives critical.
 2. Without a v3 vector, `database_specific.severity` as GitHub advisories carry it: `LOW` 1, `MODERATE` 2, `HIGH` 3, `CRITICAL` 4. Any other value is unknown.
 3. Otherwise the rank is unknown, for example with only a CVSS v4 or v2 vector.
@@ -77,7 +79,7 @@ An unknown rank is never written as 0: CF-001 would read 0 as harmless. The matc
 
 ## KEV
 
-`readKevCatalog` reads the [CISA catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) strictly: at most 32 MiB and 100,000 entries; `catalogVersion` and `dateReleased` (strings, at most 64 characters) for provenance; `count`, which must equal the number of entries, so a cut file is caught; and every `cveID`, which must match the schema's `^CVE-[0-9]{4}-[0-9]{4,19}$`. Other fields are not read. Any violation rejects the catalog.
+`readKevCatalog` reads the [CISA catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) strictly: at most 32 MiB and 100,000 entries; `catalogVersion` and `dateReleased` (strings, at most 64 characters) for provenance; `count`, which must equal the number of entries, so a cut file is caught; and every `cveID`, which must match the schema's `^CVE-[0-9]{4}-[0-9]{4,19}$`. Other fields are not read. A key twice in one object rejects the catalog as it rejects an OSV record: a second `count` and `vulnerabilities` would otherwise replace the first. Any violation rejects the catalog.
 
 A match has `kev = 1` when the advisory ID or any alias is in the catalog. Without a catalog (`kev: null`), new rows get `kev = 0`, existing rows keep their flag, and the result is not complete.
 
@@ -106,16 +108,17 @@ The `source` of rematch rows is `osv` unless the caller names another. Rule fixt
 
 A result is complete when every package parsed, no match is unknown, no record was rejected, the KEV catalog was read, and both the package set and the feed are complete. `applyVulnRematch` then records `vulns` as `complete`; otherwise as `partial`, with a detail made of counts only, such as `unknown matches: 2; no KEV catalog`. The detail holds no text from advisories or the scanned account.
 
+The caller states the two completeness inputs, as the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2) defines them: `packagesComplete` is true only when the scan's `packages` coverage is `complete`, and `feedComplete` is false when the mirror is missing or its sync failed, was partial or is older than 48 hours ([decision 0009](../decisions/0009-advisory-mirror-egress.md)). Without a feed the caller passes `readOsvFeed([])` with `feedComplete: false`, and without a readable catalog `kev: null`; the result is then `partial`, and no row is fixed because its advisory is missing.
+
 CF-001 requires `vulns` (and `packages`), and `evaluateRules` runs a rule only when every input it requires is `complete` in the scan. An incomplete rematch therefore leaves CF-001 `not_evaluated`: its findings neither open nor resolve. Its decided rows are still written, so the table stays current.
 
 The lists `unknown` and `unparsed` hold package IDs from the scanned account. A caller that logs them treats them as untrusted, like every string from a scanned account; counts are enough for the scan summary.
 
 ## Not done yet
 
-- **Packages.** No collector emits `package` nodes or `CONTAINS` edges. Extraction from Worker versions waits for [S-04](../spikes/S-04-worker-dependencies.md): `package_dependencies` came back `null` in a temporary account, and source maps were not returned.
-- **Advisory mirror and its sync.** Where the OSV npm records and the KEV catalog come from, how they are stored (R2, indexed by package name), how often they sync, and how the tool reaches osv.dev and cisa.gov (these are not Cloudflare API calls and do not go through the broker) are open. The sync decides `feedComplete`.
+- **Packages.** No collector emits `package` nodes or `CONTAINS` edges, and nothing records `packages` coverage; the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2) says what a writer must emit. Extraction from Worker versions waits for [S-04](../spikes/S-04-worker-dependencies.md): `package_dependencies` came back `null` in a temporary account, and source maps were not returned.
+- **Advisory mirror and its sync.** [Decision 0009](../decisions/0009-advisory-mirror-egress.md) settles the sources (OSV's bulk npm data and the CISA catalog, fetched in bulk by a mirror Worker into R2) and when the feed is incomplete. The mirror Worker, the R2 layout, the sync schedule and the download format are not built yet. The sync decides `feedComplete`.
 - **Scheduling.** Neither the scan nor a daily schedule runs the rematch.
-- **Malicious packages.** OSV `MAL-` records carry no severity, so a match is `severity unknown` and keeps CF-001 `not_evaluated`. Ranking them critical needs a decision.
 - **CVSS v4.** Advisories with only a v4 vector and no database severity are unknown. GitHub advisories carry a database severity, so this mostly concerns other sources.
 - **Aliases.** Two records that alias each other, for example a GitHub malware advisory and its `MAL-` record, give two matches. Matches are not merged by alias.
 - **Real data.** The limits come from the schema and estimates; check them against a copy of the real mirror before relying on them. A record over a limit is rejected and makes the result incomplete.

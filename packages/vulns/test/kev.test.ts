@@ -150,6 +150,26 @@ describe("readKevCatalog", () => {
     });
   });
 
+  it("R9 hardening, duplicate keys: rejects a catalog with a second count and list", () => {
+    const text = catalog().replace(/\}$/, ', "count": 0, "vulnerabilities": []}');
+    expect(JSON.parse(text).vulnerabilities).toEqual([]);
+    expect(readKevCatalog(text)).toEqual({
+      status: "rejected",
+      reason: `duplicate key at offset ${text.lastIndexOf('"count"')}`,
+    });
+  });
+
+  it("R9 hardening, duplicate keys: rejects a repeated key in an entry", () => {
+    const text = catalog().replace(
+      '"cveID":"CVE-2099-0001"',
+      '"cveID":"CVE-2099-0001","cveID":"CVE-2099-0009"',
+    );
+    expect(readKevCatalog(text)).toEqual({
+      status: "rejected",
+      reason: `duplicate key at offset ${text.lastIndexOf('"cveID"')}`,
+    });
+  });
+
   it("rejects a catalog larger than the size limit before it parses it", () => {
     const text = catalog((c) => {
       c.title = "x".repeat(KEV_LIMITS.catalogBytes);

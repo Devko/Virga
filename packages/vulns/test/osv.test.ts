@@ -364,6 +364,57 @@ describe("readOsvRecord", () => {
     expect(readOsvRecord(record)).toMatchObject({ status: "rejected", id: null });
   });
 
+  describe("R9 hardening, duplicate keys", () => {
+    const npm = `{"package": {"ecosystem": "npm", "name": "virga-fixture-a"},
+      "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.0.0"}]}]}`;
+    const head = `"id": "GHSA-vrga-dupl-0000", "modified": "2026-10-01T00:00:00Z",
+      "database_specific": {"severity": "CRITICAL"}`;
+    const rejected = (text: string, key: string, id: string | null = "GHSA-vrga-dupl-0000") =>
+      expect(readOsvRecord(text)).toEqual({
+        status: "rejected",
+        id,
+        reason: `duplicate key at offset ${text.lastIndexOf(key)}`,
+      });
+
+    it("rejects a record with a second, empty affected, which JSON.parse reads as skipped", () => {
+      const text = `{${head}, "affected": [${npm}], "affected": []}`;
+      expect(JSON.parse(text).affected).toEqual([]);
+      rejected(text, '"affected"');
+    });
+
+    it("rejects a repeated key in an entry, a package or an event", () => {
+      rejected(
+        `{${head}, "affected": [{"package": {"ecosystem": "npm", "name": "virga-fixture-a"},
+          "versions": ["0.1.0"], "versions": []}]}`,
+        '"versions"',
+      );
+      rejected(
+        `{${head}, "affected": [{"package": {"ecosystem": "npm", "name": "virga-fixture-a",
+          "name": "other"}, "versions": ["0.1.0"]}]}`,
+        '"name"',
+      );
+      rejected(
+        `{${head}, "affected": [{"package": {"ecosystem": "npm", "name": "virga-fixture-a"},
+          "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"},
+          {"fixed": "1.0.0", "fixed": "9.0.0"}]}]}]}`,
+        '"fixed"',
+      );
+    });
+
+    it("rejects a repeated key in a part it does not read", () => {
+      rejected(`{${head}, "affected": [${npm}], "details": {"a": 1, "a": 2}}`, '"a"');
+    });
+
+    it("has no ID when the id key itself repeats", () => {
+      const text = `{${head}, "id": "GHSA-vrga-dupl-0001", "affected": [${npm}]}`;
+      rejected(text, '"id"', null);
+    });
+
+    it("rejects a key repeated with an escape", () => {
+      rejected(`{${head}, "affected": [${npm}], "aff\\u0065cted": []}`, '"aff\\u0065cted"');
+    });
+  });
+
   it("reads keys like __proto__ and constructor as plain data", () => {
     const text = `{"__proto__": {"polluted": true}, "id": "GHSA-vrga-base-0000", "modified": "x",
       "affected": [{"package": {"ecosystem": "npm", "name": "constructor"},

@@ -22,6 +22,19 @@ const TYPE = /^pkg:([A-Za-z.+-][A-Za-z0-9.+-]*)\//;
 
 const fail = (reason: string): NpmPurl => ({ ok: false, reason });
 
+const ASCII_UPPER = /[A-Z]/g;
+
+/**
+ * The key npm names are compared by: ASCII letters in lower case, nothing
+ * else changed (R9-05). The purl spec lowercases npm names, so `scanner-io`
+ * writes `pkg:npm/jsonstream@1.3.1`, while advisories keep npm's spelling
+ * (`JSONStream`). Comparing without case can only add matches, which is the
+ * safe direction. Other letters are not folded: npm names are ASCII, and
+ * Unicode folding would let `Keyv` (with KELVIN SIGN) name `keyv`.
+ */
+export const npmNameKey = (name: string): string =>
+  name.replace(ASCII_UPPER, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+
 function decode(part: string): string | null {
   try {
     return decodeURIComponent(part);
@@ -36,8 +49,8 @@ function decode(part: string): string | null {
  * case, and qualifiers or a subpath are refused, because a qualifier such as
  * `repository_url` can name another registry, where the same name is
  * another package. The `@` of a scope may be percent-encoded or not. The
- * version must be SemVer 2.0.0. The name keeps its case: npm names are case
- * sensitive, and matching is exact.
+ * version must be SemVer 2.0.0. The name keeps its case; matching compares
+ * names by {@link npmNameKey}.
  */
 export function parseNpmPurl(purl: string): NpmPurl {
   if (purl.length > PURL_MAX_LENGTH) return fail(`longer than ${PURL_MAX_LENGTH} characters`);

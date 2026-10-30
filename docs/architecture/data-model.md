@@ -5,7 +5,7 @@ Status: implemented in [`packages/graph`](../../packages/graph). The schema is [
 ## Conventions
 
 - **One database per scanned account.** Each Durable Object holds exactly one account, so no table has an account column.
-- **Node IDs** are `<type>:<native_id>`. `native_id` is the Cloudflare ID where one exists. Otherwise it is a stable natural key: bucket name, hostname, or a purl for packages. `name` holds the display value (route pattern, hostname) because some native IDs mean nothing to a reader.
+- **Node IDs** are `<type>:<native_id>`. `native_id` is the Cloudflare ID where one exists. Otherwise it is a stable natural key: bucket name, hostname, or a purl for packages ([spelled as below](#package-node-ids)). `name` holds the display value (route pattern, hostname) because some native IDs mean nothing to a reader.
 - **Edge IDs** are deterministic strings: `<type>:<src>-><dst>#<key>`. `key` tells parallel edges apart, for example two bindings with different names to the same KV namespace.
 - **Resource class.** Every node and edge records the class of the collector that wrote it (`workers`, `dns`, `access`, …). The sweep works per class.
 - **Times** are Unix epoch milliseconds (integers).
@@ -26,7 +26,7 @@ Status: implemented in [`packages/graph`](../../packages/graph). The schema is [
 | `changes` | Attribute history (before/after per changed node or edge), written by triggers. Diff between any two scans |
 | `dirty` | Nodes marked by audit events and waiting for a targeted refetch |
 | `exposure` | Output of the exposure evaluator per entry point and path prefix |
-| `vulns` | Advisory matches per package node |
+| `vulns` | Advisory matches per package node ([below](#vulnerabilities)) |
 | `insights` | Native Security Insights as inputs that findings can enrich |
 | `findings`, `finding_nodes` | Rule hits with lifecycle, and the nodes each finding is about (replaces the `AFFECTS` edge) |
 | `rule_runs` | Per scan and rule: `evaluated`, `not_evaluated` (with missing coverage) or `error`; `hits` (decided rows), `undecided` and `error` text (migration 2) |
@@ -50,11 +50,23 @@ Type keys used by collectors, rules and fixtures. The registry is `NODE_TYPES` i
 | Entry point | `worker_route`, `worker_custom_domain`, `workers_dev`, `worker_preview_url`, `r2_public_domain`, `tunnel_hostname`, `pages_domain`, `pages_preview`, `spectrum_app` |
 | Edge control | `waf_ruleset`, `access_app`, `access_policy`, `access_group`, `gateway_policy` |
 | Workload | `worker_script`, `worker_version`, `pages_project`, `container_app`, `container_image` |
-| Package | `package` (native ID is a purl, for example `pkg:npm/lodash@4.17.20`) |
+| Package | `package` (native ID is a purl, for example `pkg:npm/lodash@4.17.20`; see [package node IDs](#package-node-ids)) |
 | Data store | `r2_bucket`, `d1_database`, `kv_namespace`, `do_namespace`, `queue`, `hyperdrive_config`, `secrets_store_secret`, `vectorize_index` |
 | Identity | `member`, `account_token`, `service_token`, `zt_user`, `idp_group`, `identity_provider`, `everyone` |
 | Device | `device_profile`, `posture_rule` |
 | Private network | `cidr_route`, `hostname_route`, `virtual_network`, `tunnel`, `mesh_node`, `infra_target` |
+
+### Package node IDs
+
+The native ID of a `package` node is the package's purl ([purl spec](https://github.com/package-url/purl-spec)) in one spelling, so that every writer derives the same ID for the same package (R9-05). For npm:
+
+- `pkg:npm/`, the type in lower case.
+- Name and scope in lower case, as the purl spec's npm type requires. `JSONStream` 1.3.1 is `pkg:npm/jsonstream@1.3.1`.
+- The scope is the namespace, with `@` encoded as `%40`: `pkg:npm/%40babel/traverse@7.22.0`.
+- Every character outside `A-Z a-z 0-9 . - _ ~` percent-encoded, with upper-case hex digits, in the version too: `pkg:npm/a@1.0.0%2Bbuild.5`.
+- The installed version, never a range. No qualifiers, no subpath.
+
+`scanner-io` writes exactly this form for npm packages from osv-scanner output (`npmPurl`); it keeps Trivy's purls as Trivy wrote them, so a writer that takes those into the graph brings them into this form first. The node's `name` keeps the source's spelling (`JSONStream`) for display. `vulns` matching compares npm names without regard to ASCII case, so a purl that keeps capitals still matches its advisories, but it is a second node for the same package. Other ecosystems get a spelling rule when a writer for them lands; until then `vulns` reports their packages as unparsed.
 
 ## Edge types
 
@@ -103,6 +115,24 @@ The TypeScript evaluator writes one row per entry point and path prefix with `re
 | `unknown` | The evaluator could not decide (unsupported expression, missing coverage). Never treated as `public` |
 
 `reason_id` points to the deciding node (Access app, policy, ruleset), and `reason` is a short explanation for the UI.
+
+## Vulnerabilities
+
+`vulns` holds one row per package node and advisory, key `(package_id, vuln_id)`. The rematch in [`packages/vulns`](../../packages/vulns) computes the rows and `applyVulnRematch` writes them, with the scan's `vulns` coverage ([vulns.md](vulns.md)). What writers and readers rely on is in the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2).
+
+| Column | Value |
+| --- | --- |
+| `package_id` | The package node ID, `package:<purl>`, as the rematch got it |
+| `vuln_id` | The OSV ID (`GHSA-…`, `MAL-…`), at most 128 characters of `[a-zA-Z0-9:_.-]` |
+| `aliases` | JSON array of at most 100 IDs in the same format |
+| `severity_rank` | 0 to 4. An unknown rank is never stored as 0; such a match gets no row and leaves `vulns` `partial`. A `MAL-` record is 4 ([decision 0008](../decisions/0008-malicious-package-advisories.md)) |
+| `kev` | 1 when the ID or an alias is in the CISA KEV catalog |
+| `fixed_in` | The lowest fixed version above the installed one, or `NULL` |
+| `status` | `open`; `fixed` when the match ended; `ignored`, which a rematch keeps |
+| `source` | The writer: `osv` for the rematch, `fixture` in rule fixtures |
+| `first_seen` | When the match was first written, epoch milliseconds; never changed afterwards |
+
+Rows are never deleted.
 
 ## Findings lifecycle
 

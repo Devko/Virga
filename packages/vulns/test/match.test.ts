@@ -225,10 +225,23 @@ describe("matchAdvisory", () => {
     });
   });
 
-  it("matches the name exactly, case included", () => {
-    const adv = advisory(affected("JSONStream", [range("SEMVER", "introduced:0")]));
-    expect(matchAdvisory(adv, "jsonstream", v("1.0.0")).decision).toBe(N);
-    expect(matchAdvisory(adv, "JSONStream", v("1.0.0")).decision).toBe(A);
+  it("R9-05: compares names without regard to ASCII case", () => {
+    const adv = advisory(affected("JSONStream", [range("SEMVER", "introduced:0", "fixed:1.3.6")]));
+    expect(matchAdvisory(adv, "jsonstream", v("1.3.1")).decision).toBe(A);
+    expect(matchAdvisory(adv, "JSONStream", v("1.3.1")).decision).toBe(A);
+    expect(matchAdvisory(adv, "JsonStream", v("1.3.1")).decision).toBe(A);
+    expect(matchAdvisory(adv, "jsonstream", v("1.3.6")).decision).toBe(N);
+
+    const scoped = advisory(affected("@Virga-Test/Lib", [range("SEMVER", "introduced:0")]));
+    expect(matchAdvisory(scoped, "@virga-test/lib", v("1.0.0")).decision).toBe(A);
+    expect(matchAdvisory(scoped, "@virga-test/lib2", v("1.0.0")).decision).toBe(N);
+  });
+
+  it("R9-05: folds ASCII letters only", () => {
+    // U+212A KELVIN SIGN lowercases to "k"; npm names are ASCII.
+    const kelvin = advisory(affected("Keyv", [range("SEMVER", "introduced:0")]));
+    expect(matchAdvisory(kelvin, "keyv", v("1.0.0")).decision).toBe(N);
+    expect(matchAdvisory(kelvin, "Keyv", v("1.0.0")).decision).toBe(N);
   });
 
   it("returns the lowest fixed version above the installed one", () => {

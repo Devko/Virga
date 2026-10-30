@@ -4,6 +4,19 @@ import type { OsvSeverity } from "./osv.ts";
 /** 0 none, 1 low, 2 medium, 3 high, 4 critical, as in the `vulns` table. */
 export type SeverityRank = 0 | 1 | 2 | 3 | 4;
 
+/** The ID prefix of OSV records from the OpenSSF malicious packages database. */
+export const MALICIOUS_ID_PREFIX = "MAL-";
+
+/**
+ * Whether an advisory marks malware: its ID starts with `MAL-`, compared
+ * exactly. A match on such a record ranks 4 (critical), whatever its
+ * severity fields hold (decision 0008). Such records carry no severity;
+ * ranking them unknown would keep CF-001 from running for the whole
+ * account and hide the malicious package.
+ */
+export const isMaliciousPackageAdvisory = (id: string): boolean =>
+  id.startsWith(MALICIOUS_ID_PREFIX);
+
 /** GitHub advisory severities in `database_specific.severity`. */
 const DATABASE_RANKS: ReadonlyMap<string, SeverityRank> = new Map([
   ["LOW", 1],
