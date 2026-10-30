@@ -101,10 +101,11 @@ Round 6 status (2026-10-30): all four packages are merged. R5-01 to R5-08 and th
 
 ## Packages for phase 1, round 7
 
+The integrator adds the CF-024 fixtures for the `unread` and `unknown` entries of `pages_project.plain_text_vars` (R5-07) directly.
+
 | WP | Scope | Owns | Done when |
 | --- | --- | --- | --- |
-| `rules-4` | CF-004: an undecided row for a tunnel with `ingress_truncated` that has no other CF-004 row; CF-024: undecided fixtures for the `unread` and `unknown` entries of `pages_project.plain_text_vars` | `rules/**`, `packages/rules/**` | Fixtures for each case; `rules:check` passes |
-| `collectors-4` | R5-06 leftover: a byte budget per tunnel on the emitted path props that also sets `ingress_truncated` | `packages/collectors/**`, `apps/core/test/e2e/**` | Tests at the budget boundary and with the review's long path |
+| `collectors-4` | R5-06 leftovers: the 1 MiB props budget per tunnel; a truncated tunnel makes `tunnels` coverage `partial` ([decision 0005](../decisions/0005-truncated-collection-coverage.md)) | `packages/collectors/**`, `apps/core/src/scan/**`, `apps/core/test/**` | Tests at the budget boundary, with the review's long path, and a finding past the cap that stays open |
 | `deploy-env` | R5-03 leftover: build Wrangler's environment from an allowlist; keep `assets.directory` inside the app directory | `scripts/**`, `docs/operator/**` | Tests per variable class and per path case; the dry run passes |
 | `web-removing` | The `removing` state in the SPA (notice, retry, no Start scan) and in the MCP `list_accounts` description | `apps/web/**` | Render and route tests |
 | `review-6` | Read-only verification of R4-01 to R4-07 and R5-01 to R5-08; review of the round 5 and round 6 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
