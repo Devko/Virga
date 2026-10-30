@@ -54,6 +54,27 @@ async function compile(fixtures: Record<string, string>, requires = "[workers]",
   return compileRules(root);
 }
 
+describe("compileRules: placeholders (R8 hardening)", () => {
+  it.each([
+    ["@name", "@min"],
+    ["$name", "$min"],
+    ["#name", "#min"],
+  ])(
+    "refuses a %s placeholder, which Node SQLite binds NULL and Durable Object SQL refuses, naming the rule",
+    async (_, token) => {
+      const result = await compile(
+        { "positive-a.yaml": FIXTURES.hit, "negative-none.yaml": FIXTURES.none },
+        "[workers]",
+        `${SELECT_SCRIPTS} AND ${token} IS NULL`,
+      );
+      expect(result.errors).toEqual([
+        `CF-999/rule.sql: unsupported placeholder ${token}; use named :parameters`,
+      ]);
+      expect(result.rules).toEqual([]);
+    },
+  );
+});
+
 describe("compileRules: fixture checks", () => {
   it("accepts positive, negative and undecided fixtures", async () => {
     const result = await compile({

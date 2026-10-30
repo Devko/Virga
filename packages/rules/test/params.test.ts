@@ -64,6 +64,30 @@ describe("compileParams", () => {
   });
 });
 
+describe("R8 hardening: placeholders the compiler does not rewrite", () => {
+  it.each([
+    ["@name", "SELECT 1 AS v WHERE 1 = @p", "@p"],
+    ["$name", "SELECT 1 AS v WHERE 1 = $p", "$p"],
+    ["$name(...)", "SELECT $a(') ; DELETE FROM nodes; SELECT 1 --' AS v", "$a("],
+    ["#name", "SELECT 1 AS v WHERE 1 = #p", "#p"],
+    ["a :name that starts with a digit", "SELECT 1 AS v WHERE 1 = :1", ":1"],
+    ["a : without a name", "SELECT 1 AS v WHERE 1 = : p", ":"],
+    ["a :name with ::", "SELECT 1 AS v WHERE 1 = :p::q", ":p::"],
+    ["a :name(...)", "SELECT 1 AS v WHERE 1 = :p(x)", ":p("],
+    ["a :name that runs on in a non-ASCII letter", "SELECT :pé AS v", ":pé"],
+    ["a :name that runs on in a $", "SELECT :p$q AS v", ":p$"],
+  ])("refuses %s", (_, sql, token) => {
+    expect(() => compileParams(sql)).toThrow(
+      `unsupported placeholder ${token}; use named :parameters`,
+    );
+  });
+
+  it("keeps @, $, # and : in strings, identifiers and comments", () => {
+    const sql = "SELECT '@a $b #c :d' AS [x@$#:], 1 AS `y$:`, \"z#@\" -- @e :f\n/* $g #h */";
+    expect(compileParams(sql)).toEqual({ sql, order: [] });
+  });
+});
+
 describe("R8 hardening: committed rules pass the run-time one-statement check", () => {
   it.each(RULES.map((r) => [r.id, r.sql] as const))("%s", (_, sql) => {
     expect(() => assertOneStatement(sql)).not.toThrow();
