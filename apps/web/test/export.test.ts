@@ -502,7 +502,10 @@ describe("OCSF export", () => {
   });
 
   it("writes untruncated_size as the size of the whole record in KB, as OCSF 1.9 defines it (R9 hardening: OCSF untruncated_size)", () => {
-    const evidence = { blob: "y".repeat(100_000), hosts: [HOSTILE] } as FindingView["evidence"];
+    const evidence = {
+      blob: "y".repeat(100_000),
+      hosts: [HOSTILE],
+    } as unknown as FindingView["evidence"];
     const record = detectionFinding({ ...finding, evidence }, ACCOUNT) as OcsfRecord;
     const { is_truncated, untruncated_size, ...metadata } = record.metadata;
     expect(is_truncated).toBe(true);
