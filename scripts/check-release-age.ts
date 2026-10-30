@@ -726,7 +726,7 @@ function npmrcKeyProblem(key: string): string {
 export function parseNpmrc(text: string): Map<string, string> {
   const settings = new Map<string, string>();
   // pnpm's INI reader breaks lines at any CR or LF.
-  const lines = text.replace(/^﻿/, "").split(/\r\n|\r|\n/);
+  const lines = text.replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
   for (const [index, line] of lines.entries()) {
     const number = index + 1;
     const content = line.replace(/[ \t]+$/, "");
@@ -856,6 +856,23 @@ const errorCode = (cause: unknown) =>
 const ONLY_ROOT =
   "only the root package.json may name the package manager: corepack takes the nearest package.json that names one, starting from the directory a command runs in";
 
+/** The files main reads at the root, by their exact names. */
+const ROOT_FILES = new Set(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"]);
+
+/**
+ * A file name as a case-insensitive file system may match it (L-1): with
+ * full case folding, which toLowerCase alone does not do (U+017F, long s,
+ * folds to s), with compatibility forms such as fullwidth letters normalized
+ * and without default-ignorable characters such as U+200B, which some file
+ * systems skip. Matching more names only refuses more.
+ */
+const foldedName = (name: string) =>
+  name
+    .normalize("NFKC")
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .toUpperCase()
+    .toLowerCase();
+
 /** A package.json below the root: it must not name a package manager (R8-02). */
 function checkNestedManifest(path: string, shown: string): void {
   let text: string;
@@ -899,10 +916,11 @@ function checkNestedManifest(path: string, shown: string): void {
  * pnpm takes the nearest pnpm-workspace.yaml in the same way, and reads the
  * .npmrc of that directory too (R9-02). So only the root package.json may name
  * the package manager, only the root may hold pnpm-workspace.yaml and .npmrc,
- * and no directory may hold .corepack.env. Walks the
- * checkout without node_modules and .git, and refuses symbolic links rather
- * than follow them, since corepack and pnpm would. Names are compared without
- * case, as a case-insensitive file system opens them.
+ * and no directory may hold .corepack.env. Walks the checkout without
+ * node_modules and .git, and refuses symbolic links rather than follow them,
+ * since corepack and pnpm would. Names are compared as a case-insensitive file
+ * system may open them (L-1), and at the root the files main reads must have
+ * their exact names.
  */
 export function checkCheckout(root: string): void {
   const top = resolve(root);
@@ -919,7 +937,7 @@ export function checkCheckout(root: string): void {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       const path = join(dir, entry.name);
       const shown = shownPath(path);
-      const name = entry.name.toLowerCase();
+      const name = foldedName(entry.name);
       const atRoot = dir === top;
       if (entry.isSymbolicLink()) {
         throw new CheckoutError(
@@ -931,19 +949,24 @@ export function checkCheckout(root: string): void {
           `${shown}: corepack loads .corepack.env files from the directories it walks, and their variables change which pnpm it runs and where it fetches it from; the project uses none`,
         );
       }
-      if (name === "pnpm-workspace.yaml" && !(atRoot && entry.name === name)) {
+      if (atRoot && ROOT_FILES.has(name) && entry.name !== name) {
+        throw new CheckoutError(
+          `${shown}: a case-insensitive file system opens this name as ${name}, which the check reads by that exact name only; rename or remove it`,
+        );
+      }
+      if (name === "pnpm-workspace.yaml" && !atRoot) {
         throw new CheckoutError(
           `${shown}: only the root may hold pnpm-workspace.yaml; pnpm takes the nearest one, starting from the directory a command runs in, with its settings and config dependencies`,
         );
       }
-      if (name === ".npmrc" && !(atRoot && entry.name === name)) {
+      if (name === ".npmrc" && !atRoot) {
         throw new CheckoutError(
           `${shown}: only the root may hold .npmrc; pnpm also reads the .npmrc of the directory a command runs in, where use-node-version and node-mirror make it download and run a Node.js runtime and lockfile-dir makes it install from another lockfile (R9-02)`,
         );
       }
       if (entry.isDirectory()) {
         walk(path);
-      } else if (name === "package.json" && !(atRoot && entry.name === name)) {
+      } else if (name === "package.json" && !atRoot) {
         if (!entry.isFile()) throw new CheckoutError(`${shown} is not a regular file`);
         checkNestedManifest(path, shown);
       }

@@ -1662,7 +1662,7 @@ describe("R9-01: the root .npmrc is read strictly", () => {
       ["save-exact[]=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
       ["SAVE-EXACT=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
       ["save-exact=true\rlockfile-dir=other\n", 2, "lockfile-dir makes pnpm install"],
-      [" # not a comment line\n", 1, "expected one key=value per line"],
+      ["\u00A0# not a comment line\n", 1, "expected one key=value per line"],
     ];
     for (const [text, line, message] of cases) await refuses(text, line, new RegExp(message));
   });
@@ -1676,7 +1676,7 @@ describe("R9-01: the root .npmrc is read strictly", () => {
     );
     expect(await runMain(npmrc(NPMRC))).toEqual(PASSES);
     const commented =
-      "﻿# exact versions\r\n  ; engines\r\n\r\nsave-exact=true \r\nengine-strict=true";
+      "\uFEFF# exact versions\r\n  ; engines\r\n\r\nsave-exact=true \r\nengine-strict=true";
     expect(await runMain(npmrc(commented))).toEqual(PASSES);
     expect(await runMain(npmrc(""))).toEqual(PASSES);
     expect(await runMain(checkout())).toEqual(PASSES);
@@ -1698,6 +1698,55 @@ describe("R9-02: only the root holds .npmrc", () => {
       checkout({ "apps/web/.npmrc": "" }),
       /^error: apps\/web\/\.npmrc: only the root may hold \.npmrc/,
     );
+  });
+});
+
+describe("L-1: names a case-insensitive file system opens as the files the check reads", () => {
+  it("L-1: refuses pnpm-workspace.yaml spelled with U+017F (long s) below the root", async () => {
+    // The review's case: toLowerCase does not fold U+017F, so this passed with config dependencies.
+    await refusedBy(
+      checkout({ "apps/web/pnpm-work\u017Fpace.yaml": "configDependencies: {}\n" }),
+      /^error: apps\/web\/pnpm-work\u017Fpace\.yaml: only the root may hold pnpm-workspace\.yaml/,
+    );
+  });
+
+  it("L-1: refuses .corepack.env, .npmrc and a package manager in package.json, however spelled", async () => {
+    await refusedBy(
+      checkout({ "apps/web/.corepac\u212A.env": "COREPACK_NPM_REGISTRY=https://x.invalid\n" }),
+      /^error: apps\/web\/\.corepac\u212A\.env: corepack loads \.corepack\.env files/,
+    );
+    for (const name of [".NPMRC", ".npm\u200Brc", ".\uFF4Epmrc"]) {
+      await refusedBy(
+        checkout({ [`apps/web/${name}`]: "use-node-version=23.0.0\n" }),
+        new RegExp(`^error: apps/web/${name.replace(".", "\\.")}: only the root may hold \\.npmrc`),
+      );
+    }
+    await refusedBy(
+      checkout({
+        "apps/web/pac\u212Aage.json": manifest({
+          name: "@virga/web",
+          packageManager: "pnpm@10.33.2",
+        }),
+      }),
+      /^error: apps\/web\/pac\u212Aage\.json names packageManager/,
+    );
+  });
+
+  it("L-1: refuses a name at the root that folds to a file the check reads by its exact name", async () => {
+    const variants: [string, string][] = [
+      ["pnpm-work\u017Fpace.yaml", "pnpm-workspace.yaml"],
+      ["pac\u212Aage.json", "package.json"],
+      ["pnpm-loc\u212A.yaml", "pnpm-lock.yaml"],
+      [".NPMRC", ".npmrc"],
+    ];
+    for (const [name, target] of variants) {
+      await refusedBy(
+        checkout({ [name]: "{}\n" }),
+        new RegExp(
+          `^error: ${name.replaceAll(".", "\\.")}: a case-insensitive file system opens this name as ${target.replaceAll(".", "\\.")}, which the check reads by that exact name only`,
+        ),
+      );
+    }
   });
 });
 
