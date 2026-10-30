@@ -79,6 +79,23 @@ export interface CoverageView {
   detail: Untrusted<string> | null;
 }
 
+export const RULE_RUN_STATUSES = ["evaluated", "not_evaluated", "error"] as const;
+export type RuleRunStatus = (typeof RULE_RUN_STATUSES)[number];
+
+/** One rule's run in the latest scan. Not evaluated and undecided are not passes. */
+export interface RuleRunView {
+  ruleId: string;
+  status: RuleRunStatus;
+  /** Decided rows. */
+  hits: number;
+  /** Rows the rule could not decide, e.g. where exposure is `unknown`. */
+  undecided: number;
+  /** Inputs without complete coverage when the rule was not evaluated. */
+  missing: string[];
+  /** Why the run failed; can quote values from the scanned account. */
+  error: Untrusted<string> | null;
+}
+
 export interface GraphSummary {
   scan: {
     id: string;
@@ -91,7 +108,10 @@ export interface GraphSummary {
   nodes: Record<string, number>;
   findings: Record<FindingStatus, Partial<Record<FindingSeverity, number>>>;
   exposure: Record<string, number>;
+  /** Rules of the latest scan per run status. */
   rules: Record<string, number>;
+  /** Each rule's run in the latest scan, by rule ID. */
+  ruleRuns: RuleRunView[];
 }
 
 export interface ScanSummaryView {

@@ -68,8 +68,28 @@ export const summary: ScanSummaryView = {
     ],
     nodes: { workers: 3 },
     findings: { open: { critical: 1, high: 1 }, resolved: {}, suppressed: {} },
-    exposure: { public: 1 },
-    rules: { evaluated: 10, not_evaluated: 1 },
+    exposure: { public: 1, unknown: 2 },
+    rules: { evaluated: 2, not_evaluated: 1, error: 1 },
+    ruleRuns: [
+      { ruleId: "CF-001", status: "evaluated", hits: 1, undecided: 0, missing: [], error: null },
+      { ruleId: "CF-004", status: "evaluated", hits: 0, undecided: 2, missing: [], error: null },
+      {
+        ruleId: "CF-010",
+        status: "not_evaluated",
+        hits: 0,
+        undecided: 0,
+        missing: ["access", "exposure"],
+        error: null,
+      },
+      {
+        ruleId: "CF-011",
+        status: "error",
+        hits: 0,
+        undecided: 0,
+        missing: [],
+        error: u(`invalid severity in output: ${MARKUP} ${INJECTION}`),
+      },
+    ],
   },
 };
 

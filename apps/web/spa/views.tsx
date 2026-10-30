@@ -5,6 +5,8 @@ import type {
   FindingView,
   Json,
   NodeView,
+  RuleRunStatus,
+  RuleRunView,
   ScanSummaryView,
 } from "../src/rpc.ts";
 import type { IntakeView, RemovalView } from "./api.ts";
@@ -118,7 +120,66 @@ export function SummaryView({ summary }: { summary: ScanSummaryView }) {
           ))}
         </tbody>
       </table>
+      <h2>Rules of the latest scan</h2>
+      <RuleRunsTable runs={graph.ruleRuns} />
     </section>
+  );
+}
+
+const RUN_STATUS: Record<RuleRunStatus, string> = {
+  evaluated: "evaluated",
+  not_evaluated: "not evaluated",
+  error: "failed",
+};
+
+/** Not evaluated and undecided are results of their own, never counted as passes. */
+function ruleTotals(runs: RuleRunView[]): string {
+  const count = (status: RuleRunStatus) => runs.filter((r) => r.status === status).length;
+  const hits = runs.reduce((n, r) => n + r.hits, 0);
+  const undecided = runs.reduce((n, r) => n + r.undecided, 0);
+  return (
+    `${count("evaluated")} evaluated, ${count("not_evaluated")} not evaluated, ` +
+    `${count("error")} failed; ${hits} ${hits === 1 ? "hit" : "hits"}, ${undecided} undecided`
+  );
+}
+
+function RuleRunsTable({ runs }: { runs: RuleRunView[] }) {
+  if (runs.length === 0) return <p className="muted">No rule has run in the latest scan.</p>;
+  return (
+    <>
+      <p>{ruleTotals(runs)}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Rule</th>
+            <th>Status</th>
+            <th>Hits</th>
+            <th>Undecided</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((r) => (
+            <tr key={r.ruleId}>
+              <td className="mono">{r.ruleId}</td>
+              <td className={`rule-run rule-run-${r.status}`}>
+                {RUN_STATUS[r.status] ?? r.status}
+              </td>
+              <td>{r.hits}</td>
+              <td>{r.undecided}</td>
+              <td>
+                {r.status === "error" ? (
+                  // The message can quote values from the scanned account.
+                  <Text value={r.error} max={160} />
+                ) : (
+                  r.missing.length > 0 && `missing: ${r.missing.join(", ")}`
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 

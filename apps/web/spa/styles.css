@@ -202,7 +202,9 @@ form.confirm {
 
 .coverage-no_permission,
 .coverage-partial,
-.coverage-error {
+.coverage-error,
+.rule-run-not_evaluated,
+.rule-run-error {
   color: var(--problem);
 }
 

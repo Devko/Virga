@@ -44,7 +44,7 @@ The identity comes from the token: `email` for users, `common_name` (the client 
 | --- | --- |
 | `GET /api/me` | `{ email, serviceToken, admin }` |
 | `GET /api/accounts` | Accounts in the index (`GraphReader.listAccounts`) |
-| `GET /api/accounts/{id}` | Scan summary: account, latest run, coverage, counts |
+| `GET /api/accounts/{id}` | Scan summary: account, latest run, coverage, counts, and per rule of the latest scan its status, hits, undecided rows and error (`graph.ruleRuns`) |
 | `GET /api/accounts/{id}/findings?status=&severity=&limit=&cursor=` | One page of findings; `status` and `severity` repeat; `limit` 1 to 200 |
 | `GET /api/accounts/{id}/finding?fingerprint=` | Finding detail with subjects and nodes |
 | `GET /api/accounts/{id}/neighborhood?node=&depth=&limit=` | Graph around a node; `depth` 1 or 2, `limit` 1 to 500 (default 100) |
@@ -64,11 +64,12 @@ Every response carries `Content-Security-Policy` (`default-src 'none'`, scripts,
 
 ## MCP
 
-`/mcp` serves a stateless MCP server (`createMcpHandler` from `agents/mcp/server`, one server per request) with four read-only tools:
+`/mcp` serves a stateless MCP server (`createMcpHandler` from `agents/mcp/server`, one server per request) with five read-only tools:
 
 | Tool | Input |
 | --- | --- |
 | `list_accounts` | none |
+| `get_scan_summary` | `account_id`; the summary of `GET /api/accounts/{id}`, with per-rule hits, undecided rows and errors |
 | `list_findings` | `account_id`, `status[]`, `severity[]`, `limit` (1 to 50, default 20), `cursor` |
 | `get_finding` | `account_id`, `fingerprint` |
 | `get_neighborhood` | `account_id`, `node_id`, `depth` (1 or 2), `limit` (1 to 100, default 40) |
@@ -79,7 +80,7 @@ MCP clients reach the Worker through Access like everyone else, for example with
 
 ## SPA
 
-React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage and findings (filters, paging), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding and account removal for admins. Removal sits at the bottom of the account page behind a confirmation: the admin types the account ID, and the result says what each step removed and that the token still has to be revoked in the scanned account. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
+React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage, the rules of the latest scan (hits, undecided rows, not evaluated with the missing inputs, and the error of a failed rule as untrusted text) and findings (filters, paging), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding and account removal for admins. Removal sits at the bottom of the account page behind a confirmation: the admin types the account ID, and the result says what each step removed and that the token still has to be revoked in the scanned account. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
 
 ## Known limits (v1)
 
