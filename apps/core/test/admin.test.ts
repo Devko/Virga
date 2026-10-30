@@ -1,10 +1,28 @@
-import { introspectWorkflow } from "cloudflare:test";
+import { createExecutionContext, introspectWorkflow } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { createReader } from "@virga/cf-api";
+import { fixtureTransport } from "@virga/cf-api/testing";
 import { SCHEMA_VERSION } from "@virga/graph";
 import { describe, expect, it } from "vitest";
+import { Admin } from "../src/admin.ts";
 import { d1ScanIndex, getAccount } from "../src/index-db.ts";
+import { runScan } from "../src/scan/run.ts";
 import type { ScanSummary } from "../src/scan/types.ts";
-import { newAccountId, rejection, runningScanRow, setupAccount, sql } from "./helpers.ts";
+import { fakeStep } from "./fake-step.ts";
+import { apiRoutes, initialState } from "./fixtures/api.ts";
+import {
+  allDue,
+  type GraphStub,
+  graphOf,
+  graphsWith,
+  indexWith,
+  newAccountId,
+  rejection,
+  runningScanRow,
+  setupAccount,
+  sql,
+} from "./helpers.ts";
+import { dnsStub, storageStub } from "./stubs.ts";
 
 const admin = exports.Admin;
 
@@ -187,5 +205,162 @@ describe("Admin.removeAccount", () => {
       { n: 0 },
     ]);
     expect(await stub.beginScan(late, "full", AT + 7_200_000)).toEqual({ started: true });
+  });
+
+  describe("R5-08: a partial removal never hides an account whose graph is left", () => {
+    const LATER = AT + 3_600_000;
+    const fail = (message: string) => async () => {
+      throw new Error(message);
+    };
+    /** Admin with other bindings, so one step of the removal fails or something runs before it. */
+    const adminWith = (bindings: Partial<Env>) =>
+      new Admin(createExecutionContext(), { ...env, ...bindings });
+
+    /** How the account is listed, and what is left of it in the index and in its graph. */
+    async function state(accountId: string, stub: GraphStub) {
+      const listed = (await exports.GraphReader.listAccounts()).find((a) => a.id === accountId);
+      return {
+        listed: listed?.status ?? null,
+        summary: (await exports.GraphReader.getScanSummary(accountId))?.account.status ?? null,
+        runs: (await runs(accountId)).length,
+        nodes: (await sql<{ id: string }>(stub, "SELECT id FROM nodes")).map((r) => r.id),
+      };
+    }
+    const gone = { listed: null, summary: null, runs: 0, nodes: [] };
+
+    /** A scan of the account with stub collectors, run to its end. */
+    async function scan(accountId: string, name: string) {
+      const steps = fakeStep();
+      let readers = 0;
+      const summary = await runScan(
+        {
+          step: steps.step,
+          graph: () => graphOf(accountId),
+          index: d1ScanIndex(env.INDEX),
+          reader: (id) => {
+            readers++;
+            return createReader(fixtureTransport(apiRoutes(id, initialState())));
+          },
+          collectors: [dnsStub, storageStub],
+        },
+        { accountId, scanId: `scan-${accountId}-${name}`, now: LATER },
+      );
+      return { status: summary.status, steps: steps.names(), readers };
+    }
+    const skipped = { status: "skipped", steps: ["begin"], readers: 0 };
+
+    /** Neither the dispatcher, nor triggerScan, nor a scan instance that begins scans the account. */
+    async function noScanBegins(accountId: string) {
+      expect(await allDue(LATER + 60 * 24 * 3_600_000)).not.toContain(accountId);
+      expect(await admin.triggerScan(accountId)).toEqual({
+        started: false,
+        reason: "removing",
+        id: null,
+      });
+      expect(await scan(accountId, "late")).toEqual(skipped);
+    }
+
+    it("R5-08: when marking the account fails, nothing is removed and a retry removes it", async () => {
+      const { accountId, stub } = await scannedAccount();
+      const before = await state(accountId, stub);
+      const broken = adminWith({ INDEX: indexWith(/SET removing_at/, fail("D1_ERROR: offline")) });
+
+      expect(await rejection(broken.removeAccount(accountId))).toMatch(/D1_ERROR: offline/);
+      expect(before).toEqual({
+        listed: "active",
+        summary: "active",
+        runs: 1,
+        nodes: ["worker_script:api"],
+      });
+      expect(await state(accountId, stub)).toEqual(before);
+
+      expect(await admin.removeAccount(accountId)).toEqual({ removed: true });
+      expect(await state(accountId, stub)).toEqual(gone);
+    });
+
+    it("R5-08: when the graph deletion fails, the account stays listed as removing with its data, and a retry removes it", async () => {
+      const { accountId, stub } = await scannedAccount();
+      const broken = adminWith({ ACCOUNT_GRAPH: graphsWith(fail("Durable Object reset")) });
+
+      expect(await rejection(broken.removeAccount(accountId))).toMatch(/Durable Object reset/);
+      const pending = {
+        listed: "removing",
+        summary: "removing",
+        runs: 1,
+        nodes: ["worker_script:api"],
+      };
+      expect(await state(accountId, stub)).toEqual(pending);
+      await noScanBegins(accountId);
+      expect(await state(accountId, stub)).toEqual(pending);
+
+      expect(await admin.removeAccount(accountId)).toEqual({ removed: true });
+      expect(await state(accountId, stub)).toEqual(gone);
+    });
+
+    it("R5-08: when the index deletion fails, the account stays listed as removing with an empty graph, and a retry removes it", async () => {
+      const { accountId, stub } = await scannedAccount();
+      const broken = adminWith({ INDEX: indexWith(/^DELETE FROM/, fail("D1_ERROR: offline")) });
+
+      expect(await rejection(broken.removeAccount(accountId))).toMatch(/D1_ERROR: offline/);
+      const pending = { listed: "removing", summary: "removing", runs: 1, nodes: [] };
+      expect(await state(accountId, stub)).toEqual(pending);
+      await noScanBegins(accountId);
+      expect(await state(accountId, stub)).toEqual(pending);
+      expect(await sql(stub, "SELECT count(*) AS n FROM scans")).toEqual([{ n: 0 }]);
+
+      expect(await admin.removeAccount(accountId)).toEqual({ removed: true });
+      expect(await state(accountId, stub)).toEqual(gone);
+    });
+
+    it("R5-08: a scan that begins after the account is marked and before its graph is deleted stops at its begin step", async () => {
+      const { accountId, stub } = await scannedAccount();
+      let late: Awaited<ReturnType<typeof scan>> | undefined;
+      const paused = adminWith({
+        ACCOUNT_GRAPH: graphsWith(async () => {
+          late = await scan(accountId, "between");
+        }),
+      });
+
+      expect(await paused.removeAccount(accountId)).toEqual({ removed: true });
+      expect(late).toEqual(skipped);
+      expect(await state(accountId, stub)).toEqual(gone);
+      expect(await sql(stub, "SELECT count(*) AS n FROM scans")).toEqual([{ n: 0 }]);
+    });
+
+    it("R5-08: a scan that begins after the graph is deleted and before the index rows are stops at its begin step", async () => {
+      const { accountId, stub } = await scannedAccount();
+      let late: Awaited<ReturnType<typeof scan>> | undefined;
+      const paused = adminWith({
+        INDEX: indexWith(/^DELETE FROM/, async () => {
+          late ??= await scan(accountId, "between");
+        }),
+      });
+
+      expect(await paused.removeAccount(accountId)).toEqual({ removed: true });
+      expect(late).toEqual(skipped);
+      expect(await state(accountId, stub)).toEqual(gone);
+      expect(await sql(stub, "SELECT count(*) AS n FROM scans")).toEqual([{ n: 0 }]);
+    });
+
+    it("R5-08: adding an account whose removal did not finish starts it from nothing", async () => {
+      const { accountId, stub } = await scannedAccount();
+      const broken = adminWith({ ACCOUNT_GRAPH: graphsWith(fail("Durable Object reset")) });
+      expect(await rejection(broken.removeAccount(accountId))).toMatch(/Durable Object reset/);
+
+      expect(await admin.addAccount({ id: accountId, name: "Production" })).toMatchObject({
+        id: accountId,
+        status: "active",
+        lastScanAt: null,
+      });
+      expect(await state(accountId, stub)).toEqual({
+        listed: "active",
+        summary: "active",
+        runs: 0,
+        nodes: [],
+      });
+      expect(await stub.beginScan(`scan-${accountId}-new`, "full", LATER)).toEqual({
+        started: true,
+      });
+    });
   });
 });

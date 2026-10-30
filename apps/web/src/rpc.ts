@@ -19,7 +19,11 @@ export interface AccountRow {
   id: string;
   /** Display name chosen at onboarding. */
   name: Untrusted<string>;
-  status: "active" | "paused";
+  /**
+   * `removing`: a removal began and has not finished. The account stays
+   * listed, and no scan of it begins, until a repeated removal finishes it.
+   */
+  status: "active" | "paused" | "removing";
   cadenceHours: number;
   profile: Profile;
   createdAt: number;
@@ -165,7 +169,11 @@ export interface Neighborhood {
 
 export type TriggerResult =
   | { started: true; id: string }
-  | { started: false; reason: "unknown_account" | "running" | "exists"; id: string | null };
+  | {
+      started: false;
+      reason: "unknown_account" | "removing" | "running" | "exists";
+      id: string | null;
+    };
 
 export interface CheckIssue {
   code: string;
@@ -208,7 +216,10 @@ export interface RemoveResult {
 export interface AdminRpc {
   addAccount(input: NewAccount): Promise<AccountRow>;
   triggerScan(accountId: string): Promise<TriggerResult>;
-  /** Deletes the index rows, then the account's graph. Idempotent. */
+  /**
+   * Marks the account `removing`, deletes its graph, then its index rows.
+   * Idempotent; after a failure the account stays listed as `removing`.
+   */
   removeAccount(accountId: string): Promise<RemoveResult>;
 }
 

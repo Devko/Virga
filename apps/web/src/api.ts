@@ -206,8 +206,10 @@ const confirms = (body: unknown, accountId: string) =>
 /**
  * Offboarding. The broker goes first: without the token a scan that still
  * runs gets no more API access. When it fails, core is not called, so the
- * account stays listed and the removal can be repeated; both calls are
- * idempotent. The body must name the account, so a stray request removes nothing.
+ * account stays listed and the removal can be repeated. When core fails, the
+ * account stays listed as `removing` until a repeat finishes it (R5-08); both
+ * calls are idempotent. The body must name the account, so a stray request
+ * removes nothing.
  */
 async function removeAccount(request: Request, env: Env, accountId: string): Promise<Response> {
   const body = await readJson(request);

@@ -3,7 +3,7 @@ import { STALE_SCAN_MS } from "./scan/policy.ts";
 import type { ScanIndex, ScanRunEnd, ScanRunStart, ScanSummary } from "./scan/types.ts";
 import { type Untrusted, untrusted } from "./untrusted.ts";
 
-/** Access to the account index D1 database (migrations/0001_index.sql). */
+/** Access to the account index D1 database (migrations/). */
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -14,7 +14,12 @@ export interface AccountRow {
   id: string;
   /** Display name chosen at onboarding. */
   name: Untrusted<string>;
-  status: "active" | "paused";
+  /**
+   * `removing`: a removal began and has not finished, for example because
+   * the graph could not be deleted yet. The account stays listed until
+   * Admin.removeAccount finishes, and no scan of it begins (R5-08).
+   */
+  status: "active" | "paused" | "removing";
   cadenceHours: number;
   profile: Profile;
   createdAt: number;
@@ -39,6 +44,7 @@ interface AccountRecord {
   profile: Profile;
   created_at: number;
   last_scan_at: number | null;
+  removing_at: number | null;
 }
 
 interface ScanRunRecord {
@@ -53,7 +59,7 @@ interface ScanRunRecord {
 const accountRow = (r: AccountRecord): AccountRow => ({
   id: r.id,
   name: untrusted(r.name),
-  status: r.status,
+  status: r.removing_at === null ? r.status : "removing",
   cadenceHours: r.cadence_hours,
   profile: r.profile,
   createdAt: r.created_at,
@@ -72,16 +78,20 @@ const scanRunRow = (r: ScanRunRecord): ScanRunRow => ({
 export function d1ScanIndex(db: D1Database): ScanIndex {
   return {
     async hasAccount(accountId: string) {
-      const row = await db.prepare("SELECT 1 FROM accounts WHERE id = ?").bind(accountId).first();
+      const row = await db
+        .prepare("SELECT 1 FROM accounts WHERE id = ? AND removing_at IS NULL")
+        .bind(accountId)
+        .first();
       return row !== null;
     },
 
     async beginRun(run: ScanRunStart) {
-      // A scan that began while its account was being removed gets no row (R4-03).
+      // A scan that began while its account was being removed gets no row (R4-03, R5-08).
       await db
         .prepare(
           `INSERT INTO scan_runs (id, account_id, started_at, status)
-           SELECT ?, ?, ?, 'running' WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?)
+           SELECT ?, ?, ?, 'running'
+           WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ? AND removing_at IS NULL)
            ON CONFLICT (id) DO NOTHING`,
         )
         .bind(run.id, run.accountId, run.startedAt, run.accountId)
@@ -116,7 +126,7 @@ export function d1ScanIndex(db: D1Database): ScanIndex {
  * Due means at least `cadence_hours` full hours since the start of the last
  * finished scan, counted in UTC hour slots so an hourly account is not
  * skipped when its scan ends later in the hour. Accounts with a scan still
- * running (and not stale) are left out.
+ * running (and not stale), and accounts being removed, are left out.
  */
 export async function dueAccounts(
   db: D1Database,
@@ -127,7 +137,7 @@ export async function dueAccounts(
   const { results } = await db
     .prepare(
       `SELECT a.id FROM accounts a
-       WHERE a.status = 'active' AND a.id > ?
+       WHERE a.status = 'active' AND a.removing_at IS NULL AND a.id > ?
          AND (a.last_scan_at IS NULL OR ? - a.last_scan_at / ${HOUR_MS} >= a.cadence_hours)
          AND NOT EXISTS (
            SELECT 1 FROM scan_runs r
@@ -202,7 +212,7 @@ const hasControl = (s: string) =>
     return code < 0x20 || (code >= 0x7f && code <= 0x9f);
   });
 
-function checkNewAccount(input: NewAccount): Required<NewAccount> {
+export function checkNewAccount(input: NewAccount): Required<NewAccount> {
   assertAccountId(input?.id);
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (name === "" || name.length > MAX_NAME || hasControl(name)) {
@@ -217,7 +227,23 @@ function checkNewAccount(input: NewAccount): Required<NewAccount> {
   return { id: input.id, name, cadenceHours, profile };
 }
 
-/** Deletes an account and its scan runs. Returns whether the account was in the index. */
+/**
+ * Marks the account as being removed, the first step of Admin.removeAccount.
+ * A repeat keeps the first time. Returns whether the account is in the index.
+ */
+export async function markRemoving(db: D1Database, id: string, at: number): Promise<boolean> {
+  assertAccountId(id);
+  const row = await db
+    .prepare("UPDATE accounts SET removing_at = coalesce(removing_at, ?) WHERE id = ? RETURNING id")
+    .bind(at, id)
+    .first();
+  return row !== null;
+}
+
+/**
+ * Deletes an account and its scan runs, the last step of Admin.removeAccount.
+ * Returns whether the account was in the index.
+ */
 export async function deleteAccount(db: D1Database, id: string): Promise<boolean> {
   assertAccountId(id);
   const [, account] = await db.batch([
@@ -227,7 +253,11 @@ export async function deleteAccount(db: D1Database, id: string): Promise<boolean
   return (account?.meta.changes ?? 0) > 0;
 }
 
-/** Adds an account, or updates name, cadence and profile of an existing one. */
+/**
+ * Adds an account, or updates name, cadence and profile of an existing one.
+ * An account being removed stays `removing`: Admin.addAccount finishes the
+ * removal first.
+ */
 export async function upsertAccount(
   db: D1Database,
   input: NewAccount,
