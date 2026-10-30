@@ -222,7 +222,11 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
 
-`tunnel_hostname` — native ID: `<tunnel_id>:<hostname><path>`, so two tunnels serving the same hostname stay apart; name: hostname.
+`tunnel_hostname` — native ID: `<tunnel_id>:<hostname><path>`; name: hostname.
+
+- The tunnel ID keeps two tunnels that serve the same hostname apart.
+- `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
+- For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
 | Prop | Type | Meaning |
 | --- | --- | --- |
@@ -236,13 +240,21 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 
 Emitted from the remotely managed ingress configuration:
 
-- **Hostname rules.** Every rule with a hostname yields one node. Rules shadowed by an earlier rule are skipped.
-- **Rules without a hostname** match every hostname that reaches the tunnel (review R3-02). This covers the final catch-all and path-only rules.
+- **Hostname rules.** Every rule with a hostname yields one node, unless an earlier rule shadows it (below).
+- **Rules without a hostname** match every hostname that reaches the tunnel (review R3-02). This covers the final catch-all and path-only rules. A rule whose hostname is `*` counts as one without a hostname, as in cloudflared.
   - Each such rule whose service is an origin (anything but `http_status:*`) yields one node per hostname that appears in the tunnel's ingress, with the rule's own path, service and `access_required`, and `via_fallthrough: true`.
   - Requests that no hostname rule takes, such as other paths of a path-restricted hostname, are therefore evaluated as their own entry points.
-  - Hostnames that reach the tunnel only through DNS are not known to the collector, which is a known limit.
+- **Shadowing.** cloudflared takes the first rule that matches. For one hostname, a rule is skipped when an earlier rule for that hostname, or one without a hostname, has the same path or no path. Rules without a hostname that answer with `http_status` take their path for every hostname but yield no node.
+- **Rules without a service** are ignored; cloudflared refuses them.
 - **Credentials.** For a `scheme://` value, everything from `//` through the last `@` of the authority is removed. The authority runs from `//` to the first `/`, `?` or `#`, as in Go's `url.Parse`, which cloudflared uses. A service with an `@` anywhere else, or an `@` without `scheme://`, is stored as `""`. The stored service never contains `@`.
 - **Locally managed tunnels** yield `tunnel` nodes but no `tunnel_hostname`.
+
+Known limits of the per-rule model, and which way each errs:
+
+- Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
+- A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
+- A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
+- `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point. This was already true before round 4.
 
 ### tokens
 
