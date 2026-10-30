@@ -64,7 +64,7 @@ export function AccountsTable({ accounts }: { accounts: AccountRow[] }) {
 const SEVERITIES: FindingSeverity[] = ["critical", "high", "medium", "low", "info"];
 
 /** A removal that began and did not finish (R5-08); the account page offers to repeat it. */
-function RemovalPending() {
+export function RemovalPending() {
   return (
     <div className="problem" role="status">
       <h2>Removal pending</h2>

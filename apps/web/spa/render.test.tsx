@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import type { CoverageView, ScanSummaryView, TriggerResult } from "../src/rpc.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { AccountRow, CoverageView, ScanSummaryView, TriggerResult } from "../src/rpc.ts";
 import {
   ACCOUNT,
   accounts,
@@ -10,13 +10,15 @@ import {
   MARKUP,
   neighborhood,
   REMOVING_ACCOUNT,
+  REMOVING_UNREADABLE,
   removingSummary,
   summary,
+  UNKNOWN_ACCOUNT,
 } from "../test/fixtures.ts";
-import type { IntakeView, Me } from "./api.ts";
+import { ApiError, api, type IntakeView, type Me } from "./api.ts";
 import { graphElements } from "./graph.tsx";
 import type { Loaded } from "./load.tsx";
-import { AccountView } from "./pages.tsx";
+import { AccountView, listedAccount } from "./pages.tsx";
 import { JsonView, shown } from "./text.tsx";
 import {
   AccountsTable,
@@ -290,6 +292,90 @@ describe("SPA with an account being removed (R5-08)", () => {
     expect(viewing).not.toContain("Start scan");
     expect(viewing).not.toContain("Remove account…");
     expect(viewing).not.toContain("Remove account again…");
+  });
+
+  describe("when the summary fails", () => {
+    const failed = (status: number): Loaded<ScanSummaryView> => ({
+      data: undefined,
+      error: new ApiError(status, status === 502 ? "upstream_error" : "not_found", null),
+      loading: false,
+      reload: () => {},
+    });
+    const listedAs = (status: AccountRow["status"]): AccountRow => ({
+      ...(accounts.find((a) => a.id === REMOVING_UNREADABLE) as AccountRow),
+      status,
+    });
+    const failedPage = (me: Me, status: number, listed: AccountRow | null) =>
+      renderToStaticMarkup(
+        <AccountView
+          accountId={REMOVING_UNREADABLE}
+          me={me}
+          summary={failed(status)}
+          listed={listed}
+          onRemoved={() => {}}
+        />,
+      );
+
+    it("the account page offers Remove account again for an account the list shows as removing", () => {
+      const removing = failedPage(admin, 502, listedAs("removing"));
+      expect(removing).toContain("The graph could not be read.");
+      expect(removing).toContain("Removal pending");
+      expect(removing).toContain("Remove account again…");
+      expect(removing).not.toContain("Start scan");
+
+      // A viewer is told, and offered nothing.
+      const viewing = failedPage(viewer, 502, listedAs("removing"));
+      expect(viewing).toContain("Removal pending");
+      expect(viewing).not.toContain("Remove account…");
+      expect(viewing).not.toContain("Remove account again…");
+    });
+
+    it("the account page offers nothing for another status, another account or another error", () => {
+      const other = { ...listedAs("removing"), id: ACCOUNT };
+      for (const html of [
+        failedPage(admin, 502, listedAs("active")),
+        failedPage(admin, 502, null),
+        failedPage(admin, 502, other),
+        failedPage(admin, 404, listedAs("removing")),
+      ]) {
+        expect(html).not.toContain("Removal pending");
+        expect(html).not.toContain("Remove account");
+        expect(html).not.toContain("Start scan");
+      }
+    });
+
+    it("asks the accounts list, which reads only the index, after a 502 (route)", async () => {
+      const requests: string[] = [];
+      const respond = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      const fetch = vi.fn(async (path: string) => {
+        requests.push(path);
+        return path === "/api/accounts"
+          ? respond(accounts)
+          : respond({ error: "upstream_error" }, 502);
+      });
+      vi.stubGlobal("fetch", fetch);
+      try {
+        const error = await api.summary(REMOVING_UNREADABLE).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).status).toBe(502);
+        expect(await listedAccount(REMOVING_UNREADABLE)).toMatchObject({
+          id: REMOVING_UNREADABLE,
+          status: "removing",
+        });
+        expect(await listedAccount(UNKNOWN_ACCOUNT)).toBeNull();
+        expect(requests).toEqual([
+          `/api/accounts/${REMOVING_UNREADABLE}`,
+          "/api/accounts",
+          "/api/accounts",
+        ]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 });
 

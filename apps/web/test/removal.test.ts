@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AccountRow } from "../src/rpc.ts";
 import { ADMIN, ORIGIN, VIEWER } from "./config.ts";
 import {
   ACCOUNT,
   ACCOUNT_REMOVAL_FAILS,
   REMOVING_ACCOUNT,
+  REMOVING_UNREADABLE,
   TOKEN_REMOVAL_FAILS,
   UNKNOWN_ACCOUNT,
 } from "./fixtures.ts";
@@ -71,6 +73,33 @@ describe("account removal", () => {
     expect(calls).toEqual([
       { method: "remove", args: [REMOVING_ACCOUNT] },
       { method: "removeAccount", args: [REMOVING_ACCOUNT] },
+    ]);
+  });
+
+  it("lets an admin finish the removal of a `removing` account whose summary fails with 502", async () => {
+    // The SPA learns the status from the list, which reads only core's index.
+    const logs = captureLogs();
+    const summary = await call(`/api/accounts/${REMOVING_UNREADABLE}`, { token: admin });
+    logs.restore();
+    expect(summary.status).toBe(502);
+    expect(await summary.json()).toEqual({ error: "upstream_error" });
+    expect(logs.text()).not.toContain("half deleted");
+    const list = (await (await call("/api/accounts", { token: admin })).json()) as AccountRow[];
+    expect(list.find((a) => a.id === REMOVING_UNREADABLE)?.status).toBe("removing");
+
+    // The offer is only UI: the route still checks the admin.
+    expect((await remove(REMOVING_UNREADABLE, { token: viewer })).status).toBe(403);
+    expect(calls.map((c) => c.method)).toEqual(["getScanSummary", "listAccounts"]);
+
+    const response = await remove(REMOVING_UNREADABLE);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      token: { removed: false },
+      account: { removed: true },
+    });
+    expect(calls.slice(2)).toEqual([
+      { method: "remove", args: [REMOVING_UNREADABLE] },
+      { method: "removeAccount", args: [REMOVING_UNREADABLE] },
     ]);
   });
 
