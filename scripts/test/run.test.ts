@@ -490,6 +490,31 @@ describe("processRunner", () => {
     expect(result.stdout).toContain("token=the-deploy-token-value");
   });
 
+  it("R8-02: runs builds with COREPACK_ENV_FILE=0, so that corepack loads no .corepack.env", async () => {
+    // A stand-in for corepack's pnpm shim that prints the env file setting it sees.
+    put(
+      join(dir, "corepack", "pnpm"),
+      '#!/bin/sh\necho "env-file=$(printenv COREPACK_ENV_FILE || echo unset)"\n',
+      0o755,
+    );
+    vi.stubEnv("PATH", `${join(dir, "corepack")}:${process.env.PATH ?? ""}`);
+    try {
+      const build = () =>
+        runner({ print: () => {} })({
+          bin: "pnpm",
+          cwd: dir,
+          args: ["--dir", "apps/web", "run", "build"],
+          capture: true,
+        });
+      expect((await build()).stdout).toBe("env-file=0\n");
+      // Also when the operator's environment names another file.
+      vi.stubEnv("COREPACK_ENV_FILE", join(dir, "planted.env"));
+      expect((await build()).stdout).toBe("env-file=0\n");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("R3-03: passes the checked config, and no credentials in a dry run", async () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_API_KEY", "a-global-api-key");
@@ -708,5 +733,37 @@ describe("processRunner and what the builds can change (R6-01)", () => {
     // Unchanged, it runs.
     await run(recordWranglers([app]));
     expect(calls()).not.toBe("");
+  });
+
+  it("R8-05: refuses to run Wrangler once a checked generated rule module has changed", async () => {
+    const generated = join(root, "packages", "rules", "src", "rules.gen.ts");
+    const text = "export const RULES = [];\n";
+    put(generated, text);
+    const checked = new Map([[generated, sha256(text)]]);
+    const wranglers = recordWranglers([app]);
+    const runChecked = () =>
+      processRunner({
+        credentials: "token",
+        secrets: () => [],
+        wranglers,
+        checked: () => checked,
+        print: () => {},
+      })({
+        bin: "wrangler",
+        cwd: app,
+        config,
+        configSha256: sha256(CONFIG_TEXT),
+        args: ["deploy"],
+        capture: true,
+      });
+    await runChecked();
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+    appendFileSync(generated, "// planted\n");
+    await expect(runChecked()).rejects.toThrow(
+      `${generated} changed after the deploy checked it; refusing to run Wrangler`,
+    );
+    rmSync(generated);
+    await expect(runChecked()).rejects.toThrow(`${generated} cannot be read`);
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
   });
 });

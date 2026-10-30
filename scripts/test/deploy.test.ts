@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PROXY_VARS, UNSAFE_VARS } from "../lib/run.ts";
-import { type FakeWrangler, fakeWrangler, put, REPO_ROOT } from "./helpers.ts";
+import { deployCheckout, type FakeWrangler, fakeWrangler, put, REPO_ROOT } from "./helpers.ts";
 
 /**
  * Runs scripts/deploy.ts from a copy of scripts/ in a checkout without
@@ -24,9 +24,7 @@ describe("deploy.ts", () => {
   let root = "";
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "virga-deploy-"));
-    cpSync(join(REPO_ROOT, "scripts", "deploy.ts"), join(root, "scripts", "deploy.ts"));
-    cpSync(join(REPO_ROOT, "scripts", "lib"), join(root, "scripts", "lib"), { recursive: true });
-    writeFileSync(join(root, "package.json"), '{ "type": "module" }');
+    deployCheckout(root);
   });
   afterAll(() => rmSync(root, { recursive: true, force: true }));
   afterEach(() => rmSync(join(root, "apps"), { recursive: true, force: true }));
@@ -201,7 +199,8 @@ describe("deploy.ts", () => {
 /**
  * A stand-in Wrangler bin file. It logs each call with its app and whether
  * it holds the token, and, when asked through a file, rewrites the web config
- * from the broker's call, as a process left running by a build could.
+ * or the generated rules from the broker's call, as a process left running by
+ * a build could.
  */
 const LOGGING_BIN = String.raw`const { appendFileSync, existsSync } = require("node:fs");
 const { basename, join, resolve } = require("node:path");
@@ -212,7 +211,14 @@ appendFileSync(join(root, "calls.log"), app + " " + token + " " + process.argv.s
 if (app === "broker" && existsSync(join(root, "rewrite-later"))) {
   appendFileSync(join(root, "apps", "web", "wrangler.jsonc"), "\n");
 }
+if (app === "broker" && existsSync(join(root, "rewrite-rules-later"))) {
+  appendFileSync(join(root, "packages", "rules", "src", "rules.gen.ts"), "\n");
+}
 `;
+
+/** The first rule's SQL in a generated module, with a statement added after it by hand. */
+const withTail = (text: string) =>
+  text.replace(/("sql": "(?:[^"\\]|\\.)*)"/, '$1;\\nDELETE FROM exposure"');
 
 /** A web build that fills the assets directory, as vite build does. */
 const BUILD = `import { mkdirSync, writeFileSync } from "node:fs";
@@ -239,9 +245,7 @@ describe("deploy.ts and the builds (R6-01)", () => {
     readFileSync(join(REPO_ROOT, "apps", name, file), "utf8");
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), "virga-deploy-build-")));
-    cpSync(join(REPO_ROOT, "scripts", "deploy.ts"), join(root, "scripts", "deploy.ts"));
-    cpSync(join(REPO_ROOT, "scripts", "lib"), join(root, "scripts", "lib"), { recursive: true });
-    writeFileSync(join(root, "package.json"), '{ "type": "module" }');
+    deployCheckout(root);
     for (const name of ["broker", "core", "web"]) {
       put(join(app(name), "wrangler.jsonc"), committed(name, "wrangler.jsonc"));
       put(join(app(name), "src", "index.ts"), committed(name, join("src", "index.ts")));
@@ -249,10 +253,16 @@ describe("deploy.ts and the builds (R6-01)", () => {
     put(join(app("web"), "package.json"), '{ "scripts": { "build": "node build.mjs" } }');
     put(join(app("web"), "build.mjs"), BUILD);
     fake = fakeWrangler(root, ["broker", "core", "web"].map(app), LOGGING_BIN);
-    // A stand-in for pnpm that runs build.mjs for `pnpm run build`.
+    // A stand-in for pnpm that logs each call and runs build.mjs for `pnpm --dir <app> run build`.
     put(
       join(root, "path", "pnpm"),
-      '#!/bin/sh\n[ "$1 $2" = "run build" ] && exec node build.mjs\nexit 1\n',
+      [
+        "#!/bin/sh",
+        'echo "$(pwd) $* env-file=$(printenv COREPACK_ENV_FILE || echo unset)" >> "$(dirname "$0")/../builds.log"',
+        '[ "$1 $3 $4" = "--dir run build" ] && cd "$2" && exec node build.mjs',
+        "exit 1",
+        "",
+      ].join("\n"),
       0o755,
     );
   });
@@ -270,8 +280,9 @@ describe("deploy.ts and the builds (R6-01)", () => {
       timeout: 30_000,
     });
   };
-  const calls = () =>
-    existsSync(join(root, "calls.log")) ? readFileSync(join(root, "calls.log"), "utf8") : "";
+  const log = (name: string) =>
+    existsSync(join(root, name)) ? readFileSync(join(root, name), "utf8") : "";
+  const calls = () => log("calls.log");
   const build = (source: string) => put(join(app("web"), "build.mjs"), `${BUILD}${source}`);
 
   it("R6-01: builds first, then checks the configs, then runs the recorded Wrangler on them", () => {
@@ -291,6 +302,93 @@ describe("deploy.ts and the builds (R6-01)", () => {
       "",
     ]);
     expect(result.stdout).not.toContain("shim ran");
+  });
+
+  it("R8-02: starts each build at the repository root, where corepack reads the root's pin, and loads no .corepack.env", () => {
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(0);
+    expect(log("builds.log")).toBe(`${root} --dir apps/web run build env-file=0\n`);
+  });
+
+  it("R8-02: refuses a package manager pin or a .corepack.env in an app, before and after the builds", () => {
+    put(join(app("core"), "package.json"), '{ "packageManager": "pnpm@10.33.2" }');
+    let result = deploy([], REAL);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/core/package.json names packageManager; corepack would run pnpm commands in apps/core",
+    );
+    expect(result.stdout).not.toContain("Building");
+    rmSync(join(app("core"), "package.json"));
+
+    build(`writeFileSync(".corepack.env", "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\\n");\n`);
+    result = deploy([], REAL);
+    expect(result.stdout).toContain("Building virga-web");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("error: apps/web/.corepack.env: corepack would load it");
+    expect(calls()).toBe("");
+    expect(result.stdout + result.stderr).not.toContain(TOKEN);
+  });
+
+  const generated = () => join(root, "packages", "rules", "src", "rules.gen.ts");
+  const STALE =
+    "error: packages/rules/src/rules.gen.ts is not what the rule compiler makes of rules/";
+
+  it("R8-05: compiles the rules after the builds and passes the committed generated modules", () => {
+    const result = deploy(["--dry-run"]);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    const rules = result.stdout.search(
+      /^Rules: \d+ rule\(s\) and \d+ fixture\(s\) pass the compiler; packages\/rules\/src\/rules\.gen\.ts and packages\/rules\/src\/fixtures\.gen\.ts are its output$/m,
+    );
+    expect(rules).toBeGreaterThan(result.stdout.indexOf("Building virga-web"));
+    expect(calls()).toContain("core no-token deploy");
+  });
+
+  it("R8-05: a stale rules.gen.ts stops the deploy before any Wrangler call", () => {
+    // A statement added by hand after a rule's SQL, which Durable Object SQL would run.
+    writeFileSync(generated(), withTail(readFileSync(generated(), "utf8")));
+    for (const args of [[], ["--dry-run"]]) {
+      const result = deploy(args, REAL);
+      expect(result.status, args.join(" ")).toBe(1);
+      expect(result.stderr).toContain(STALE);
+      expect(calls()).toBe("");
+      expect(result.stdout + result.stderr).not.toContain(TOKEN);
+    }
+  });
+
+  it("R8-05: a rule that fails the compiler stops the deploy before any Wrangler call", () => {
+    const sql = join(root, "rules", "CF-003", "rule.sql");
+    writeFileSync(sql, `${readFileSync(sql, "utf8").trimEnd()};\nDELETE FROM exposure\n`);
+    const result = deploy([], REAL);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("error: the rules in rules/ fail the rule compiler");
+    expect(result.stderr).toMatch(/\n {2}CF-003\b/);
+    expect(calls()).toBe("");
+  });
+
+  it("R8-05: checks the generated rules on what the builds left", () => {
+    build(`import { appendFileSync } from "node:fs";
+appendFileSync("../../packages/rules/src/rules.gen.ts", "// planted\\n");
+`);
+    const result = deploy([], REAL);
+    expect(result.stdout).toContain("Building virga-web");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(STALE);
+    expect(calls()).toBe("");
+  });
+
+  it("R8-05: refuses a generated rule module that changed after its check, before the next Wrangler call", () => {
+    writeFileSync(join(root, "rewrite-rules-later"), "");
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `error: ${generated()} changed after the deploy checked it; refusing to run Wrangler`,
+    );
+    expect(
+      calls()
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(["broker", ""]);
   });
 
   const UNSAFE = `{ "bindings": [{ "name": "API", "type": "service", "service": "virga-broker", "entrypoint": "ApiCaller" }] }`;

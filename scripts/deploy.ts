@@ -1,14 +1,15 @@
 // Usage: node scripts/deploy.ts [--dry-run]
 //
 // Sets up and deploys a Virga instance into the tool account: runs the apps'
-// builds, checks the Wrangler configs against each other, creates missing D1
-// databases and applies their migrations, checks the master key (D-15), then
-// deploys virga-broker, virga-core and virga-web in that order. Safe to run
-// again. Wrangler always gets the checked config as --config, and only while
-// it holds the bytes that were checked; it never gets a named environment,
+// builds, checks the Wrangler configs against each other and the generated
+// rules against the rule compiler, creates missing D1 databases and applies
+// their migrations, checks the master key (D-15), then deploys virga-broker,
+// virga-core and virga-web in that order. Safe to run again. Wrangler always
+// gets the checked config as --config, and only while it and the generated
+// rules hold the bytes that were checked; it never gets a named environment,
 // loads no .env file, gets only allowlisted variables of the operator's
 // environment, and runs only while its files are those recorded before the
-// builds (R6-01).
+// builds (R6-01, R8-05).
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
@@ -19,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, checkAppDir, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
+import { checkRules, loadRuleCompiler } from "./lib/rules.ts";
 import {
   API_VARS,
   apiOverrides,
@@ -134,16 +136,22 @@ async function main(): Promise<number> {
       `Wrangler ${install.version}: ${install.bin}; ${install.files.size} files and directories recorded before the builds`,
     );
   }
+  // Loaded before the builds, so that the code that checks the generated
+  // rules after them is the checkout's, not code a build wrote (R8-05).
+  const checkGenerated = await loadRuleCompiler();
+  /** The generated rules by path, with the sha256 of the bytes checked after the builds. */
+  const checked = new Map<string, string>();
   const ctx: Context = {
-    run: processRunner({ credentials, secrets: () => secrets, wranglers }),
+    run: processRunner({ credentials, secrets: () => secrets, wranglers, checked: () => checked }),
     log: (line) => console.log(line),
     todo: [],
   };
 
   // Every build runs before any config is read, so that the checks below see
   // what the builds left. Builds get no credentials (R3-05), but their code
-  // can write anywhere the operator can (R6-01).
-  for (const { app, name } of present) await build(ctx, { name, dir: dirOf(app) });
+  // can write anywhere the operator can (R6-01). Each starts at the root,
+  // where corepack reads the root's pnpm pin, and loads no .corepack.env (R8-02).
+  for (const { app, name } of present) await build(ctx, root, { app, name });
 
   const cache = new Map<string, Map<string, string>>();
   for (const [dir, install] of wranglers) {
@@ -164,6 +172,10 @@ async function main(): Promise<number> {
   for (const issue of issues) console.error(`${issue.level}: ${issue.message}`);
   if (issues.some((i) => i.level === "error")) return 1;
   ctx.log(`Configs: ${workers.map((w) => w.name).join(", ")}; service bindings match`);
+
+  // virga-core bundles the generated rules as they are, so the deploy, not
+  // only CI's rules:check, compares them with the compiler's output (R8-05).
+  for (const [path, sha] of await checkRules(ctx, root, checkGenerated)) checked.set(path, sha);
 
   const broker = workers.find((w) => w.app === "broker") as WorkerConfig;
   const web = workers.find((w) => w.app === "web");

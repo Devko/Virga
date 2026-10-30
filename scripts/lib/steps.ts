@@ -383,14 +383,25 @@ export async function withSecretsFile(
  * Runs the app's build script, if it has one. The deploy runs every build
  * before it reads any config (R6-01).
  */
-export async function build(ctx: Context, worker: Pick<WorkerConfig, "name" | "dir">) {
-  const pkgPath = join(worker.dir, "package.json");
+export async function build(
+  ctx: Context,
+  root: string,
+  worker: Pick<WorkerConfig, "app" | "name">,
+) {
+  const pkgPath = join(root, "apps", worker.app, "package.json");
   if (!existsSync(pkgPath)) return;
   const pkg: unknown = JSON.parse(readFileSync(pkgPath, "utf8"));
   const scripts = isRecord(pkg) && isRecord(pkg.scripts) ? pkg.scripts : {};
   if (typeof scripts.build !== "string") return;
   ctx.log(`Building ${worker.name}`);
-  const result = await ctx.run({ bin: "pnpm", cwd: worker.dir, args: ["run", "build"] });
+  // From the root, so that corepack, the guide's pnpm, takes the pnpm version
+  // from the root package.json, the one the release-age check dates. Started
+  // in apps/<app>, it would take one that app's package.json names (R8-02).
+  const result = await ctx.run({
+    bin: "pnpm",
+    cwd: root,
+    args: ["--dir", `apps/${worker.app}`, "run", "build"],
+  });
   if (result.code !== 0) throw new DeployError(`building ${worker.name} failed`);
 }
 
