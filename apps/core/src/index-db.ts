@@ -110,12 +110,18 @@ export function d1ScanIndex(db: D1Database): ScanIndex {
           )
           .bind(run.finishedAt, run.status, JSON.stringify(run.summary), run.id, run.accountId),
         // Never move last_scan_at back, e.g. when an older instance finishes late.
+        // Only for a run the index holds (the statement above leaves the row,
+        // so EXISTS sees it) and that began after the account was added: a
+        // scan of an account that was removed and added again since, whose
+        // row the removal deleted or a begin step wrote just after it, must
+        // not delay the first scan of the account added again (R6-07).
         db
           .prepare(
             `UPDATE accounts SET last_scan_at = ?
-             WHERE id = ? AND (last_scan_at IS NULL OR last_scan_at < ?)`,
+             WHERE id = ? AND (last_scan_at IS NULL OR last_scan_at < ?) AND created_at <= ?
+               AND EXISTS (SELECT 1 FROM scan_runs WHERE id = ? AND account_id = ?)`,
           )
-          .bind(run.startedAt, run.accountId, run.startedAt),
+          .bind(run.startedAt, run.accountId, run.startedAt, run.startedAt, run.id, run.accountId),
       ]);
     },
   };
