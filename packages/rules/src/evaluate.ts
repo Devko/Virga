@@ -76,8 +76,9 @@ export interface RuleRunSummary {
  * `json_array`) is stored parsed, any other value as returned. Text from the
  * scanned account belongs inside such an array, so a name that happens to
  * look like JSON is never mistaken for one. Lists keep at most 100 items and
- * strings at most 2,048 characters; `_truncated` maps each shortened list to
- * its full length. Evidence still larger than 256 KB makes the run an `error`.
+ * strings at most 2,048 characters, also inside list items that are objects
+ * or lists; `_truncated` maps each shortened list to its full length.
+ * Evidence still larger than 256 KB makes the run an `error`.
  *
  * `finding_nodes` holds `subject_id` with role `subject`, plus every node ID
  * of an evidence list whose items are all node IDs (nulls ignored), with the
@@ -203,8 +204,18 @@ function isNodeId(value: unknown): value is string {
   );
 }
 
-const clip = (value: unknown): unknown =>
-  typeof value === "string" && value.length > MAX_STRING ? value.slice(0, MAX_STRING) : value;
+// Strings inside list items that are objects or lists are capped too: rules
+// build such items from names of the scanned account.
+function clip(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.length > MAX_STRING ? value.slice(0, MAX_STRING) : value;
+  }
+  if (Array.isArray(value)) return value.map(clip);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clip(item)]));
+  }
+  return value;
+}
 
 function evidenceValue(value: SqlValue, where: string, column: string): unknown {
   if (typeof value === "object" && value !== null) {

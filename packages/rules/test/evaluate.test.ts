@@ -739,6 +739,21 @@ describe("evaluateRules: evidence", () => {
     expect(links()).toHaveLength(101);
   });
 
+  it("caps strings inside list items that are objects or lists", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    const sql = `SELECT 'CF-900' AS rule_id, 'CF-900:' || s.id AS fingerprint, 'low' AS severity,
+        s.id AS subject_id,
+        json_array(json_object('environment', 'production', 'name', hex(zeroblob(1500)),
+                               'tags', json_array(hex(zeroblob(1500)), 7))) AS variables
+      FROM nodes s WHERE s.type = 'worker_script'`;
+    evaluateRules(db, [ruleWith("CF-900", sql)], "s1", 1000);
+    const [variable] = JSON.parse(finding().evidence).variables;
+    expect(variable.environment).toBe("production");
+    expect(variable.name).toHaveLength(2048);
+    expect(variable.tags[0]).toHaveLength(2048);
+    expect(variable.tags[1]).toBe(7);
+  });
+
   it("links the insight a rule enriches through the finding's nodes", async () => {
     await scan(db, "s1", 1000, [{ name: "a", store: "kv_namespace:k1" }, { name: "b" }]);
     replaceInsights(
