@@ -157,7 +157,7 @@ function entryScripts(node: GraphNode, graph: GraphInput): Set<string> {
 /**
  * Workers route hosts: `*.zone` matches subhosts at any depth, `*zone`
  * matches the host itself, its subhosts and, inside the zone, hosts whose
- * first label ends with it.
+ * first label ends with it. An Access app never covers the any-depth part.
  * developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior
  */
 function routeHosts(host: string, zone: string | undefined): HostPattern[] | null {
@@ -508,6 +508,10 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
   const ordered = [...labels.entries()].sort(
     ([a, x], [b, y]) => specificity(x) - specificity(y) || byText(a, b),
   );
+  // An Access wildcard spans one label, so no hostname app covers a key that
+  // matches any depth; the hosts below the apps' depth stay uncovered.
+  const deeper = (key: HostPattern) =>
+    key.multiLevel && hostCandidates.some((c) => relateHost(c.target.host, key) === "inside");
   for (const [text, label] of ordered) {
     const perHost = [...keys.values()].map((key): Result => {
       const result = decideHostname(hostCandidates, key, label) ??
@@ -515,7 +519,9 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
           decision: "public",
           confidence: 2,
           reasonId: null,
-          reason: "no Access application covers this entry point",
+          reason: deeper(key)
+            ? "Access wildcards match one subdomain level; deeper hosts are not covered"
+            : "no Access application covers this entry point",
         };
       return entry.originAccess ? withOriginAccess(result, entry.node.id) : result;
     });

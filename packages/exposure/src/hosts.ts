@@ -8,8 +8,8 @@ export interface HostPattern {
   labels: string[];
   /**
    * The leading `*` label stands for one or more labels, as in Workers routes
-   * and tunnel hostnames. Access apps never set it. A matching Access wildcard
-   * is taken to cover such a pattern, which ignores deeper subdomains.
+   * and tunnel hostnames. Access apps never set it, so no Access pattern
+   * covers such a pattern: the hosts below the depth it names stay uncovered.
    */
   multiLevel: boolean;
 }
@@ -70,13 +70,16 @@ function intersectsLabel(a: string, b: string): boolean {
 /**
  * How the hosts of an Access pattern `app` relate to the hosts of `key`:
  * `covers` all of them, lies `inside` (some of its hosts are in `key`), or is
- * `disjoint`.
+ * `disjoint`. A pattern of fixed depth lies at most inside one that matches
+ * any depth.
  */
 export function relateHost(app: HostPattern, key: HostPattern): HostRelation {
   const a = app.labels;
   const k = key.labels;
   if (a.length === k.length) {
-    if (a.every((label, i) => coversLabel(label, k[i] ?? ""))) return "covers";
+    if (a.every((label, i) => coversLabel(label, k[i] ?? ""))) {
+      return key.multiLevel && !app.multiLevel ? "inside" : "covers";
+    }
     if (a.every((label, i) => intersectsLabel(label, k[i] ?? ""))) return "inside";
     return "disjoint";
   }

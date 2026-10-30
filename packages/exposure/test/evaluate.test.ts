@@ -332,13 +332,33 @@ const cases: Case[] = [
     ],
   },
   {
-    name: "a wildcard route behind a matching wildcard app",
+    name: "R2-03: a wildcard route matches deeper hosts than a one-label Access wildcard covers",
     build: (g) => {
       g.script("w");
       g.route("r", "*.example.com/*", "w");
       allowApp(g, "a1", [host("*.example.com")]);
     },
-    expect: [["worker_route:r", "/", "access", 1, APP("a1")]],
+    expect: [["worker_route:r", "/", "public", 1, null]],
+    reason: /deeper/,
+  },
+  {
+    name: "R2-03: one-label Access wildcards at several depths still leave deeper hosts public",
+    build: (g) => {
+      g.script("w");
+      g.route("r", "*.example.com/*", "w");
+      allowApp(g, "a1", [host("*.example.com"), host("*.*.example.com")]);
+    },
+    expect: [["worker_route:r", "/", "public", 1, null]],
+  },
+  {
+    name: "R2-03: Worker-level Access covers a wildcard route at any depth",
+    build: (g) => {
+      g.script("w");
+      g.route("r", "*.example.com/*", "w");
+      allowApp(g, "a1", [host("*.example.com")]);
+      allowApp(g, "w", [worker("w")]);
+    },
+    expect: [["worker_route:r", "/", "access", 1, APP("w")]],
   },
   {
     name: "a wildcard route with only some hosts behind Access is public",
@@ -350,14 +370,16 @@ const cases: Case[] = [
     expect: [["worker_route:r", "/", "public", 1, null]],
   },
   {
-    name: "a wildcard route with one host bypassed is public",
+    name: "a wildcard entry point with one host bypassed is public",
     build: (g) => {
-      g.script("w");
-      g.route("r", "*.example.com/*", "w");
-      allowApp(g, "all", [host("*.example.com")]);
-      bypassApp(g, "status", [host("status.example.com")]);
+      g.pages("site");
+      allowApp(g, "all", [host("*.site.pages.dev")]);
+      bypassApp(g, "status", [host("status.site.pages.dev")]);
     },
-    expect: [["worker_route:r", "/", "public", 1, POLICY("status-bypass")]],
+    expect: [
+      ["pages_domain:site.pages.dev", "/", "public", 2, null],
+      ["pages_preview:*.site.pages.dev", "/", "public", 1, POLICY("status-bypass")],
+    ],
   },
   {
     name: "a *zone route also serves the apex",
@@ -370,7 +392,7 @@ const cases: Case[] = [
     expect: [["worker_route:r", "/", "public", 1, null]],
   },
   {
-    name: "a *zone route behind apex and wildcard apps",
+    name: "R2-03: a *zone route behind apex and wildcard apps is public on deeper hosts",
     build: (g) => {
       g.zone("zone-1", "example.com");
       g.script("w");
@@ -378,7 +400,7 @@ const cases: Case[] = [
       allowApp(g, "apex", [host("example.com")]);
       allowApp(g, "sub", [host("*.example.com")]);
     },
-    expect: [["worker_route:r", "/", "access", 1, APP("apex")]],
+    expect: [["worker_route:r", "/", "public", 1, null]],
   },
   {
     name: "a *sub route inside the zone also serves hosts ending in sub",
@@ -432,12 +454,23 @@ const cases: Case[] = [
     ],
   },
   {
-    name: "a wildcard tunnel hostname behind a wildcard app",
+    name: "R2-03: a wildcard tunnel hostname matches deeper hosts than a one-label Access wildcard covers",
     build: (g) => {
       g.tunnelHostname("*.internal.example.com", "", "http://localhost:8080");
       allowApp(g, "internal", [host("*.internal.example.com")]);
     },
-    expect: [[TH("*.internal.example.com"), "/", "access", 1, APP("internal")]],
+    expect: [[TH("*.internal.example.com"), "/", "public", 1, null]],
+    reason: /deeper/,
+  },
+  {
+    name: "R2-03: a wildcard tunnel hostname that requires an Access token is access at every depth",
+    build: (g) => {
+      g.tunnelHostname("*.internal.example.com", "", "http://localhost:8080", {
+        accessRequired: true,
+      });
+      allowApp(g, "internal", [host("*.internal.example.com")]);
+    },
+    expect: [[TH("*.internal.example.com"), "/", "access", 1, TH("*.internal.example.com")]],
   },
   {
     name: "two tunnels that serve the same hostname are separate entry points",

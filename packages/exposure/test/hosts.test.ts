@@ -44,7 +44,8 @@ describe("relateHost", () => {
     ["*test.example.com", "alphatest.example.com", false, "covers"],
     ["*test.example.com", "beta.test.example.com", false, "disjoint"],
     ["*.test.example.com", "alpha.test.example.com", false, "covers"],
-    ["*.example.com", "*.example.com", true, "covers"],
+    ["*.example.com", "*.example.com", true, "inside"],
+    ["*.example.com", "*.example.com", false, "covers"],
     ["admin.example.com", "*.example.com", true, "inside"],
     ["a.b.example.com", "*.example.com", true, "inside"],
     ["*.b.example.com", "*.example.com", true, "inside"],
@@ -54,6 +55,13 @@ describe("relateHost", () => {
     ["a.b.site.pages.dev", "*.site.pages.dev", false, "disjoint"],
   ])("%s vs %s (any depth %s): %s", (app, key, multiLevel, expected) => {
     expect(relateHost(pattern(app), pattern(key, multiLevel))).toBe(expected);
+  });
+
+  it("R2-03: a one-label Access wildcard never covers a pattern that matches any depth", () => {
+    const key = pattern("*.example.com", true);
+    for (const app of ["*.example.com", "*.*.example.com", "*", "*.com"]) {
+      expect(relateHost(pattern(app), key)).not.toBe("covers");
+    }
   });
 });
 
