@@ -8,7 +8,7 @@ import {
   parseSecretTable,
   type StoreSecret,
 } from "./master-key.ts";
-import { parseJsonOutput, type Runner } from "./run.ts";
+import { parseJsonOutput, type Runner, type WranglerCommand } from "./run.ts";
 
 export class DeployError extends Error {}
 
@@ -30,8 +30,17 @@ function json(stdout: string, command: string): unknown {
   }
 }
 
+/** A Wrangler call on the config the script checked, never one Wrangler finds itself. */
+const wrangler = (worker: WorkerConfig, args: string[], capture = false): WranglerCommand => ({
+  bin: "wrangler",
+  cwd: worker.dir,
+  config: worker.configPath,
+  args,
+  capture,
+});
+
 async function must(ctx: Context, worker: WorkerConfig, args: string[], what: string) {
-  const result = await ctx.run({ bin: "wrangler", cwd: worker.dir, args });
+  const result = await ctx.run(wrangler(worker, args));
   if (result.code !== 0)
     throw new DeployError(`${what} failed (wrangler exited with ${result.code})`);
 }
@@ -76,12 +85,7 @@ export function describeDatabases(ctx: Context, workers: readonly WorkerConfig[]
 export async function ensureDatabases(ctx: Context, workers: readonly WorkerConfig[]) {
   const first = workers[0];
   if (!first || workers.every((w) => w.d1.length === 0)) return;
-  const listed = await ctx.run({
-    bin: "wrangler",
-    cwd: first.dir,
-    args: ["d1", "list", "--json"],
-    capture: true,
-  });
+  const listed = await ctx.run(wrangler(first, ["d1", "list", "--json"], true));
   if (listed.code !== 0) throw new DeployError("wrangler d1 list failed");
   const existing = parseD1List(listed.stdout);
 
@@ -121,12 +125,7 @@ export async function ensureDatabases(ctx: Context, workers: readonly WorkerConf
 
 /** Secret names of a deployed Worker, or null when the Worker does not exist yet. */
 export async function workerSecrets(ctx: Context, worker: WorkerConfig): Promise<string[] | null> {
-  const result = await ctx.run({
-    bin: "wrangler",
-    cwd: worker.dir,
-    args: ["secret", "list", "--format", "json"],
-    capture: true,
-  });
+  const result = await ctx.run(wrangler(worker, ["secret", "list", "--format", "json"], true));
   if (result.code !== 0) {
     if (/not found/i.test(result.stderr + result.stdout)) return null;
     throw new DeployError(`listing the secrets of ${worker.name} failed`);
@@ -142,22 +141,23 @@ const MAX_PAGES = 20;
 async function storeSecrets(ctx: Context, broker: WorkerConfig, storeId: string) {
   const all: StoreSecret[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const result = await ctx.run({
-      bin: "wrangler",
-      cwd: broker.dir,
-      args: [
-        "secrets-store",
-        "secret",
-        "list",
-        storeId,
-        "--remote",
-        "--per-page",
-        String(PER_PAGE),
-        "--page",
-        String(page),
-      ],
-      capture: true,
-    });
+    const result = await ctx.run(
+      wrangler(
+        broker,
+        [
+          "secrets-store",
+          "secret",
+          "list",
+          storeId,
+          "--remote",
+          "--per-page",
+          String(PER_PAGE),
+          "--page",
+          String(page),
+        ],
+        true,
+      ),
+    );
     // Wrangler exits non-zero on an empty page ("List request returned no secrets").
     if (result.code !== 0) {
       if (/no secrets/i.test(result.stderr + result.stdout)) break;

@@ -28,6 +28,8 @@ describe("parseJsonOutput", () => {
   });
 });
 
+const CONFIG = "/repo/apps/web/wrangler.jsonc";
+
 describe("processRunner", () => {
   let dir = "";
   beforeAll(() => {
@@ -53,7 +55,7 @@ describe("processRunner", () => {
     vi.unstubAllEnvs();
   });
 
-  it("passes no credentials in a dry run", async () => {
+  it("R3-03: passes the checked config, and no credentials in a dry run", async () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_API_KEY", "a-global-api-key");
     const printed: string[] = [];
@@ -65,11 +67,14 @@ describe("processRunner", () => {
     const result = await run({
       bin: "wrangler",
       cwd: dir,
+      config: CONFIG,
       args: ["deploy", "--dry-run"],
       capture: true,
     });
     expect(result.code).toBe(3);
-    expect(result.stdout).toBe("args=deploy --dry-run\ntoken=unset key=unset metrics=false\n");
+    expect(result.stdout).toBe(
+      `args=deploy --dry-run --config ${CONFIG}\ntoken=unset key=unset metrics=false\n`,
+    );
     // Captured stdout is not printed; stderr is, redacted.
     expect(printed).toEqual(["stderr:warning [redacted]"]);
   });
@@ -83,15 +88,33 @@ describe("processRunner", () => {
       secrets: () => ["the-deploy-token-value"],
       print: (_stream, line) => printed.push(line),
     });
-    const result = await run({ bin: "wrangler", cwd: dir, args: [] });
+    const result = await run({ bin: "wrangler", cwd: dir, config: CONFIG, args: [] });
     expect(result.stdout).toContain("token=[redacted] key=unset metrics=false");
     expect(printed.join("\n")).not.toContain("the-deploy-token-value");
   });
 
+  it("R3-03: refuses arguments that choose another config or environment", async () => {
+    const run = processRunner({ credentials: "none", secrets: () => [] });
+    for (const extra of [
+      ["--env", "prod"],
+      ["-e", "prod"],
+      ["--env=prod"],
+      ["--config", "x"],
+      ["-c", "x"],
+    ]) {
+      await expect(
+        run({ bin: "wrangler", cwd: dir, config: CONFIG, args: ["deploy", ...extra] }),
+      ).rejects.toThrow(/chooses the config or environment/);
+    }
+    await expect(
+      run({ bin: "wrangler", cwd: dir, config: "wrangler.jsonc", args: ["deploy"] }),
+    ).rejects.toThrow(/absolute/);
+  });
+
   it("asks for pnpm install when the app has no Wrangler", async () => {
     const run = processRunner({ credentials: "none", secrets: () => [] });
-    await expect(run({ bin: "wrangler", cwd: join(dir, "nothing"), args: [] })).rejects.toThrow(
-      /pnpm install/,
-    );
+    await expect(
+      run({ bin: "wrangler", cwd: join(dir, "nothing"), config: CONFIG, args: [] }),
+    ).rejects.toThrow(/pnpm install/);
   });
 });

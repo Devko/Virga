@@ -24,16 +24,18 @@ const fail = (stderr: string): Result => ({ code: 1, stdout: "", stderr });
 /** A runner that answers from a table keyed by the joined arguments and records every call. */
 function fakeContext(answers: Record<string, Result>) {
   const calls: string[] = [];
+  const commands: Command[] = [];
   const ctx: Context = {
     run: async (command: Command) => {
       const key = command.args.join(" ");
       calls.push(`${command.cwd.split("/").pop()}: ${key}`);
+      commands.push(command);
       return answers[key] ?? ok();
     },
     log: () => {},
     todo: [],
   };
-  return { ctx, calls };
+  return { ctx, calls, commands };
 }
 
 let root = "";
@@ -231,6 +233,35 @@ describe("web settings", () => {
     expect(ctx.todo).toEqual([
       expect.stringContaining("still needs ACCESS_TEAM_DOMAIN, ADMIN_EMAILS"),
     ]);
+  });
+});
+
+describe("Wrangler config", () => {
+  it("R3-03: names the checked config in every Wrangler call", async () => {
+    const broker = {
+      ...app("broker", [{ binding: "VAULT", databaseName: "virga-vault" }]),
+      secretsStore: storeBroker().secretsStore,
+    };
+    const core = app("core", [{ binding: "INDEX", databaseName: "virga-index" }]);
+    const web = worker("web", { requiredSecrets: ["ACCESS_AUD"] });
+    const { ctx, commands } = fakeContext({
+      "d1 list --json": ok(JSON.stringify([{ uuid: "1", name: "virga-index" }])),
+      [LIST_STORE]: ok(TABLE(["│ virga-master-key │ id │ │ workers │ active │ x │ x │"])),
+      "secret list --format json": ok('[{ "name": "ACCESS_AUD", "type": "secret_text" }]'),
+    });
+    await ensureDatabases(ctx, [broker, core]);
+    await checkMasterKey(ctx, broker, masterKeySetup(broker));
+    const plan = planWebSettings(web, {});
+    await checkWebSettings(ctx, web, plan);
+    await reportWebSettings(ctx, web, plan);
+    for (const w of [broker, core, web]) await deploy(ctx, w, { dryRun: false });
+
+    const configOf = new Map([broker, core, web].map((w) => [w.dir, w.configPath]));
+    expect(commands.length).toBeGreaterThan(8);
+    for (const command of commands) {
+      expect(command.bin).toBe("wrangler");
+      expect(command.bin === "wrangler" && command.config).toBe(configOf.get(command.cwd));
+    }
   });
 });
 
