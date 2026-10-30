@@ -34,7 +34,7 @@ Not a product phase. It settles the open decisions and tests the assumptions tha
 | S-02 | API rate limit for account-owned tokens, the `Ratelimit` header, GraphQL limits | Rate budget object design and pacing values |
 | S-03 | Durable Object SQLite: run the schema, the JSON batch upsert and CF-001 in a real object. Recursive CTEs, triggers, CPU time of a rule run on a synthetic graph of 20,000 nodes, cost of row writes | Schema v1, write strategy (D-05) |
 | S-04 | Workers Versions API (beta) with `include=modules`. Does `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) include devDependencies and transitive packages? Is there a size cap? Are source maps present with a current Wrangler? | Package source priority and confidence levels |
-| S-05 | Permission groups. Minimal read set per collector. Which product-level Metadata Read-Only roles (Workers, D1, KV, R2, Queues, Hyperdrive) can an account token select? Does Workers Metadata Read-Only cover scripts, settings, bindings, routes and deployments (one community report says deployments return 401)? | Token profiles (D-14), onboarding allowlist |
+| S-05 | Permission groups. Minimal read set per collector. Which product-level Metadata Read-Only roles (Workers, D1, KV, R2, Queues, Hyperdrive) can an account token select? Does Workers Metadata Read-Only cover scripts, settings, bindings, routes and deployments (one community report says deployments return 401)? Does Pages Metadata Read return a project with the values of its plain-text env vars ([decision 0004](decisions/0004-cf-024-scope.md))? | Token profiles (D-14), onboarding allowlist, scope of CF-024 |
 | S-06 | Audit Logs v2 polling: cursor handling, volume of the tool's own `view` events per scan, server-side filter `actor_token_id.not` | Event poller design, cost of polling |
 | S-07 | Containers: `enableInternet = false`, outbound handlers, permission for registry pull credentials | Phase 2 scanner design, or a separate optional token |
 | S-08 | Worker-level Access for the UI: `ctx.access` identity plus JWT validation as a second check; Access or OAuth in front of the MCP server | Web Worker auth design |
@@ -143,7 +143,7 @@ Not a product phase. It settles the open decisions and tests the assumptions tha
 | CF-011 | 1 | Access, Workers, tunnels | Private destinations arrive in phase 3 |
 | CF-021 | 1 | R2, Access | |
 | CF-022 | 1 | Pages, Access | |
-| CF-024 | 1 | Workers settings | Built-in patterns for known token prefixes; gitleaks in phase 2 |
+| CF-024 | 1 | Workers and Pages settings | Built-in patterns for known token prefixes; gitleaks in phase 2. One rule for both ([0004](decisions/0004-cf-024-scope.md)) |
 | CF-001 | 2 | Workers, packages, vulns, storage, exposure | Flagship |
 | CF-005 | 2 | Containers, images, vulns, exposure | Needs the Worker → Durable Object → container path |
 | CF-006 | 2 | Workers code, exposure, storage | "Recognizable authentication" and the MCP signature need code |
@@ -159,7 +159,7 @@ Three Workers in phase 1, a scanner container in phase 2. Each binding is grante
 
 | Worker | Exposure | Bindings | Role |
 | --- | --- | --- | --- |
-| `virga-broker` | No routes, `workers.dev` and previews off | Vault D1, master key (Secrets Store), rate budget Durable Object | Holds and uses tokens. RPC entrypoints `ApiCaller` (read calls with path allowlist) and `TokenIntake` (store and verify only) |
+| `virga-broker` | No routes, `workers.dev` and previews off | Vault D1, master key (Secrets Store), rate budget Durable Object | Holds and uses tokens. RPC entrypoints `ApiCaller` (read calls with path allowlist) and `TokenIntake` (store, recheck, and remove with the account's rate budget) |
 | `virga-core` | No routes, `workers.dev` and previews off | Account graph Durable Object, scan Workflow, index D1, R2, Queue, `ApiCaller` | Cron, Workflows, collectors, evaluators, rules. RPC entrypoints `GraphReader` (read-only) and `Admin` |
 | `virga-web` | Custom domain, Worker-level Access, JWT validated in code | `GraphReader`, `Admin`, `TokenIntake`, static assets | UI, API, MCP. No vault, no D1, no Durable Object stubs |
 

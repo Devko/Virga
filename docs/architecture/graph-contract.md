@@ -127,10 +127,10 @@ Emitted only when the script has `preview_urls: true`.
 | --- | --- | --- |
 | `bucket` | string | |
 | `kind` | string | `r2_dev` or `custom` |
-| `enabled` | boolean | |
+| `enabled` | boolean \| null | `null` when the API omits the field or sends another type (custom domains) |
 | `zone_id` | string \| null | |
 
-Emitted for the managed `r2.dev` domain only when it is enabled.
+Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point; review R4-02 proposes emitting it with `enabled: null` instead.
 
 `d1_database` — native ID: database UUID; name: database name. Props: `created_at` (string \| null).
 
@@ -222,7 +222,11 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
 
-`tunnel_hostname` — native ID: `<tunnel_id>:<hostname><path>`, so two tunnels serving the same hostname stay apart; name: hostname.
+`tunnel_hostname` — native ID: `<tunnel_id>:<hostname><path>`; name: hostname.
+
+- The tunnel ID keeps two tunnels that serve the same hostname apart.
+- `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
+- For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
 | Prop | Type | Meaning |
 | --- | --- | --- |
@@ -236,13 +240,21 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 
 Emitted from the remotely managed ingress configuration:
 
-- **Hostname rules.** Every rule with a hostname yields one node. Rules shadowed by an earlier rule are skipped.
-- **Rules without a hostname** match every hostname that reaches the tunnel (review R3-02). This covers the final catch-all and path-only rules.
+- **Hostname rules.** Every rule with a hostname yields one node, unless an earlier rule shadows it (below).
+- **Rules without a hostname** match every hostname that reaches the tunnel (review R3-02). This covers the final catch-all and path-only rules. A rule whose hostname is `*` counts as one without a hostname, as in cloudflared.
   - Each such rule whose service is an origin (anything but `http_status:*`) yields one node per hostname that appears in the tunnel's ingress, with the rule's own path, service and `access_required`, and `via_fallthrough: true`.
   - Requests that no hostname rule takes, such as other paths of a path-restricted hostname, are therefore evaluated as their own entry points.
-  - Hostnames that reach the tunnel only through DNS are not known to the collector, which is a known limit.
+- **Shadowing.** cloudflared takes the first rule that matches. For one hostname, a rule is skipped when an earlier rule for that hostname, or one without a hostname, has the same path or no path. Rules without a hostname that answer with `http_status` take their path for every hostname but yield no node.
+- **Rules without a service** are ignored; cloudflared refuses them.
 - **Credentials.** For a `scheme://` value, everything from `//` through the last `@` of the authority is removed. The authority runs from `//` to the first `/`, `?` or `#`, as in Go's `url.Parse`, which cloudflared uses. A service with an `@` anywhere else, or an `@` without `scheme://`, is stored as `""`. The stored service never contains `@`.
 - **Locally managed tunnels** yield `tunnel` nodes but no `tunnel_hostname`.
+
+Known limits of the per-rule model, and which way each errs:
+
+- Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
+- A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
+- A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
+- `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point. This was already true before round 4.
 
 ### tokens
 
@@ -322,7 +334,7 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
 1. **Entry points** are:
    - `worker_route`, `worker_custom_domain`, `workers_dev`, `worker_preview_url`
    - `pages_domain`, `pages_preview`
-   - `r2_public_domain` with `enabled: true`
+   - `r2_public_domain` unless `enabled` is `false`; with `enabled` `null` the entry point is `unknown`
    - `tunnel_hostname`
 2. **Matching.**
    - Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one.
@@ -389,9 +401,9 @@ What the scan records, and what rules and the evaluator may rely on:
   - `partial`: some chunks were written before one failed; collection of a class stops at the first failed chunk
   - `no_permission`: the API answered 401 or 403
   - `error`: anything else
-- **Sweep** runs only for `complete` classes. A sweep never moves the current scan.
+- **Sweep** runs only for `complete` classes. A sweep never moves the current scan. The write path refuses the sweep of a scan that is not current.
 - **Only the current scan writes.** Writes from a scan marked failed as stale, from one that ended, or from one a newer scan took over are refused (`StaleScanError`). That scan stops and ends `failed`, with the reason in `summary.detail`.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
-- **Undecided.** Where the exposure that decides a rule is `unknown`, the rule returns an undecided row (`decided = 0`). An undecided row changes no finding and is not a hit.
+- **Undecided.** Where the exposure that decides a rule is `unknown`, or a value it needs could not be read (for example `plain_text_vars` entries with `looks_secret` `null` in CF-024), the rule returns an undecided row (`decided = 0`). An undecided row is not a hit and changes no finding, except that a suppression past its end returns to open (R3-07).
 - **`rule_runs`** records hits (decided rows), undecided rows, and for a failed run its error message (at most 500 characters).
