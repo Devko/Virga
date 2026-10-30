@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-011
--- version: 1
+-- version: 2
 -- title: Bypass policy on an app that reaches data or a tunnel
 -- severity: high
 -- kind: toxic
@@ -16,10 +16,11 @@
 --   URLs their version, Worker-level Access all of them or only the previews),
 -- - serves a Pages environment with a data store binding, or
 -- - is a tunnel hostname.
--- Apps whose hostname targets all carry a path are left out: a path app for
--- the truly public paths is the remedy this rule proposes. Hostname targets
--- match entry points exactly, or through a `*.` wildcard that covers one
--- label, as Access does. One finding per policy.
+-- A hostname target covers the whole host when its path is empty, `/` or
+-- `/*`. Apps whose hostname targets all carry a narrower path are left out:
+-- a path app for the truly public paths is the remedy this rule proposes.
+-- Hostname targets match entry points exactly, or through a `*.` wildcard
+-- that covers one label, as Access does. One finding per policy.
 --
 -- These are the public targets; private destinations follow in phase 3.
 WITH
@@ -67,7 +68,7 @@ entry AS (
 app_entry AS (
   SELECT tg.app_id, en.entry_id
   FROM target tg
-  JOIN entry en ON tg.kind = 'hostname' AND tg.path = ''
+  JOIN entry en ON tg.kind = 'hostname' AND tg.path IN ('', '/', '/*')
    AND (tg.host = en.host
         OR (substr(tg.host, 1, 2) = '*.'
             AND length(en.host) > length(tg.host) - 1

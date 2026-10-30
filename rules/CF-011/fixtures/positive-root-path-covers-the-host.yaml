@@ -1,0 +1,35 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# App paths ("/*" and "/" cover the whole host): https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
+# Graph shape: docs/architecture/graph-contract.md, access_app targets (path as configured), tunnel_hostname
+description: >
+  Two apps carry a path that still covers the whole host. pol-files
+  bypasses Access on files.example.com with path "/", in front of a Worker
+  with an R2 binding. pol-ops bypasses Access for a country on
+  ops.example.org with path "/*", a tunnel hostname.
+nodes:
+  - { type: worker_script, id: files, name: files }
+  - { type: worker_version, id: files-1, props: { script_node_id: "worker_script:files" } }
+  - { type: worker_custom_domain, id: files.example.com, name: files.example.com, props: { zone_id: z1, hostname: files.example.com, service: files, environment: null } }
+  - { type: r2_bucket, id: customer-exports, name: customer-exports }
+  - { type: tunnel, id: 3f2e1d0c-9b8a-4765-a432-10fedcba9876, name: ops, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: "3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org", name: ops.example.org, props: { hostname: ops.example.org, path: "", service: "https://localhost:9443", origin_scheme: https, tunnel_id: 3f2e1d0c-9b8a-4765-a432-10fedcba9876, access_required: false } }
+  - type: access_app
+    id: app-files
+    name: Files
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: files.example.com, path: /, overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: app-ops
+    name: Ops
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: ops.example.org, path: /*, overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - { type: access_policy, id: pol-files, name: Public files, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-ops, name: Home country, props: { decision: bypass, include: [{ kind: geo, value: DE }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:files", dst: "worker_version:files-1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:files-1", dst: "r2_bucket:customer-exports", key: EXPORTS, props: { binding_type: r2_bucket } }
+  - { type: ROUTES_TO, src: "worker_custom_domain:files.example.com", dst: "worker_script:files" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org", dst: "tunnel:3f2e1d0c-9b8a-4765-a432-10fedcba9876" }
+  - { type: ALLOWS, src: "access_policy:pol-files", dst: "access_app:app-files", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-ops", dst: "access_app:app-ops", props: { precedence: 1 } }
+expect:
+  - { fingerprint: "CF-011:access_policy:pol-files", severity: high }
+  - { fingerprint: "CF-011:access_policy:pol-ops", severity: high }

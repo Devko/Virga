@@ -3,10 +3,11 @@
 # Graph shape: docs/architecture/graph-contract.md, access_app targets, access_policy, BINDS
 description: >
   Bypass policies that do not qualify: one on a path app for the public
-  assets of a Worker with data (the recommended split), one on an app in
-  front of a Worker without data store bindings, one on a Pages domain whose
-  data binding belongs to the preview environment. An Allow policy for
-  Everyone on the data Worker is CF-010's concern, not this rule's.
+  assets of a Worker with data (the recommended split; /static/* is a path
+  too, unlike /*), one on an app in front of a Worker without data store
+  bindings, one on a Pages domain whose data binding belongs to the preview
+  environment. An Allow policy for Everyone on the data Worker is CF-010's
+  concern, not this rule's.
 nodes:
   - { type: worker_script, id: shop, name: shop }
   - { type: worker_version, id: shop-1, props: { script_node_id: "worker_script:shop" } }
@@ -20,7 +21,7 @@ nodes:
   - type: access_app
     id: app-assets
     name: Shop assets
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: /assets, overrides: [] }, { kind: hostname, host: shop.example.com, path: /favicon.ico, overrides: [] }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: /assets, overrides: [] }, { kind: hostname, host: shop.example.com, path: /static/*, overrides: [] }, { kind: hostname, host: shop.example.com, path: /favicon.ico, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-shop
     name: Shop

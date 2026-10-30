@@ -6435,7 +6435,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-011",
     "name": "negative-path-app-or-no-data",
-    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
+    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split; /static/* is a path too, unlike /*), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -6515,6 +6515,12 @@ export const FIXTURES: readonly RuleFixture[] = [
               "kind": "hostname",
               "host": "shop.example.com",
               "path": "/assets",
+              "overrides": []
+            },
+            {
+              "kind": "hostname",
+              "host": "shop.example.com",
+              "path": "/static/*",
               "overrides": []
             },
             {
@@ -7005,6 +7011,192 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "fingerprint": "CF-011:access_policy:pol-worker",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-011",
+    "name": "positive-root-path-covers-the-host",
+    "description": "Two apps carry a path that still covers the whole host. pol-files bypasses Access on files.example.com with path \"/\", in front of a Worker with an R2 binding. pol-ops bypasses Access for a country on ops.example.org with path \"/*\", a tunnel hostname.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "files",
+        "name": "files"
+      },
+      {
+        "type": "worker_version",
+        "id": "files-1",
+        "props": {
+          "script_node_id": "worker_script:files"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "files.example.com",
+        "name": "files.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "files.example.com",
+          "service": "files",
+          "environment": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "customer-exports",
+        "name": "customer-exports"
+      },
+      {
+        "type": "tunnel",
+        "id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876",
+        "name": "ops",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org",
+        "name": "ops.example.org",
+        "props": {
+          "hostname": "ops.example.org",
+          "path": "",
+          "service": "https://localhost:9443",
+          "origin_scheme": "https",
+          "tunnel_id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876",
+          "access_required": false
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-files",
+        "name": "Files",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "files.example.com",
+              "path": "/",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-ops",
+        "name": "Ops",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "ops.example.org",
+              "path": "/*",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-files",
+        "name": "Public files",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-ops",
+        "name": "Home country",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "geo",
+              "value": "DE"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:files",
+        "dst": "worker_version:files-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:files-1",
+        "dst": "r2_bucket:customer-exports",
+        "key": "EXPORTS",
+        "props": {
+          "binding_type": "r2_bucket"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:files.example.com",
+        "dst": "worker_script:files"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org",
+        "dst": "tunnel:3f2e1d0c-9b8a-4765-a432-10fedcba9876"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-files",
+        "dst": "access_app:app-files",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-ops",
+        "dst": "access_app:app-ops",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-011:access_policy:pol-files",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-011:access_policy:pol-ops",
         "severity": "high"
       }
     ]
