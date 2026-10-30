@@ -166,6 +166,32 @@ describe("storage collector", () => {
     ).toEqual({});
   });
 
+  it("R4-02: emits the r2.dev domain with enabled null when its flag cannot be read", async () => {
+    // The flag was dropped with the entry point, so CF-021 resolved a public
+    // bucket's finding instead of leaving it undecided.
+    const host = managedDisabled.domain;
+    const managed = `${base}/r2/buckets/logs/domains/managed`;
+    for (const enabled of [undefined, null, "true", 1, {}]) {
+      const { output } = await run(storageCollector, {
+        ...routes,
+        [managed]: envelope({ ...managedDisabled, enabled }),
+      });
+      expect(node(output, `r2_public_domain:${host}`).props, String(enabled)).toEqual({
+        bucket: "logs",
+        kind: "r2_dev",
+        enabled: null,
+        zone_id: null,
+      });
+      expect(edgeIds(output)).toContain(`ROUTES_TO:r2_public_domain:${host}->r2_bucket:logs`);
+    }
+    // Disabled stays out, and a response without a domain names no entry point.
+    for (const result of [managedDisabled, { enabled: true }, null]) {
+      const { output } = await run(storageCollector, { ...routes, [managed]: envelope(result) });
+      expect(nodeIds(output, "r2_public_domain")).not.toContain(`r2_public_domain:${host}`);
+      expect(edgeIds(output).filter((e) => e.endsWith("->r2_bucket:logs"))).toEqual([]);
+    }
+  });
+
   it("follows pagination of every listing", async () => {
     const buckets = Array.from({ length: 1001 }, (_, i) => ({
       name: `b-${String(i).padStart(4, "0")}`,

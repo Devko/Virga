@@ -19,7 +19,8 @@ import {
 } from "./graph.ts";
 
 const CD = (h: string) => `worker_custom_domain:${h}`;
-const TH = (h: string, tunnel = "tun-1") => `tunnel_hostname:${tunnel}:${h}`;
+const TH = (host: string, path = "", tunnel = "tun-1") =>
+  `tunnel_hostname:${tunnel}:${host}:${path}`;
 const APP = (id: string) => `access_app:${id}`;
 const POLICY = (id: string) => `access_policy:${id}`;
 const EMAIL: Selector = { kind: "email_domain", value: "example.com" };
@@ -140,6 +141,17 @@ const cases: Case[] = [
       g.r2Domain("cdn.example.com", "b3", "custom", null);
     },
     expect: [["r2_public_domain:cdn.example.com", "/", "unknown", 0, null]],
+  },
+  {
+    name: "R4-02: an r2.dev domain whose enabled flag could not be read is unknown, not public or absent",
+    build: (g) => {
+      g.r2Domain("pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev", "b1", "r2_dev", null);
+      // Access never covers r2.dev, and an app for the host changes nothing.
+      allowApp(g, "r2", [host("pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev")]);
+    },
+    expect: [
+      ["r2_public_domain:pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev", "/", "unknown", 0, null],
+    ],
   },
   {
     name: "stale workers.dev and preview nodes of a script that turned them off are skipped",
@@ -448,7 +460,7 @@ const cases: Case[] = [
       g.tunnelHostname("web.example.com", "^/admin/", "http://localhost:8080");
       allowApp(g, "admin", [host("web.example.com", "/admin")]);
     },
-    expect: [[TH("web.example.com^/admin/"), "/admin/*", "access", 2, APP("admin")]],
+    expect: [[TH("web.example.com", "^/admin/"), "/admin/*", "access", 2, APP("admin")]],
   },
   {
     name: "an unanchored tunnel path is read as all paths with lower confidence",
@@ -457,8 +469,8 @@ const cases: Case[] = [
       allowApp(g, "private", [host("img.example.com", "/private")]);
     },
     expect: [
-      [TH("img.example.com\\.(jpg|png)$"), "/", "public", 1, null],
-      [TH("img.example.com\\.(jpg|png)$"), "/private", "access", 1, APP("private")],
+      [TH("img.example.com", "\\.(jpg|png)$"), "/", "public", 1, null],
+      [TH("img.example.com", "\\.(jpg|png)$"), "/private", "access", 1, APP("private")],
     ],
   },
   {
@@ -488,7 +500,7 @@ const cases: Case[] = [
     },
     expect: [
       [TH("ssh.example.com"), "/", "public", 2, null],
-      [TH("ssh.example.com", "tun-2"), "/", "public", 2, null],
+      [TH("ssh.example.com", "", "tun-2"), "/", "public", 2, null],
     ],
   },
   {
@@ -697,7 +709,7 @@ const cases: Case[] = [
     },
     expect: [
       [TH("app.example.com"), "/", "public", 2, null],
-      [TH("app.example.com^/admin"), "/admin*", "access", 1, TH("app.example.com^/admin")],
+      [TH("app.example.com", "^/admin"), "/admin*", "access", 1, TH("app.example.com", "^/admin")],
     ],
   },
   {
@@ -710,7 +722,7 @@ const cases: Case[] = [
     },
     expect: [
       [TH("app.example.com"), "/", "access", 1, TH("app.example.com")],
-      [TH("app.example.com^/debug"), "/debug*", "public", 2, null],
+      [TH("app.example.com", "^/debug"), "/debug*", "public", 2, null],
     ],
   },
   {
@@ -730,11 +742,54 @@ const cases: Case[] = [
     },
     expect: [
       // The regex path is read approximately, so split prefixes have lower confidence.
-      [TH("api.example.com^/v1"), "/v1*", "public", 1, null],
-      [TH("api.example.com^/v1"), "/v1/admin", "access", 1, APP("v1")],
-      [TH("kb.example.com^/debug"), "/debug*", "access", 2, APP("kb")],
-      [TH("open.example.com^/debug"), "/debug*", "public", 2, POLICY("open-bypass")],
+      [TH("api.example.com", "^/v1"), "/v1*", "public", 1, null],
+      [TH("api.example.com", "^/v1"), "/v1/admin", "access", 1, APP("v1")],
+      [TH("kb.example.com", "^/debug"), "/debug*", "access", 2, APP("kb")],
+      [TH("open.example.com", "^/debug"), "/debug*", "public", 2, POLICY("open-bypass")],
       [TH("ops.example.com"), "/", "access", 1, TH("ops.example.com")],
+    ],
+  },
+  {
+    name: "R5-06: every entry point of a tunnel whose ingress was truncated is unknown",
+    build: (g) => {
+      // The collector stopped at its limit, so rules that take requests
+      // before these entry points may be missing.
+      const big = { tunnelId: "tun-big", truncated: true };
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", big);
+      g.tunnelHostname("app.example.com", "^/admin", "http://localhost:9000", {
+        ...big,
+        accessRequired: true,
+      });
+      g.tunnelHostname("web.example.com", "", "http://localhost:8080", {
+        ...big,
+        viaFallthrough: true,
+      });
+      allowApp(g, "web", [host("web.example.com")]);
+      // Another tunnel that serves the same hostname is decided as before.
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { tunnelId: "tun-1" });
+    },
+    expect: [
+      [TH("app.example.com", "^/admin", "tun-big"), "/admin*", "unknown", 0, "tunnel:tun-big"],
+      [TH("ssh.example.com", "", "tun-1"), "/", "public", 2, null],
+      [TH("ssh.example.com", "", "tun-big"), "/", "unknown", 0, "tunnel:tun-big"],
+      [TH("web.example.com", "", "tun-big"), "/", "unknown", 0, "tunnel:tun-big"],
+    ],
+  },
+  {
+    name: "R5-06: a tunnel that is not truncated, or whose flag is not true, is evaluated",
+    build: (g) => {
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { truncated: false });
+      g.tunnelHostname("git.example.com", "", "ssh://localhost:22", { tunnelId: "tun-2" });
+      g.node("tunnel", "tun-2", "tunnel", {
+        tunnel_type: "cfd_tunnel",
+        status: "healthy",
+        config_src: "cloudflare",
+        ingress_truncated: "true",
+      });
+    },
+    expect: [
+      [TH("git.example.com", "", "tun-2"), "/", "public", 2, null],
+      [TH("ssh.example.com"), "/", "public", 2, null],
     ],
   },
   {

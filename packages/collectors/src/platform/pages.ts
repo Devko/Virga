@@ -69,21 +69,37 @@ function previewSetting(project: CfPagesProject): string {
   return setting && PREVIEW_SETTINGS.has(setting) ? setting : "all";
 }
 
-type PlainTextVar = { name: string; environment: string; kind: string } & ValueVerdict;
+type PlainTextVar = { name: string | null; environment: string; kind: string } & ValueVerdict;
+
+const UNINSPECTED = { looks_secret: null, secret_pattern: null } as const;
 
 /**
  * Plain-text environment variables of both environments, without their
  * values. Values are inspected here and dropped; secret_text is never read.
+ *
+ * What the API did not return is unknown, not clean (review R5-07): an
+ * environment without an `env_vars` object yields one entry of kind
+ * `unread` with no name, and a variable of another or no type one of kind
+ * `unknown`, both with `looks_secret` null and without reading a value.
+ * `null` is how the API deletes a variable, so it stands for none.
  */
 function plainTextVars(configs: unknown): PlainTextVar[] {
   const vars: PlainTextVar[] = [];
   for (const environment of ENVIRONMENTS) {
     const config = isObject(configs) ? configs[environment] : undefined;
-    const envVars = isObject(config) && isObject(config.env_vars) ? config.env_vars : {};
+    const envVars = isObject(config) ? config.env_vars : undefined;
+    if (!isObject(envVars)) {
+      vars.push({ name: null, environment, kind: "unread", ...UNINSPECTED });
+      continue;
+    }
     for (const name of Object.keys(envVars).sort()) {
       const envVar = envVars[name];
-      if (!isObject(envVar) || envVar.type !== "plain_text") continue;
-      vars.push({ name, environment, kind: "plain_text", ...inspectValue(envVar.value) });
+      if (envVar === null || (isObject(envVar) && envVar.type === "secret_text")) continue;
+      vars.push(
+        isObject(envVar) && envVar.type === "plain_text"
+          ? { name, environment, kind: "plain_text", ...inspectValue(envVar.value) }
+          : { name, environment, kind: "unknown", ...UNINSPECTED },
+      );
     }
   }
   return vars;

@@ -1,4 +1,5 @@
 import { envelope } from "@virga/cf-api/testing";
+import { sha256 } from "@virga/graph";
 import { describe, expect, it } from "vitest";
 import {
   accessRequired,
@@ -35,8 +36,8 @@ import {
 } from "./helpers.ts";
 
 const routes = tunnelsRoutes;
-const blogHost = (host: string) => `tunnel_hostname:${BLOG}:${host}`;
-const legacyHost = (host: string) => `tunnel_hostname:${LEGACY}:${host}`;
+const blogHost = (host: string, path = "") => `tunnel_hostname:${BLOG}:${host}:${path}`;
+const legacyHost = (host: string, path = "") => `tunnel_hostname:${LEGACY}:${host}:${path}`;
 
 /** The fixture routes with the blog tunnel serving this configuration. */
 const withBlogConfig = (config: object) => ({
@@ -45,6 +46,10 @@ const withBlogConfig = (config: object) => ({
 });
 
 const required = { access: { required: true, teamName: "acme", audTag: ["aud1"] } };
+
+/** The part after the tunnel ID for a pair whose contract ID another pair holds. */
+const pairHash = async (host: string, path: string) =>
+  `sha256:${await sha256(JSON.stringify([host, path]))}`;
 
 /** The blog tunnel's hostname nodes, as `ID → props`. */
 async function blogHostnames(ingress: object[]) {
@@ -73,7 +78,7 @@ const hostProps = (
 });
 
 describe("tunnels collector", () => {
-  it("lists cfd tunnels and Mesh nodes that are not deleted, in chunks of 25", async () => {
+  it("lists cfd tunnels and Mesh nodes that are not deleted, in chunks of 10", async () => {
     const { chunks, calls, output } = await run(tunnelsCollector, routes);
     expect(chunks).toEqual([[BLOG, LOCAL, LEGACY, MESH].sort()]);
     expect(calls[0]).toBe(
@@ -93,22 +98,28 @@ describe("tunnels collector", () => {
     const plan = await tunnelsCollector.plan(ctx);
     expect(transport.calls.map((c) => /page=(\d+)/.exec(c)?.[1])).toEqual(["1", "2"]);
     expect(plan.flat()).toHaveLength(1001);
-    expect(plan.map((c) => c.length).slice(-2)).toEqual([25, 1]);
+    expect(plan.map((c) => c.length).slice(-2)).toEqual([10, 1]);
   });
 
   it("emits tunnel nodes with the contract props", async () => {
     const { output } = await run(tunnelsCollector, routes);
-    expectProps(output, "tunnel", ["tunnel_type", "status", "config_src"]);
+    expectProps(output, "tunnel", ["tunnel_type", "status", "config_src", "ingress_truncated"]);
     expect(node(output, `tunnel:${BLOG}`)).toEqual({
       type: "tunnel",
       nativeId: BLOG,
       name: "blog",
-      props: { tunnel_type: "cfd_tunnel", status: "healthy", config_src: "cloudflare" },
+      props: {
+        tunnel_type: "cfd_tunnel",
+        status: "healthy",
+        config_src: "cloudflare",
+        ingress_truncated: false,
+      },
     });
     expect(node(output, `tunnel:${LOCAL}`).props).toEqual({
       tunnel_type: "cfd_tunnel",
       status: "down",
       config_src: "local",
+      ingress_truncated: false,
     });
     // Falls back to the deprecated remote_config flag.
     expect(node(output, `tunnel:${LEGACY}`).props?.config_src).toBe("cloudflare");
@@ -116,7 +127,12 @@ describe("tunnels collector", () => {
       type: "tunnel",
       nativeId: MESH,
       name: "branch-office",
-      props: { tunnel_type: "warp_connector", status: "degraded", config_src: null },
+      props: {
+        tunnel_type: "warp_connector",
+        status: "degraded",
+        config_src: null,
+        ingress_truncated: false,
+      },
     });
   });
 
@@ -149,16 +165,16 @@ describe("tunnels collector", () => {
         blogHost("ssh.example.com"),
         blogHost("status.example.com"),
         blogHost("tcp.example.com"),
-        blogHost("tunnel.example.comsubpath"),
+        blogHost("tunnel.example.com", "subpath"),
         legacyHost("legacy.example.com"),
         legacyHost("open.example.com"),
         legacyHost("ssh.example.com"),
         legacyHost("wiki.example.com"),
       ].sort(),
     );
-    expect(node(output, blogHost("tunnel.example.comsubpath"))).toEqual({
+    expect(node(output, blogHost("tunnel.example.com", "subpath"))).toEqual({
       type: "tunnel_hostname",
-      nativeId: `${BLOG}:tunnel.example.comsubpath`,
+      nativeId: `${BLOG}:tunnel.example.com:subpath`,
       name: "tunnel.example.com",
       props: {
         hostname: "tunnel.example.com",
@@ -246,14 +262,14 @@ describe("tunnels collector", () => {
       { service: "http_status:404" },
     ]);
     expect(nodes).toEqual({
-      "app.example.com^/debug": hostProps(
+      "app.example.com:^/debug": hostProps(
         "app.example.com",
         "^/debug",
         "http://localhost:6060",
         false,
         true,
       ),
-      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", true, false),
     });
   });
 
@@ -270,14 +286,14 @@ describe("tunnels collector", () => {
       { service: "http://localhost:8080" },
     ]);
     expect(nodes).toEqual({
-      "app.example.com^/admin": hostProps(
+      "app.example.com:^/admin": hostProps(
         "app.example.com",
         "^/admin",
         "http://localhost:9000",
         true,
         false,
       ),
-      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", false, true),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", false, true),
     });
   });
 
@@ -301,18 +317,18 @@ describe("tunnels collector", () => {
     const fallthrough = output.nodes.filter((n) => n.props?.via_fallthrough === true);
     expect(fallthrough.map((n) => [n.nativeId.slice(BLOG.length + 1), n.name]).sort()).toEqual(
       [
-        ["a.example.com", "a.example.com"],
-        ["a.example.com^/metrics", "a.example.com"],
-        ["a.example.com^/ssh", "a.example.com"],
-        ["b.example.com", "b.example.com"],
-        ["b.example.com^/metrics", "b.example.com"],
-        ["b.example.com^/ssh", "b.example.com"],
+        ["a.example.com:", "a.example.com"],
+        ["a.example.com:^/metrics", "a.example.com"],
+        ["a.example.com:^/ssh", "a.example.com"],
+        ["b.example.com:", "b.example.com"],
+        ["b.example.com:^/metrics", "b.example.com"],
+        ["b.example.com:^/ssh", "b.example.com"],
       ].sort(),
     );
-    expect(node(output, blogHost("b.example.com^/metrics")).props).toEqual(
+    expect(node(output, blogHost("b.example.com", "^/metrics")).props).toEqual(
       hostProps("b.example.com", "^/metrics", "http://localhost:9090", true, true),
     );
-    expect(node(output, blogHost("a.example.com^/ssh")).props).toEqual(
+    expect(node(output, blogHost("a.example.com", "^/ssh")).props).toEqual(
       hostProps("a.example.com", "^/ssh", "ssh://localhost:22", false, true),
     );
     // Every fall-through node routes to its tunnel.
@@ -321,7 +337,7 @@ describe("tunnels collector", () => {
         `ROUTES_TO:tunnel_hostname:${n.nativeId}->tunnel:${BLOG}`,
       );
     }
-    expect(nodeIds(output, "tunnel_hostname")).not.toContain(blogHost("*^/ssh"));
+    expect(nodeIds(output, "tunnel_hostname")).not.toContain(blogHost("*", "^/ssh"));
   });
 
   it("R3-02: skips a rule for a hostname that an earlier rule takes whole or on the same path", async () => {
@@ -339,22 +355,226 @@ describe("tunnels collector", () => {
       { service: "http://localhost:8081" },
     ]);
     expect(nodes).toEqual({
-      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", true, false),
-      "web.example.com^/debug": hostProps(
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+      "web.example.com:^/debug": hostProps(
         "web.example.com",
         "^/debug",
         "http://localhost:6060",
         false,
         true,
       ),
-      "web.example.com^/api": hostProps(
+      "web.example.com:^/api": hostProps(
         "web.example.com",
         "^/api",
         "http://localhost:7001",
         false,
         false,
       ),
-      "web.example.com": hostProps("web.example.com", "", "http://localhost:8081", false, true),
+      "web.example.com:": hostProps("web.example.com", "", "http://localhost:8081", false, true),
+    });
+  });
+
+  it("R5-04: a hostname and a path never combine into another hostname's ID", async () => {
+    // Case 1 of the review: both rules had the ID <tid>:ssh.example.com, so
+    // the SSH origin got no node.
+    expect(
+      await blogHostnames([
+        { hostname: "ssh", path: ".example.com", service: "http_status:404" },
+        { hostname: "ssh.example.com", service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      "ssh:.example.com": hostProps("ssh", ".example.com", "http_status:404", false, false),
+      "ssh.example.com:": hostProps("ssh.example.com", "", "ssh://localhost:22", false, false),
+    });
+    // Case 2: the rule with a token check took the ID of the one without.
+    expect(
+      await blogHostnames([
+        {
+          hostname: "app.example.co",
+          path: "m",
+          service: "http://localhost:8080",
+          originRequest: required,
+        },
+        { hostname: "app.example.com", service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      "app.example.co:m": hostProps("app.example.co", "m", "http://localhost:8080", true, false),
+      "app.example.com:": hostProps("app.example.com", "", "ssh://localhost:22", false, false),
+    });
+  });
+
+  it("R5-04: shadows by hostname and path, and gives a pair whose ID is taken a hashed one", async () => {
+    // A hostname with ':' still meets another pair's ID. The first pair keeps
+    // it; the next one gets a hash of hostname and path instead of no node.
+    const nodes = await blogHostnames([
+      { hostname: "a.example.com:x", service: "http://localhost:1" },
+      { hostname: "a.example.com", path: "x:", service: "ssh://localhost:22" },
+      { service: "http_status:404" },
+    ]);
+    expect(nodes).toEqual({
+      "a.example.com:x:": hostProps("a.example.com:x", "", "http://localhost:1", false, false),
+      [await pairHash("a.example.com", "x:")]: hostProps(
+        "a.example.com",
+        "x:",
+        "ssh://localhost:22",
+        false,
+        false,
+      ),
+    });
+  });
+
+  it("R5-04: fails the chunk when a crafted rule holds the hashed ID too", async () => {
+    const taken = await pairHash("a.example.com", "x:");
+    const ingress = [
+      { hostname: "sha256", path: taken.slice("sha256:".length), service: "http://localhost:1" },
+      { hostname: "a.example.com:x", service: "http://localhost:2" },
+      { hostname: "a.example.com", path: "x:", service: "ssh://localhost:22" },
+      { service: "http_status:404" },
+    ];
+    await expect(run(tunnelsCollector, withBlogConfig({ ingress }))).rejects.toThrow(RangeError);
+  });
+
+  it("R5-05: hashes the path of an ID over 512 characters instead of dropping the node", async () => {
+    // The review's rule: a 474-character regex made a 526-character ID, the
+    // fall-through node was dropped, and only the token-checked rule remained.
+    const path = `^/debug/(${Array.from({ length: 95 }, (_, i) => `p${i}x`).join("|")})`;
+    expect(path).toHaveLength(474);
+    expect(
+      await blogHostnames([
+        { path, service: "ssh://localhost:22" },
+        { hostname: "app.example.com", service: "http://localhost:8080", originRequest: required },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      [`app.example.com:sha256:${await sha256(path)}`]: hostProps(
+        "app.example.com",
+        path,
+        "ssh://localhost:22",
+        false,
+        true,
+      ),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+    });
+  });
+
+  it("R5-05: keeps a 600-character path-only rule apart from a path that reads like its hash", async () => {
+    const path = `^/${"a".repeat(598)}`;
+    const hashed = `sha256:${await sha256(path)}`;
+    expect(
+      await blogHostnames([
+        { hostname: "app.example.com", path: hashed, service: "http://localhost:1" },
+        { path, service: "ssh://localhost:22" },
+        { hostname: "app.example.com", service: "http://localhost:8080" },
+      ]),
+    ).toEqual({
+      [`app.example.com:${hashed}`]: hostProps(
+        "app.example.com",
+        hashed,
+        "http://localhost:1",
+        false,
+        false,
+      ),
+      [await pairHash("app.example.com", path)]: hostProps(
+        "app.example.com",
+        path,
+        "ssh://localhost:22",
+        false,
+        true,
+      ),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", false, false),
+    });
+  });
+
+  it("R5-05: gives a hostname too long for the contract ID the hashed pair ID", async () => {
+    const hostname = `${"a".repeat(480)}.example.com`;
+    expect(
+      await blogHostnames([
+        { hostname, service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      [await pairHash(hostname, "")]: hostProps(hostname, "", "ssh://localhost:22", false, false),
+    });
+  });
+
+  describe("R5-06: at most 1,000 entry points per tunnel", () => {
+    const pathRules = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ path: `^/p${i}`, service: "http://localhost:8080" }));
+    const hostRules = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        hostname: `h${i}.example.com`,
+        service: "http://localhost:8081",
+      }));
+
+    /** The blog tunnel's hostname node count and its ingress_truncated. */
+    async function blogIngress(ingress: object[]) {
+      const { output } = await run(tunnelsCollector, withBlogConfig({ ingress }));
+      const hostnames = output.nodes.filter(
+        (n) => n.type === "tunnel_hostname" && n.props?.tunnel_id === BLOG,
+      );
+      const routes = output.edges.filter(
+        (e) => e.type === "ROUTES_TO" && e.dst === `tunnel:${BLOG}`,
+      );
+      expect(routes).toHaveLength(hostnames.length);
+      // The other tunnel of the chunk is collected as before.
+      expect(node(output, `tunnel:${LEGACY}`).props?.ingress_truncated).toBe(false);
+      expect(nodeIds(output, "tunnel_hostname")).toContain(legacyHost("wiki.example.com"));
+      return {
+        count: hostnames.length,
+        truncated: node(output, `tunnel:${BLOG}`).props?.ingress_truncated,
+        ids: hostnames.map((n) => n.nativeId.slice(BLOG.length + 1)),
+      };
+    }
+
+    it("R5-06: stops at 1,000 for the review's 96 KB configuration and marks the tunnel", async () => {
+      // Case 1 of the review: 1,000 path-only and 1,000 hostname rules gave 1,001,001 nodes.
+      const ingress = [...pathRules(1000), ...hostRules(1000), { service: "http_status:404" }];
+      expect(JSON.stringify(ingress).length).toBeGreaterThan(95_000);
+      const started = Date.now();
+      const { count, truncated, ids } = await blogIngress(ingress);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(count).toBe(1000);
+      expect(truncated).toBe(true);
+      // Rule order, then hostnames in sorted order: the first path-only rule
+      // reaches all 1,000 hostnames.
+      expect(ids.every((id) => id.endsWith(":^/p0"))).toBe(true);
+    });
+
+    it("R5-06: marks the review's 200 by 200 configuration truncated", async () => {
+      // Case 2 of the review: 40,201 nodes.
+      const ingress = [...pathRules(200), ...hostRules(200), { service: "http_status:404" }];
+      expect(await blogIngress(ingress)).toMatchObject({ count: 1000, truncated: true });
+    });
+
+    it("R5-06: is not truncated at exactly 1,000 entry points, and is at 1,001", async () => {
+      const at = await blogIngress([...hostRules(1000), { service: "http_status:404" }]);
+      expect(at).toMatchObject({ count: 1000, truncated: false });
+      const over = await blogIngress([...hostRules(1001), { service: "http_status:404" }]);
+      expect(over).toMatchObject({ count: 1000, truncated: true });
+    });
+
+    it("R5-06: does not count rules that yield no node, and stops expanding after a catch-all", async () => {
+      // Status-code rules without a hostname, shadowed rules and rules after a
+      // catch-all origin yield nothing, however many there are.
+      const blocked = Array.from({ length: 5000 }, (_, i) => ({
+        path: `^/b${i}`,
+        service: "http_status:403",
+      }));
+      const ingress = [
+        ...hostRules(999),
+        ...blocked,
+        { hostname: "h0.example.com", service: "http://localhost:9" },
+        { service: "http://localhost:8080" },
+        ...pathRules(5000),
+      ];
+      const { count, truncated, ids } = await blogIngress(ingress);
+      // The hostname rules take every path of their hostnames, so the
+      // catch-all origin and the path rules after it reach none of them.
+      expect(count).toBe(999);
+      expect(truncated).toBe(false);
+      expect(ids.every((id) => id.endsWith(".example.com:"))).toBe(true);
     });
   });
 

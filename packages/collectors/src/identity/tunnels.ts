@@ -1,3 +1,4 @@
+import { nodeId, sha256 } from "@virga/graph";
 import {
   chunk,
   GraphBuilder,
@@ -32,7 +33,14 @@ interface CfTunnelConfig {
 }
 
 const TUNNEL_TYPES = ["cfd_tunnel", "warp_connector"];
-const TUNNELS_PER_CHUNK = 25;
+/**
+ * Rules without a hostname are expanded per hostname, so one tunnel's
+ * ingress can describe about a million entry points in 96 KB (review R5-06).
+ * Past this many the tunnel is marked `ingress_truncated`.
+ */
+export const MAX_HOSTNAMES_PER_TUNNEL = 1000;
+// At most 10,000 tunnel_hostname nodes per chunk.
+const TUNNELS_PER_CHUNK = 10;
 const TUNNELS_PER_PAGE = 1000;
 
 function listTunnels(ctx: CollectorContext): Promise<CfTunnel[]> {
@@ -142,12 +150,14 @@ export const tunnelsCollector: Collector<string> = {
       const type = str(tunnel.tun_type);
       // Mesh nodes have no ingress configuration.
       const src = type === "warp_connector" ? null : configSource(tunnel);
-      const tunnelId = g.node("tunnel", id, displayName(tunnel.name), {
+      const truncated =
+        src === "cloudflare" && (await collectIngress(ctx, id, nodeId("tunnel", id), g));
+      g.node("tunnel", id, displayName(tunnel.name), {
         tunnel_type: type,
         status: str(tunnel.status),
         config_src: src,
+        ingress_truncated: truncated,
       });
-      if (src === "cloudflare") await collectIngress(ctx, id, tunnelId, g);
     }
     return g.output();
   },
@@ -180,50 +190,106 @@ function ingressRules(ingress: unknown): IngressRule[] {
 }
 
 /**
+ * Native IDs of one tunnel's hostname nodes: `<tunnel_id>:<hostname>:<path>`.
+ * The tunnel ID keeps two tunnels that serve the same hostname apart, and the
+ * ':' keeps a hostname and a path from combining into another hostname's ID
+ * (review R5-04). An ID over the graph's limit takes `sha256:<hex>` for the
+ * path, which stays whole in props (R5-05). A pair that still cannot have
+ * its ID, because an earlier pair holds it (a hostname may contain ':', a
+ * path may read like a hash) or the hostname alone is too long, gets a hash
+ * of hostname and path instead. A crafted rule that holds that one too fails
+ * the chunk: no rule is dropped without a signal.
+ */
+function hostnameIds(tunnelId: string): (hostname: string, path: string) => Promise<string> {
+  const used = new Set<string>();
+  return async (hostname, path) => {
+    let id = `${tunnelId}:${hostname}:${path}`;
+    if (!fitsId(id)) id = `${tunnelId}:${hostname}:sha256:${await sha256(path)}`;
+    if (used.has(id) || !fitsId(id)) {
+      id = `${tunnelId}:sha256:${await sha256(JSON.stringify([hostname, path]))}`;
+      if (used.has(id) || !fitsId(id)) {
+        throw new RangeError("a tunnel ingress rule has no node ID of its own");
+      }
+    }
+    used.add(id);
+    return id;
+  };
+}
+
+/**
  * One `tunnel_hostname` per rule and hostname it can take a request for.
  * cloudflared takes the first rule that matches the hostname and path, and a
  * rule without a hostname matches every hostname (review R3-02). Such a rule
  * yields a `via_fallthrough` node for every hostname in the ingress, unless
- * it answers with a status code. The ID is `<tunnel_id>:<hostname><path>` for
- * both kinds: for one hostname and path only the first rule applies, so the
- * ID stays unique and does not depend on the rule's position. A rule never
- * applies to a hostname after an earlier rule took that hostname on the same
- * path or on every path (no path); hostnames that only DNS sends to the
- * tunnel stay unknown to the collector.
+ * it answers with a status code. A rule never applies to a hostname after an
+ * earlier rule took that hostname on the same path or on every path (no
+ * path), so each hostname and path has one node whatever the rule's
+ * position. Hostnames that only DNS sends to the tunnel stay unknown to the
+ * collector.
+ *
+ * Returns true when the ingress has more than MAX_HOSTNAMES_PER_TUNNEL entry
+ * points; those past the limit are not emitted (review R5-06). The work is
+ * linear in the number of rules: a rule without a hostname visits only the
+ * hostnames no earlier rule took whole, and a path such a rule took is never
+ * expanded again.
  */
 async function collectIngress(
   ctx: CollectorContext,
   id: string,
   tunnelNode: string,
   g: GraphBuilder,
-): Promise<void> {
+): Promise<boolean> {
   const path = `/accounts/${ctx.accountId}/cfd_tunnel/${id}/configurations`;
   const result = await unlessGone(ctx.api.get<CfTunnelConfig | null>(path));
   const config = isObject(result?.config) ? result.config : {};
   const rules = ingressRules(config.ingress);
-  const hostnames = sortedUnique(rules.map((r) => r.hostname));
-  const taken = new Set<string>();
-  const takenWhole = new Set<string>();
+  const nextId = hostnameIds(id);
+  // Hostnames that no earlier rule took on every path, in sorted order.
+  const open = new Set(sortedUnique(rules.map((r) => r.hostname)));
+  // Paths that a rule without a hostname took for every hostname.
+  const takenPaths = new Set<string>();
+  // Hostname and path pairs that a hostname rule took.
+  const takenPairs = new Set<string>();
+  const pair = (hostname: string, path: string) => JSON.stringify([hostname, path]);
+  let count = 0;
+
+  /** False, and nothing emitted, when the tunnel already has its maximum. */
+  const emit = async (rule: IngressRule, hostname: string): Promise<boolean> => {
+    if (count === MAX_HOSTNAMES_PER_TUNNEL) return false;
+    count++;
+    const nativeId = await nextId(hostname, rule.path);
+    const hostId = g.node("tunnel_hostname", nativeId, displayName(hostname), {
+      hostname,
+      path: rule.path,
+      service: withoutCredentials(rule.service),
+      origin_scheme: originScheme(rule.service),
+      tunnel_id: id,
+      access_required: rule.accessRequired,
+      via_fallthrough: rule.hostname === null,
+    });
+    g.edge("ROUTES_TO", hostId, tunnelNode);
+    return true;
+  };
+
   for (const rule of rules) {
-    const fallthrough = rule.hostname === null;
-    for (const hostname of rule.hostname === null ? hostnames : [rule.hostname]) {
-      // The tunnel ID keeps two tunnels that serve the same hostname apart.
-      const nativeId = `${id}:${hostname}${rule.path}`;
-      if (takenWhole.has(hostname) || taken.has(nativeId)) continue;
-      taken.add(nativeId);
-      if (rule.path === "") takenWhole.add(hostname);
-      if (fallthrough && originScheme(rule.service) === "http_status") continue;
-      if (!fitsId(nativeId)) continue;
-      const hostId = g.node("tunnel_hostname", nativeId, hostname, {
-        hostname,
-        path: rule.path,
-        service: withoutCredentials(rule.service),
-        origin_scheme: originScheme(rule.service),
-        tunnel_id: id,
-        access_required: rule.accessRequired,
-        via_fallthrough: fallthrough,
-      });
-      g.edge("ROUTES_TO", hostId, tunnelNode);
+    if (takenPaths.has(rule.path)) continue;
+    if (rule.hostname !== null) {
+      const key = pair(rule.hostname, rule.path);
+      if (!open.has(rule.hostname) || takenPairs.has(key)) continue;
+      takenPairs.add(key);
+      if (rule.path === "") open.delete(rule.hostname);
+      if (!(await emit(rule, rule.hostname))) return true;
+      continue;
     }
+    if (originScheme(rule.service) !== "http_status") {
+      for (const hostname of open) {
+        if (takenPairs.has(pair(hostname, rule.path))) continue;
+        if (!(await emit(rule, hostname))) return true;
+      }
+    }
+    // A rule without a hostname or path takes every request: none after it applies.
+    if (rule.path === "") break;
+    takenPaths.add(rule.path);
   }
+  return false;
 }

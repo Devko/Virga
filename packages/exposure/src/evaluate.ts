@@ -41,6 +41,8 @@ interface Entry {
   worker: boolean;
   /** A tunnel hostname whose cloudflared requires an Access token (`access_required`). */
   originAccess: boolean;
+  /** The tunnel node of a tunnel hostname whose ingress the collector truncated. */
+  truncatedTunnel: string | null;
 }
 
 type Built = { entry: Entry } | { problem: string } | null;
@@ -97,17 +99,22 @@ export function evaluateExposure(db: SqlRunner): ExposureRow[] {
     };
   });
   const refs = scriptRefs(graph);
+  const undecidable = (problem: string) => new Map([["/", unknown(null, problem)]]);
+  const decide = (entry: Entry): Map<string, Result> => {
+    const label = pathLabel(entry.path);
+    if (entry.truncatedTunnel) {
+      const reason = "the tunnel has more entry points than were collected";
+      return new Map([[label, unknown(entry.truncatedTunnel, reason)]]);
+    }
+    if (gap) return new Map([[label, unknown(null, gap)]]);
+    return evaluateEntry(entry, apps, refs);
+  };
 
   const rows: ExposureRow[] = [];
   for (const node of graph.entries) {
     const built = buildEntry(node, graph);
     if (!built) continue;
-    const results =
-      "problem" in built
-        ? new Map([["/", unknown(null, built.problem)]])
-        : gap
-          ? new Map([[pathLabel(built.entry.path), unknown(null, gap)]])
-          : evaluateEntry(built.entry, apps, refs);
+    const results = "problem" in built ? undecidable(built.problem) : decide(built.entry);
     for (const [pathPrefix, r] of results) {
       rows.push({
         entryId: node.id,
@@ -193,6 +200,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
   let path = ALL_PATHS;
   let approximate = false;
   let originAccess = false;
+  let truncatedTunnel: string | null = null;
 
   switch (node.type) {
     case "worker_route": {
@@ -243,6 +251,12 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       // Per node: a `via_fallthrough` node carries the token check of the rule
       // that takes its requests, and Access decides by host and path alike.
       originAccess = p.access_required === true;
+      // Past its limit the collector leaves out the tunnel's later rules,
+      // which may take requests before this one (review R5-06).
+      const tunnels = new Set(graph.routesTo.get(node.id));
+      const tunnelId = str(p.tunnel_id);
+      if (tunnelId) tunnels.add(`tunnel:${tunnelId}`);
+      truncatedTunnel = [...tunnels].find((t) => graph.truncatedTunnels.has(t)) ?? null;
       break;
     }
     default:
@@ -260,6 +274,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       preview: node.type === "worker_preview_url",
       worker: scripts.size > 0,
       originAccess,
+      truncatedTunnel,
     },
   };
 }

@@ -24,6 +24,34 @@ const projects = `/accounts/${ACCOUNT}/pages/projects`;
 const GIT = "pages_project:this-is-my-project-01";
 const routes = pagesRoutes;
 
+/** The entry for an environment whose env vars the API did not return. */
+const unread = (environment: string) => ({
+  name: null,
+  environment,
+  kind: "unread",
+  looks_secret: null,
+  secret_pattern: null,
+});
+
+/** The entry for a variable that is neither plain text nor secret text. */
+const unknownVar = (environment: string, name: string) => ({
+  name,
+  environment,
+  kind: "unknown",
+  looks_secret: null,
+  secret_pattern: null,
+});
+
+/** plain_text_vars of the Git project when the API returns it like this. */
+async function varsOf(project: object) {
+  const { output } = await run(pagesCollector, {
+    ...routes,
+    [`${projects}/this-is-my-project-01`]: envelope({ ...gitProject, ...project }),
+  });
+  expect(JSON.stringify(output)).not.toContain(FAKE_TOKEN);
+  return node(output, GIT).props?.plain_text_vars;
+}
+
 describe("pages collector", () => {
   it("asks for Pages Metadata Read, not Pages Read, which also reads content", () => {
     expect(pagesCollector.permissions).toEqual(["Pages Metadata Read", "Queues Read"]);
@@ -69,12 +97,13 @@ describe("pages collector", () => {
       preview_deployments: "none",
       plain_text_vars: [],
     });
-    // Direct Upload: no source settings, previews are on by default.
+    // Direct Upload: no source settings, previews are on by default. Its
+    // configs carry no env_vars, so neither environment was inspected.
     expect(node(output, "pages_project:landing").props).toEqual({
       production_branch: "main",
       subdomain: "landing.pages.dev",
       preview_deployments: "all",
-      plain_text_vars: [],
+      plain_text_vars: [unread("preview"), unread("production")],
     });
   });
 
@@ -175,6 +204,61 @@ describe("pages collector", () => {
     for (const value of [FAKE_TOKEN, SECRET_VALUE, "hello world"]) {
       expect(json).not.toContain(value);
     }
+  });
+
+  it("R5-07: records an environment whose env vars the API did not return as unread", async () => {
+    // The review's scan 2: the project came back without deployment_configs,
+    // or with env_vars null, and CF-024 resolved its finding.
+    const token = { API_KEY: { type: "plain_text", value: FAKE_TOKEN } };
+    const both = [unread("preview"), unread("production")];
+    const { deployment_configs: _, ...withoutConfigs } = gitProject;
+    const { output } = await run(pagesCollector, {
+      ...routes,
+      [`${projects}/this-is-my-project-01`]: envelope(withoutConfigs),
+    });
+    expect(node(output, GIT).props?.plain_text_vars).toEqual(both);
+    for (const deployment_configs of [null, "configs", [], {}]) {
+      expect(await varsOf({ deployment_configs }), JSON.stringify(deployment_configs)).toEqual(
+        both,
+      );
+    }
+    for (const preview of [undefined, null, {}, { env_vars: null }, { env_vars: "x" }]) {
+      const vars = await varsOf({
+        deployment_configs: { preview, production: { env_vars: token } },
+      });
+      expect(vars, JSON.stringify(preview)).toEqual([
+        unread("preview"),
+        {
+          name: "API_KEY",
+          environment: "production",
+          kind: "plain_text",
+          looks_secret: true,
+          secret_pattern: "cfat_",
+        },
+      ]);
+    }
+    // Present and empty is inspected: no variables.
+    const empty = { preview: { env_vars: {} }, production: { env_vars: {} } };
+    expect(await varsOf({ deployment_configs: empty })).toEqual([]);
+  });
+
+  it("R5-07: records a variable of another or no type as uninspected, without its value", async () => {
+    // The review's third variant: the variable came back without `type`.
+    const env_vars = {
+      API_KEY: { value: FAKE_TOKEN },
+      OTHER: { type: "json", value: FAKE_TOKEN },
+      BARE: FAKE_TOKEN,
+      TOKEN: { type: "secret_text", value: FAKE_TOKEN },
+      GONE: null,
+    };
+    const vars = await varsOf({
+      deployment_configs: { preview: { env_vars: {} }, production: { env_vars } },
+    });
+    expect(vars).toEqual([
+      unknownVar("production", "API_KEY"),
+      unknownVar("production", "BARE"),
+      unknownVar("production", "OTHER"),
+    ]);
   });
 
   it("skips projects deleted between listing and reading", async () => {
