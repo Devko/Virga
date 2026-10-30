@@ -70,7 +70,16 @@ function tunnelApp(
   g.app(id, [host(`${id}.example.com`)], [g.policy(id, decision, include, require)]);
 }
 
-/** The row `tunnelApp` yields for `<id>`. */
+/**
+ * Tunnel hostname `<id>.example.com` whose cloudflared requires an Access
+ * token, behind app `<id>` with the given policies in order.
+ */
+function requiredApp(g: Graph, id: string, policies: string[]) {
+  g.tunnelHostname(`${id}.example.com`, "", "ssh://localhost:22", { accessRequired: true });
+  g.app(id, [host(`${id}.example.com`)], policies);
+}
+
+/** The row `tunnelApp` or `requiredApp` yields for `<id>`. */
 const tunnelRow = (
   id: string,
   decision: string,
@@ -521,6 +530,161 @@ const cases: Case[] = [
       [TH("any.example.com"), "/", "public", 2, POLICY("any")],
       [TH("both.example.com"), "/", "public", 2, POLICY("both")],
       [TH("office.example.com"), "/", "access", 1, TH("office.example.com")],
+    ],
+  },
+  {
+    name: "R4-01: a narrower Bypass next to Service Auth for every address leaves a tunnel hostname that requires a token public",
+    build: (g) => {
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { accessRequired: true });
+      g.tunnelHostname("web.example.com", "", "http://localhost:8080");
+      g.app(
+        "a",
+        [host("ssh.example.com"), host("web.example.com")],
+        [g.policy("office", "bypass", [OFFICE]), g.policy("sa", "non_identity", [ANY_V4])],
+      );
+    },
+    expect: [
+      // Requests from outside the office match Service Auth and get the token.
+      [TH("ssh.example.com"), "/", "public", 2, POLICY("sa")],
+      // Without a token check, the first public policy is named.
+      [TH("web.example.com"), "/", "public", 2, POLICY("office")],
+    ],
+  },
+  {
+    name: "R4-01: Service Auth for every address issues the token next to any Bypass, whatever the order",
+    build: (g) => {
+      requiredApp(g, "sa-first", [
+        g.policy("sa-first", "non_identity", [ANY_V4]),
+        g.policy("all-1", "bypass", [EVERYONE]),
+      ]);
+      requiredApp(g, "sa-last", [
+        g.policy("all-2", "bypass", [EVERYONE]),
+        g.policy("sa-last", "non_identity", [ANY_V6]),
+      ]);
+      g.group("anywhere", [ANY_V4]);
+      requiredApp(g, "sa-group", [
+        g.policy("office-3", "bypass", [OFFICE]),
+        g.policy("sa-group", "non_identity", [{ kind: "group", value: "anywhere" }]),
+      ]);
+    },
+    expect: ["sa-first", "sa-last", "sa-group"].map((id) => tunnelRow(id, "public", 2, POLICY(id))),
+  },
+  {
+    name: "R4-01: a Bypass next to a policy that may issue the token undecided leaves a tunnel hostname that requires a token unknown",
+    build: (g) => {
+      requiredApp(g, "everyone", [
+        g.policy("office-1", "bypass", [OFFICE]),
+        g.policy("everyone", "non_identity", [EVERYONE]),
+      ]);
+      requiredApp(g, "geo", [
+        g.policy("office-2", "bypass", [OFFICE]),
+        g.policy("geo", "non_identity", [PT]),
+      ]);
+      requiredApp(g, "group", [
+        g.policy("all-3", "bypass", [EVERYONE]),
+        g.policy("group", "non_identity", [{ kind: "group", value: "deleted" }]),
+      ]);
+      requiredApp(g, "odd", [
+        g.policy("office-4", "bypass", [OFFICE]),
+        g.policy("odd", "isolate", [EVERYONE]),
+      ]);
+      // An ALLOWS edge whose policy is missing from the graph.
+      requiredApp(g, "gone", [g.policy("office-5", "bypass", [OFFICE]), POLICY("gone")]);
+    },
+    expect: ["everyone", "geo", "group", "odd", "gone"].map((id) =>
+      tunnelRow(id, "unknown", 0, POLICY(id)),
+    ),
+  },
+  {
+    name: "R4-01: Service Auth for every address decides over one that cannot be decided, wherever it sits",
+    build: (g) => {
+      requiredApp(g, "ssh", [
+        g.policy("office", "bypass", [OFFICE]),
+        g.policy("svc-everyone", "non_identity", [EVERYONE]),
+        g.policy("svc-any", "non_identity", [ANY_V4]),
+      ]);
+    },
+    expect: [tunnelRow("ssh", "public", 2, POLICY("svc-any"))],
+  },
+  {
+    name: "R4-01: policies that give no token without a login leave a tunnel hostname that requires a token access",
+    build: (g) => {
+      requiredApp(g, "ssh", [
+        g.policy("office", "bypass", [OFFICE]),
+        g.policy("staff-bypass", "bypass", [EMAIL]),
+        g.policy("ci", "non_identity", [TOKEN]),
+        g.policy("staff", "allow", [EMAIL]),
+        g.policy("block", "deny", [EVERYONE]),
+      ]);
+    },
+    expect: [tunnelRow("ssh", "access", 1, TH("ssh.example.com"))],
+  },
+  {
+    name: "R4-01: of Access applications tied on a destination, the one whose token exposes most decides a tunnel hostname that requires a token",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", required);
+      g.tunnelHostname("db.example.com", "", "tcp://localhost:5432", required);
+      g.tunnelHostname("app.example.org", "", "http://localhost:8080", required);
+      // Same destination: a1 may issue the token, a2 does.
+      g.app(
+        "a1",
+        [host("ssh.example.com")],
+        [g.policy("a1-office", "bypass", [OFFICE]), g.policy("a1-svc", "non_identity", [EVERYONE])],
+      );
+      g.app(
+        "a2",
+        [host("ssh.example.com")],
+        [g.policy("a2-office", "bypass", [OFFICE]), g.policy("a2-svc", "non_identity", [ANY_V4])],
+      );
+      // Same destination: b1 gives no token, b2 may.
+      bypassApp(g, "b1", [host("db.example.com")]);
+      g.app(
+        "b2",
+        [host("db.example.com")],
+        [g.policy("b2-office", "bypass", [OFFICE]), g.policy("b2-svc", "non_identity", [EVERYONE])],
+      );
+      // On /admin, host precedence selects `exact` and path precedence `wild`.
+      bypassApp(g, "exact", [host("app.example.org")]);
+      g.app(
+        "wild",
+        [host("*.example.org", "/admin")],
+        [
+          g.policy("wild-office", "bypass", [OFFICE]),
+          g.policy("wild-svc", "non_identity", [ANY_V4]),
+        ],
+      );
+    },
+    expect: [
+      [TH("app.example.org"), "/", "access", 1, TH("app.example.org")],
+      [TH("app.example.org"), "/admin", "public", 2, POLICY("wild-svc")],
+      [TH("db.example.com"), "/", "unknown", 0, POLICY("b2-svc")],
+      [TH("ssh.example.com"), "/", "public", 2, POLICY("a2-svc")],
+    ],
+  },
+  {
+    name: "R4-01: a public override path keeps the token its app gives without a login on a tunnel hostname that requires one",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("web.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("ops.example.com", "", "http://localhost:8080", required);
+      g.app(
+        "web",
+        [host("web.example.com", "", [publicPath("/health")])],
+        [g.policy("office", "bypass", [OFFICE]), g.policy("sa", "non_identity", [ANY_V4])],
+      );
+      g.app(
+        "ops",
+        [host("ops.example.com", "", [publicPath("/health")])],
+        [g.policy("staff", "allow", [EMAIL]), g.policy("svc", "non_identity", [EVERYONE])],
+      );
+    },
+    expect: [
+      // Access skips /health, but a token the app gives on its other paths passes cloudflared.
+      [TH("ops.example.com"), "/", "unknown", 0, POLICY("svc")],
+      [TH("ops.example.com"), "/health", "unknown", 0, POLICY("svc")],
+      [TH("web.example.com"), "/", "public", 2, POLICY("sa")],
+      [TH("web.example.com"), "/health", "public", 2, POLICY("sa")],
     ],
   },
   {
