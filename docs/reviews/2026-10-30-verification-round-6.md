@@ -2,7 +2,14 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 4 verification](2026-10-30-verification-round-4.md) (R4-01 to R4-07, fixed in round 5) and the [round 5 verification](2026-10-30-verification-round-5.md) (R5-01 to R5-08, fixed in round 6) fixed? (2) review of the round 5 and round 6 changes, at commit 3617367
-- Status: round 8 of the [work packages](../team/work-packages.md) fixed R6-01 (`deploy-build`), R6-03 and R6-04 (`supply-chain-2`) and the compiler half of R6-02 (`rules-5`); not yet verified by a review. Open: the run-time half of R6-02, R6-05, R6-06, R6-07
+- Status: round 8 of the [work packages](../team/work-packages.md) fixed R6-01 (`deploy-build`), R6-02 (compiler half `rules-5`, run-time half the local integrator), R6-03 and R6-04 (`supply-chain-2`); not yet verified by a review. Open: R6-05, R6-06, R6-07
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R6-01 | `deploy-build` | 81c0a58, d357842, ebfc93c, a32551b, 97d2650, ba8e6d3, e9e043a | `scripts/test/deploy.test.ts` (a build that rewrites the config fails the deploy), `run.test.ts`, `wrangler.test.ts`, `config.test.ts`, `vite-config.test.ts` (R6-01 tests) |
+| R6-02 | `rules-5` (compiler), integrator (run time) | d58acd0, 334ed3c; 45b6c73 | `packages/rules/test/params.test.ts`, `compile.test.ts`, `compile-tail.test.ts` (`[x--];`, `[a;b]`, a tail); `apps/core/test/rules-runtime.test.ts` (two-statement rules on the Durable Object's SqlRunner end `error` and change nothing, in every order); `packages/rules/test/evaluate.test.ts` and `packages/graph/test/node.test.ts` (R6-02). [Decision 0006](../decisions/0006-read-only-rule-runs.md) |
+| R6-03 | `supply-chain-2` | 08d7bbf, 2573593 | `scripts/test/check-release-age.test.ts` (R6-03: flow-style entries, comments, other indents, integrity against the registry) |
+| R6-04 | `supply-chain-2` | ae4df81, 949b9d6 | `scripts/test/check-release-age.test.ts` (R6-04: a young pnpm in `packageManager`; every installing CI job needs the age check) |
 
 ## Summary
 
