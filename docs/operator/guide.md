@@ -267,7 +267,7 @@ The broker's allowlist contains none of the data endpoints, so Virga never runs 
 
 **Workers version detail: verify.** The `workers` collector reads each deployed version for its bindings (`GET /accounts/{id}/workers/scripts/{name}/versions/{version_id}`). That endpoint's page lists Workers Content Read-Only, Workers Scripts Read and Workers Tail Read, but not Workers Metadata Read-Only. If a scan reports `no_permission` for `workers` with a token that has Metadata Read-Only, this is the cause. Do not add a Content group to an inventory token to work around it: it reads code.
 
-**Pages.** If Pages Metadata Read turns out not to work, Pages Read does, with a write check warning: it also reads content.
+**Pages.** If Pages Metadata Read turns out not to work, Pages Read does, with a write check warning: it also reads content. **verify (S-05):** that the project GET (`GET /accounts/{id}/pages/projects/{name}`) returns the values of `plain_text` env vars with Pages Metadata Read. Without them, CF-024 returns undecided rows for every project with plain-text vars.
 
 What a missing group costs, by rule (from the `requires` of each rule):
 
@@ -281,7 +281,7 @@ What a missing group costs, by rule (from the `requires` of each rule):
 | CF-010, CF-011 | `access`, `workers`, `pages`, `storage`, `tunnels` |
 | CF-021 | `storage`, `access`, exposure |
 | CF-022 | `pages`, `access`, exposure |
-| CF-024 | `workers` |
+| CF-024 | `workers`, `pages` ([decision 0004](../decisions/0004-cf-024-scope.md)) |
 
 Exposure needs `access`. A rule whose classes are not all complete is `not evaluated`; it never passes and never resolves a finding.
 

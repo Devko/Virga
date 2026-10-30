@@ -143,7 +143,7 @@ Not a product phase. It settles the open decisions and tests the assumptions tha
 | CF-011 | 1 | Access, Workers, tunnels | Private destinations arrive in phase 3 |
 | CF-021 | 1 | R2, Access | |
 | CF-022 | 1 | Pages, Access | |
-| CF-024 | 1 | Workers settings | Built-in patterns for known token prefixes; gitleaks in phase 2 |
+| CF-024 | 1 | Workers and Pages settings | Built-in patterns for known token prefixes; gitleaks in phase 2. One rule for both ([0004](decisions/0004-cf-024-scope.md)) |
 | CF-001 | 2 | Workers, packages, vulns, storage, exposure | Flagship |
 | CF-005 | 2 | Containers, images, vulns, exposure | Needs the Worker → Durable Object → container path |
 | CF-006 | 2 | Workers code, exposure, storage | "Recognizable authentication" and the MCP signature need code |
