@@ -10,5 +10,3 @@ onlyBuiltDependencies:
 
 # Only resolve versions released at least 14 days ago (supply chain, see CONTRIBUTING).
 minimumReleaseAge: 20160
-ignoredBuiltDependencies:
-  - core-js-pure
