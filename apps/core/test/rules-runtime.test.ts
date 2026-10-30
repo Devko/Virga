@@ -232,6 +232,49 @@ describe("a run-time read is one statement (R8 hardening, R6-02)", () => {
   });
 });
 
+describe("guard state a drop cannot keep (R8 hardening, R6-02)", () => {
+  /** The statement that created `name`, as sqlite_schema holds it. */
+  const createSql = (db: SqlRunner, name: string) =>
+    db.query<{ sql: string }>("SELECT sql FROM sqlite_schema WHERE name = ?", name)[0]?.sql ?? "";
+
+  it("R8 hardening: drop and re-create: the guard alone sees exposure emptied by a drop and an identical create", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const create = createSql(db, "exposure");
+      const before = state(db);
+      // Separate statements, as a tail would run them; the last one reads.
+      const run = () =>
+        guardRead(db, () => {
+          durable.storage.sql.exec("DROP TABLE exposure");
+          durable.storage.sql.exec(create);
+          const cursor = durable.storage.sql.exec(NO_HIT);
+          return { rows: cursor.toArray() as Row[], rowsWritten: cursor.rowsWritten };
+        });
+      expect(run).toThrow(ReadOnlyError);
+      expect(run).toThrow(/emptied exposure/);
+      expect(state(db)).toEqual(before);
+    });
+  });
+
+  it("R8 hardening: drop and re-create: the guard alone sees findings emptied with their links", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const objects = ["findings", "finding_nodes", "findings_rule"].map((n) => createSql(db, n));
+      const before = state(db);
+      expect(() =>
+        guardRead(db, () => {
+          durable.storage.sql.exec("DROP TABLE findings; DROP TABLE finding_nodes");
+          for (const sql of objects) durable.storage.sql.exec(sql);
+          return { rows: [], rowsWritten: 0 };
+        }),
+      ).toThrow(/emptied finding_nodes, findings/);
+      expect(state(db)).toEqual(before);
+    });
+  });
+});
+
 /**
  * The platform facts decision 0006 relies on. If a workerd upgrade changes
  * one, re-check the guard in packages/graph/src/sql.ts.
@@ -265,6 +308,31 @@ describe("Durable Object SQL facts behind decision 0006", () => {
         }),
       ).toThrow("rollback");
       expect(read()).toEqual({ v: 1 });
+    });
+  });
+
+  it("does not count a drop in total_changes(), and an identical create keeps the root page and the schema text", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const { sql } = durable.storage;
+      const read = () => ({
+        changes: sql.exec("SELECT total_changes() AS n").one().n,
+        schema: sql
+          .exec("SELECT type, name, rootpage, sql FROM sqlite_schema ORDER BY type, name")
+          .toArray(),
+        rows: sql.exec("SELECT count(*) AS n FROM exposure").one().n,
+      });
+      const create = sql.exec("SELECT sql FROM sqlite_schema WHERE name = 'exposure'").one().sql;
+      const before = read();
+      expect(() =>
+        durable.storage.transactionSync(() => {
+          sql.exec(`DROP TABLE exposure; ${create}`);
+          expect(read()).toEqual({ ...before, rows: 0 });
+          throw new Error("rollback");
+        }),
+      ).toThrow("rollback");
+      expect(read()).toEqual(before);
     });
   });
 });

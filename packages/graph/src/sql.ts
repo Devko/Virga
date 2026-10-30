@@ -122,20 +122,49 @@ const SETTINGS = `json_object(
   'case_sensitive_like', NOT ('a' LIKE 'A'))`;
 
 /**
+ * Tables whose rows a read must keep: all but the platform's `_cf_` tables,
+ * which cannot be read, and SQLite's own, except sqlite_sequence.
+ */
+const TABLES = `SELECT name FROM sqlite_schema WHERE type = 'table'
+  AND substr(name, 1, 4) <> '_cf_'
+  AND (substr(name, 1, 7) <> 'sqlite_' OR name = 'sqlite_sequence')
+  ORDER BY name`;
+
+/**
  * What a read must leave as it was. total_changes() counts the rows of every
  * INSERT, UPDATE and DELETE on the connection, in any position of a query
  * and inside triggers; schema changes do not count there, so the schema is
  * compared as text.
+ *
+ * Neither sees a table dropped and created again by the same statement: the
+ * drop is not counted, and the text, root page and all stay the same
+ * (workerd 1.20261012.1). The table is empty afterwards, and filling it
+ * again counts, so the guard also compares which tables hold rows.
  */
 const STATE = `SELECT total_changes() AS changes,
   (SELECT group_concat(type || ' ' || name || ' ' || ifnull(sql, ''), char(10))
    FROM (SELECT type, name, sql FROM sqlite_schema ORDER BY type, name)) AS schema,
+  (SELECT json_group_array(name) FROM (${TABLES})) AS tables,
   ${SETTINGS} AS settings`;
 
 interface State extends Row {
   changes: number;
   schema: string | null;
+  tables: string;
   settings: string;
+}
+
+/**
+ * The tables of `names` that hold a row, in one statement with a column per
+ * table: Durable Object SQL refuses a UNION ALL of 16 terms.
+ */
+function filled(db: Pick<SqlRunner, "query">, names: readonly string[]): string[] {
+  if (names.length === 0) return [];
+  const columns = names.map(
+    (name, i) => `EXISTS (SELECT 1 FROM "${name.replaceAll('"', '""')}") AS t${i}`,
+  );
+  const row = db.query(`SELECT ${columns.join(", ")}`)[0] ?? {};
+  return names.filter((_, i) => row[`t${i}`] === 1);
 }
 
 /** Sets back every setting that differs from `before`, and returns their names. */
@@ -161,6 +190,7 @@ export function guardRead(
 ): Row[] {
   return db.transaction(() => {
     const before = db.query<State>(STATE)[0] as State;
+    const held = filled(db, JSON.parse(before.tables) as string[]);
     let executed: Executed;
     try {
       executed = exec();
@@ -171,14 +201,22 @@ export function guardRead(
     }
     const settings = restoreSettings(db, before);
     const after = db.query<State>(STATE)[0] as State;
+    const schemaChanged = after.schema !== before.schema;
     const changed = [
       ...(executed.rowsWritten > 0 || after.changes !== before.changes ? ["rows"] : []),
-      ...(after.schema !== before.schema ? ["the schema"] : []),
+      ...(schemaChanged ? ["the schema"] : []),
       ...settings.map((name) => `the setting ${name}`),
     ];
-    if (changed.length > 0) {
+    // With the schema as it was, every table of `held` can still be read.
+    const kept = schemaChanged ? held : filled(db, held);
+    const emptied = held.filter((name) => !kept.includes(name));
+    const what = [
+      ...(changed.length > 0 ? [`changed ${changed.join(", ")}`] : []),
+      ...(emptied.length > 0 ? [`emptied ${emptied.join(", ")}`] : []),
+    ];
+    if (what.length > 0) {
       throw new ReadOnlyError(
-        `a read-only query changed ${changed.join(", ")}; the change was rolled back`,
+        `a read-only query ${what.join(" and ")}; the change was rolled back`,
       );
     }
     return executed.rows;

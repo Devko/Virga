@@ -165,6 +165,34 @@ describe("SqlRunner.queryReadOnly (R6-02)", () => {
     expect(tables()).toEqual([{ name: "meta" }, { name: "sqlite_autoindex_meta_1" }]);
   });
 
+  describe("R8 hardening: drop and re-create", () => {
+    const createSql = (name: string) =>
+      String(db.query("SELECT sql FROM sqlite_schema WHERE name = ?", name)[0]?.sql);
+    const dropAndCreate = (name: string, create: string) => () =>
+      guardRead(db, () => {
+        db.run(`DROP TABLE ${name}`);
+        db.run(create);
+        return { rows: [{ ok: 1 }], rowsWritten: 0 };
+      });
+
+    it("sees a table emptied by a drop and an identical create", () => {
+      db.run("INSERT INTO meta VALUES ('current_scan', 's1')");
+      expect(dropAndCreate("meta", createSql("meta"))).toThrow(/^a read-only query emptied meta;/);
+      expect(db.query("SELECT * FROM meta")).toEqual([{ key: "current_scan", value: "s1" }]);
+    });
+
+    it("sees sqlite_sequence emptied by the drop of an empty AUTOINCREMENT table", () => {
+      db.script(`CREATE TABLE log (seq INTEGER PRIMARY KEY AUTOINCREMENT, x);
+        INSERT INTO log (x) VALUES (1); DELETE FROM log`);
+      expect(dropAndCreate("log", createSql("log"))).toThrow(/emptied sqlite_sequence/);
+      expect(db.query("SELECT name, seq FROM sqlite_sequence")).toEqual([{ name: "log", seq: 1 }]);
+    });
+
+    it("does not see it for a table without rows, which loses nothing", () => {
+      expect(dropAndCreate("meta", createSql("meta"))()).toEqual([{ ok: 1 }]);
+    });
+  });
+
   it("counts rows the runtime reports for the last statement", () => {
     expect(() => guardRead(db, () => ({ rows: [], rowsWritten: 1 }))).toThrow(ReadOnlyError);
   });
