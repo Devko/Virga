@@ -76,7 +76,14 @@ Fingerprints, node IDs, evidence and insight IDs hold text from the scanned acco
 
 A consumer treats the values at these paths, where present, as data written by whoever controls the account: never as markup, links or instructions.
 
-The values stay JSON strings. On top of JSON's own escaping (C0 controls, quotes, lone surrogates), the export writes `&`, `<`, `>`, DEL and C1 controls, the soft hyphen, and the invisible formatting, direction and separator characters (U+061C, U+180E, U+200B to U+200F, U+2028 to U+202E, U+2060 to U+206F, U+FEFF, U+FFF9 to U+FFFB) as `\u` escapes. They occur only inside strings, so every value parses back unchanged, while the file itself holds no markup and nothing that reorders or hides text in an editor or terminal. A line feed appears only between NDJSON records.
+The values stay JSON strings. On top of JSON's own escaping (C0 controls, `"` and `\`, lone surrogates), the export writes exactly these characters as `\u` escapes, a character above U+FFFF as its surrogate pair (`EXPORT_ESCAPED` in `ocsf.ts`):
+
+- `&`, `<` and `>`;
+- DEL and the C1 controls, U+007F to U+009F;
+- the line and paragraph separators, U+2028 and U+2029;
+- every format character (general category Cf) and every default-ignorable code point (property Default_Ignorable_Code_Point) of Unicode 17: U+00AD, U+034F, U+0600 to U+0605, U+061C, U+06DD, U+070F, U+0890 to U+0891, U+08E2, U+115F to U+1160, U+17B4 to U+17B5, U+180B to U+180F, U+200B to U+200F, U+202A to U+202E, U+2060 to U+206F, U+3164, U+FE00 to U+FE0F, U+FEFF, U+FFA0, U+FFF0 to U+FFFB, U+110BD, U+110CD, U+13430 to U+1343F, U+1BCA0 to U+1BCA3, U+1D173 to U+1D17A, and U+E0000 to U+E0FFF. These are the soft hyphen, the combining grapheme joiner, the Hangul fillers, the zero-width, joining and bidi controls, the variation selectors, the tags, and the other characters that a viewer draws as nothing or that change how the text around them is ordered or joined.
+
+They occur only inside strings, so every value parses back unchanged. A test sweeps every code point: the export escapes this set and nothing else outside ASCII, and the set holds every Cf and default-ignorable character of the runtime's Unicode tables, so newer tables fail the test until the list grows. The file therefore holds no markup and none of these characters raw. Everything else stays raw: spaces other than U+0020 (such as U+00A0, U+2000 to U+200A, U+202F, U+205F, U+3000), which show as space, and characters that look like others, so a value can still look like a different one. A line feed appears only between NDJSON records.
 
 ## Not yet
 
