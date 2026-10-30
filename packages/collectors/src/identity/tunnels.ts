@@ -184,17 +184,23 @@ function ingressRules(ingress: unknown): IngressRule[] {
  * Native IDs of one tunnel's hostname nodes: `<tunnel_id>:<hostname>:<path>`.
  * The tunnel ID keeps two tunnels that serve the same hostname apart, and the
  * ':' keeps a hostname and a path from combining into another hostname's ID
- * (review R5-04). A hostname may still hold a ':' itself, so a pair whose ID
- * an earlier pair holds gets a hash of hostname and path instead; a crafted
- * rule that holds that one too fails the chunk rather than hide a node.
+ * (review R5-04). An ID over the graph's limit takes `sha256:<hex>` for the
+ * path, which stays whole in props (R5-05). A pair that still cannot have
+ * its ID, because an earlier pair holds it (a hostname may contain ':', a
+ * path may read like a hash) or the hostname alone is too long, gets a hash
+ * of hostname and path instead. A crafted rule that holds that one too fails
+ * the chunk: no rule is dropped without a signal.
  */
 function hostnameIds(tunnelId: string): (hostname: string, path: string) => Promise<string> {
   const used = new Set<string>();
   return async (hostname, path) => {
     let id = `${tunnelId}:${hostname}:${path}`;
-    if (used.has(id)) {
+    if (!fitsId(id)) id = `${tunnelId}:${hostname}:sha256:${await sha256(path)}`;
+    if (used.has(id) || !fitsId(id)) {
       id = `${tunnelId}:sha256:${await sha256(JSON.stringify([hostname, path]))}`;
-      if (used.has(id)) throw new RangeError("two tunnel ingress rules share a node ID");
+      if (used.has(id) || !fitsId(id)) {
+        throw new RangeError("a tunnel ingress rule has no node ID of its own");
+      }
     }
     used.add(id);
     return id;
@@ -233,8 +239,7 @@ async function collectIngress(
 
   const emit = async (rule: IngressRule, hostname: string) => {
     const nativeId = await nextId(hostname, rule.path);
-    if (!fitsId(nativeId)) return;
-    const hostId = g.node("tunnel_hostname", nativeId, hostname, {
+    const hostId = g.node("tunnel_hostname", nativeId, displayName(hostname), {
       hostname,
       path: rule.path,
       service: withoutCredentials(rule.service),

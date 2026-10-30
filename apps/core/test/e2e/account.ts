@@ -122,6 +122,12 @@ const TUNNEL_EDGE = "958098ee-467d-4161-a056-47df6b3dd0d6";
 const TUNNEL_TEAM = "4c7d2b1e-8a3f-4e6d-9b5c-2f1a0e9d8c7b";
 const TUNNEL_DEBUG = "a1e5c9d3-7b2f-4a8e-b6d0-3c9f1e7a5b2d";
 const TUNNEL_OPS = "e8b2f6a4-1d9c-4e3b-a7f5-9d2c6b0e4a1f";
+const TUNNEL_LAB = "b3d7f1a5-9c2e-4b6d-8f0a-5e1c7a3b9d2f";
+
+/** R5-05: a path regex that makes its node ID longer than 512 characters. */
+export const LONG_PATH = `^/debug/(${Array.from({ length: 95 }, (_, i) => `p${i}x`).join("|")})`;
+/** Hex SHA-256 of LONG_PATH, the path part of that node's ID; scan.test.ts checks it. */
+export const LONG_PATH_SHA256 = "995d65c317155455d894ec05327bc8d4eb8e91efedf35a070b8471443bd76332";
 
 /** What tests may change between scans. */
 export interface AccountState {
@@ -624,6 +630,24 @@ const TUNNEL_CONFIGS: Record<string, { name: string; config: object }> = {
       ],
     },
   },
+  // R5-05: a node ID over 512 characters was dropped without a signal, which
+  // left only the token-checked hostname rule.
+  [TUNNEL_LAB]: {
+    name: "lab",
+    config: {
+      ingress: [
+        // CF-004 seeded on lab.example.com.
+        { path: LONG_PATH, service: "ssh://localhost:22" },
+        // CF-004 clean: the token check covers the rest of the hostname.
+        {
+          hostname: "lab.example.com",
+          service: "http://localhost:5000",
+          originRequest: originAccess,
+        },
+        { service: "http_status:404" },
+      ],
+    },
+  },
 };
 
 const TUNNELS = Object.entries(TUNNEL_CONFIGS).map(([id, { name }]) => ({
@@ -906,6 +930,12 @@ export const SEEDED: SeededCase[] = [
     severity: "high",
   },
   {
+    rule: "CF-004",
+    case: "R5-05: path-only SSH rule whose node ID is over 512 characters",
+    fingerprint: `CF-004:${tunnelHostname(TUNNEL_LAB, "lab.example.com", `sha256:${LONG_PATH_SHA256}`)}`,
+    severity: "critical",
+  },
+  {
     rule: "CF-007",
     case: "unproxied A record to the address of a proxied record",
     fingerprint: `CF-007:dns_record:${REC_ORIGIN}`,
@@ -999,6 +1029,11 @@ export const CLEAN: CleanCase[] = [
     rule: "CF-004",
     case: "R3-02: hostname rule that requires an Access token on every path, before a catch-all origin",
     subject: tunnelHostname(TUNNEL_OPS, "vault.example.com"),
+  },
+  {
+    rule: "CF-004",
+    case: "R5-05: hostname rule that requires an Access token next to a long path-only rule",
+    subject: tunnelHostname(TUNNEL_LAB, "lab.example.com"),
   },
   {
     rule: "CF-007",
@@ -1167,6 +1202,16 @@ export const EXPOSURE: ExposureExpectation[] = [
     case: "R3-02: a hostname rule for every path keeps the catch-all away",
     entry: tunnelHostname(TUNNEL_OPS, "vault.example.com"),
     rows: [originRow(tunnelHostname(TUNNEL_OPS, "vault.example.com"))],
+  },
+  {
+    case: "R5-05: a path-only rule with a long regex is public on every path",
+    entry: tunnelHostname(TUNNEL_LAB, "lab.example.com", `sha256:${LONG_PATH_SHA256}`),
+    rows: [row("public", null)],
+  },
+  {
+    case: "R5-05: the hostname rule next to it keeps its own token check",
+    entry: tunnelHostname(TUNNEL_LAB, "lab.example.com"),
+    rows: [originRow(tunnelHostname(TUNNEL_LAB, "lab.example.com"))],
   },
   {
     case: "enabled r2.dev domain",

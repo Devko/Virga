@@ -4,6 +4,7 @@ import { createReader } from "@virga/cf-api";
 import { fixtureTransport } from "@virga/cf-api/testing";
 import { COLLECTORS, RESOURCE_CLASSES } from "@virga/collectors";
 import { evaluateExposure } from "@virga/exposure";
+import { sha256 } from "@virga/graph";
 import { evaluateRules, RULES } from "@virga/rules";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AccountGraph } from "../../src/account-graph.ts";
@@ -18,6 +19,8 @@ import {
   EXPOSURE,
   fakeAccount,
   initialState,
+  LONG_PATH,
+  LONG_PATH_SHA256,
   NOW,
   R2_DEV_HOST,
   type Routes,
@@ -245,6 +248,8 @@ describe("first scan of the seeded account", () => {
       "git.example.com",
       "kb.example.com",
       "kb.example.com",
+      "lab.example.com",
+      "lab.example.com",
       "ops.example.com",
       "ops.example.com",
       "ssh",
@@ -252,7 +257,21 @@ describe("first scan of the seeded account", () => {
       "vault.example.com",
       "wiki.example.com",
     ]);
-    for (const r of rows) expect(r.id).toBe(tunnelHostname(r.tunnel, r.hostname, r.path));
+    for (const r of rows) {
+      const id = tunnelHostname(r.tunnel, r.hostname, r.path);
+      const long = id.length - "tunnel_hostname:".length > 512;
+      const path = long ? `sha256:${await sha256(r.path)}` : r.path;
+      expect(r.id).toBe(tunnelHostname(r.tunnel, r.hostname, path));
+    }
+  });
+
+  it("R5-05: keeps a path-only rule whose node ID is over 512 characters", async () => {
+    expect(await sha256(LONG_PATH)).toBe(LONG_PATH_SHA256);
+    const [row] = await sql<{ path: string }>(
+      stub,
+      "SELECT props ->> '$.path' AS path FROM nodes WHERE native_id LIKE '%:sha256:%'",
+    );
+    expect(row?.path).toBe(LONG_PATH);
   });
 
   it("R3-02: emits an entry point per hostname for ingress rules without a hostname", async () => {
@@ -268,6 +287,7 @@ describe("first scan of the seeded account", () => {
     expect(rows.filter((r) => r.via_fallthrough === 1)).toEqual([
       { entry: "dash.example.com^/debug", via_fallthrough: 1, access_required: 0 },
       { entry: "kb.example.com^/debug", via_fallthrough: 1, access_required: 0 },
+      { entry: `lab.example.com${LONG_PATH}`, via_fallthrough: 1, access_required: 0 },
       { entry: "ops.example.com", via_fallthrough: 1, access_required: 0 },
     ]);
     expect(rows.filter((r) => r.via_fallthrough !== 1).every((r) => r.via_fallthrough === 0)).toBe(

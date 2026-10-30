@@ -425,6 +425,69 @@ describe("tunnels collector", () => {
     await expect(run(tunnelsCollector, withBlogConfig({ ingress }))).rejects.toThrow(RangeError);
   });
 
+  it("R5-05: hashes the path of an ID over 512 characters instead of dropping the node", async () => {
+    // The review's rule: a 474-character regex made a 526-character ID, the
+    // fall-through node was dropped, and only the token-checked rule remained.
+    const path = `^/debug/(${Array.from({ length: 95 }, (_, i) => `p${i}x`).join("|")})`;
+    expect(path).toHaveLength(474);
+    expect(
+      await blogHostnames([
+        { path, service: "ssh://localhost:22" },
+        { hostname: "app.example.com", service: "http://localhost:8080", originRequest: required },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      [`app.example.com:sha256:${await sha256(path)}`]: hostProps(
+        "app.example.com",
+        path,
+        "ssh://localhost:22",
+        false,
+        true,
+      ),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+    });
+  });
+
+  it("R5-05: keeps a 600-character path-only rule apart from a path that reads like its hash", async () => {
+    const path = `^/${"a".repeat(598)}`;
+    const hashed = `sha256:${await sha256(path)}`;
+    expect(
+      await blogHostnames([
+        { hostname: "app.example.com", path: hashed, service: "http://localhost:1" },
+        { path, service: "ssh://localhost:22" },
+        { hostname: "app.example.com", service: "http://localhost:8080" },
+      ]),
+    ).toEqual({
+      [`app.example.com:${hashed}`]: hostProps(
+        "app.example.com",
+        hashed,
+        "http://localhost:1",
+        false,
+        false,
+      ),
+      [await pairHash("app.example.com", path)]: hostProps(
+        "app.example.com",
+        path,
+        "ssh://localhost:22",
+        false,
+        true,
+      ),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", false, false),
+    });
+  });
+
+  it("R5-05: gives a hostname too long for the contract ID the hashed pair ID", async () => {
+    const hostname = `${"a".repeat(480)}.example.com`;
+    expect(
+      await blogHostnames([
+        { hostname, service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      [await pairHash(hostname, "")]: hostProps(hostname, "", "ssh://localhost:22", false, false),
+    });
+  });
+
   it("parses the origin scheme of every service type", async () => {
     const { output } = await run(tunnelsCollector, routes);
     const scheme = (host: string) => node(output, blogHost(host)).props?.origin_scheme;
