@@ -1,17 +1,21 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   type CheckOptions,
   checkReleaseAge,
   EXCEPTIONS,
+  type Exception,
   LockfileError,
+  type MainOptions,
   main,
   PackageJsonError,
   parseLockfile,
   parsePackageManager,
+  parseWorkspace,
 } from "../check-release-age.ts";
-import { REPO_ROOT } from "./helpers.ts";
+import { put, REPO_ROOT } from "./helpers.ts";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const DAY = 86_400_000;
@@ -199,20 +203,32 @@ describe("parseLockfile", () => {
         name: "tar-dep",
         version: "https://example.com/tar-dep-1.0.0.tgz",
         registry: false,
+        resolution: { tarball: "https://example.com/tar-dep-1.0.0.tgz" },
       },
       {
         key: "git-dep@git+https://github.com/x/git-dep.git#0123abc",
         name: "git-dep",
         version: "git+https://github.com/x/git-dep.git#0123abc",
         registry: false,
+        resolution: { commit: "0123abc", repo: "https://github.com/x/git-dep.git", type: "git" },
       },
       {
         key: "dir-dep@file:../dir-dep",
         name: "dir-dep",
         version: "file:../dir-dep",
         registry: false,
+        resolution: { directory: "../dir-dep", type: "directory" },
       },
-      { key: "@jsr/std__fs@1.0.0", name: "@jsr/std__fs", version: "1.0.0", registry: false },
+      {
+        key: "@jsr/std__fs@1.0.0",
+        name: "@jsr/std__fs",
+        version: "1.0.0",
+        registry: false,
+        resolution: {
+          integrity: "sha512-AAAA",
+          tarball: "https://npm.jsr.io/~/11/@jsr/std__fs/1.0.0.tgz",
+        },
+      },
     ]);
   });
 
@@ -523,7 +539,9 @@ describe("R6-03: the locked integrity is the one the registry publishes", () => 
     });
     const result = await checkReleaseAge(
       text,
-      options(fetch, { exceptions: [{ package: "a@1.0.0", reason: "not for this" }] }),
+      options(fetch, {
+        exceptions: [{ package: "a@1.0.0", accepts: "too_young", reason: "not for this" }],
+      }),
     );
     expect(result.failures).toEqual([
       {
@@ -653,9 +671,9 @@ describe("checkReleaseAge", () => {
       text,
       options(fetch, {
         exceptions: [
-          { package: "a@1.0.0", reason: "security fix" },
-          { package: "b@1.0.0", reason: "no longer needed" },
-          { package: "c@1.0.0", reason: "gone from the lockfile" },
+          { package: "a@1.0.0", accepts: "too_young", reason: "security fix" },
+          { package: "b@1.0.0", accepts: "too_young", reason: "no longer needed" },
+          { package: "c@1.0.0", accepts: "too_young", reason: "gone from the lockfile" },
         ],
       }),
     );
@@ -671,7 +689,9 @@ describe("checkReleaseAge", () => {
     const { fetch } = mockFetch({ a: { "1.0.1": ago(2) } });
     const result = await checkReleaseAge(
       text,
-      options(fetch, { exceptions: [{ package: "a@1.0.0", reason: "older fix" }] }),
+      options(fetch, {
+        exceptions: [{ package: "a@1.0.0", accepts: "too_young", reason: "older fix" }],
+      }),
     );
     expect(result.failures).toMatchObject([{ package: "a@1.0.1", reason: "too_young" }]);
   });
@@ -684,7 +704,16 @@ describe("checkReleaseAge", () => {
     const { fetch, urls } = mockFetch({});
     const result = await checkReleaseAge(
       text,
-      options(fetch, { exceptions: [{ package: "dir-dep@file:../dir-dep", reason: "local" }] }),
+      options(fetch, {
+        exceptions: [
+          {
+            package: "dir-dep@file:../dir-dep",
+            accepts: "not_registry",
+            resolution: { directory: "../dir-dep", type: "directory" },
+            reason: "local",
+          },
+        ],
+      }),
     );
     expect(result.failures).toEqual([
       {
@@ -782,6 +811,196 @@ describe("checkReleaseAge", () => {
     const result = await checkReleaseAge(text, options(fetch, { concurrency: 3 }));
     expect(result).toMatchObject({ checked: 12, failures: [] });
     expect(peak).toBe(3);
+  });
+});
+
+describe("R8-03: an exception accepts only the failure and the resolution it names", () => {
+  /** The review's exception: a@1.0.0, published two days ago, as a security fix. */
+  const YOUNG_A: Exception = { package: "a@1.0.0", accepts: "too_young", reason: "security fix" };
+  /** a 1.0.0 two days old and 1.0.1 one day old, each with the sha512 digest registryEntry locks. */
+  const REGISTRY_A: Registry = { a: { "1.0.0": ago(2), "1.0.1": ago(1) } };
+  const withYoungA = async (entry: string) => {
+    const { fetch } = mockFetch(REGISTRY_A);
+    return checkReleaseAge(lockfile([entry]), options(fetch, { exceptions: [YOUNG_A] }));
+  };
+
+  it("R8-03: still accepts a@1.0.0 from the registry with the registry's integrity", async () => {
+    const result = await withYoungA(registryEntry("a@1.0.0"));
+    expect(result.failures).toEqual([]);
+    expect(result.excepted).toEqual([
+      { package: "a@1.0.0", detail: "published 2026-10-28T12:00:00.000Z, 2.0 days ago" },
+    ]);
+  });
+
+  it("R8-03: an exception for a@1.0.0 does not accept a foreign tarball", async () => {
+    const result = await withYoungA(
+      "  a@1.0.0:\n    resolution: {integrity: sha512-AAAA, tarball: https://attacker.invalid/a-1.0.0.tgz}",
+    );
+    expect(result.failures).toMatchObject([{ package: "a@1.0.0", reason: "not_registry" }]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: an exception for a@1.0.0 does not accept a tarball without integrity", async () => {
+    const result = await withYoungA(
+      "  a@1.0.0:\n    resolution: {tarball: https://registry.npmjs.org/a/-/a-1.0.0.tgz}",
+    );
+    expect(result.failures).toMatchObject([{ package: "a@1.0.0", reason: "not_registry" }]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: an exception for a@1.0.0 does not accept a sha384 integrity with version: 1.0.1", async () => {
+    const result = await withYoungA(
+      `  a@1.0.0:\n    resolution: {integrity: sha384-${"B".repeat(64)}}\n    version: 1.0.1`,
+    );
+    expect(result.failures).toEqual([
+      {
+        package: "a@1.0.0",
+        reason: "unverified",
+        detail: "the registry publishes no sha384 digest for this version to compare",
+      },
+    ]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: a non-registry exception accepts only the exact resolution it names", async () => {
+    const TAR = "tar-dep@https://example.com/tar-dep-1.0.0.tgz";
+    const GIT = "git-dep@git+https://github.com/x/git-dep.git#0123abc";
+    const DIR = "dir-dep@file:../dir-dep";
+    const text = lockfile([
+      `  ${TAR}:\n    resolution: {integrity: sha512-AAAA, tarball: https://example.com/tar-dep-1.0.0.tgz}\n    version: 1.0.0`,
+      `  ${GIT}:\n    resolution: {commit: 0123abc, repo: https://github.com/x/git-dep.git, type: git}\n    version: 1.0.0`,
+      `  ${DIR}:\n    resolution: {directory: ../dir-dep, type: directory}\n    version: 1.0.0`,
+    ]);
+    const exception = (key: string, resolution: Record<string, string>): Exception => ({
+      package: key,
+      accepts: "not_registry",
+      resolution,
+      reason: "a fork with the fix",
+    });
+    const check = (exceptions: Exception[]) =>
+      checkReleaseAge(text, options(mockFetch({}).fetch, { exceptions }));
+    const repo = "https://github.com/x/git-dep.git";
+
+    const exact = await check([
+      exception(TAR, {
+        tarball: "https://example.com/tar-dep-1.0.0.tgz",
+        integrity: "sha512-AAAA",
+      }),
+      exception(GIT, { commit: "0123abc", repo, type: "git" }),
+      exception(DIR, { directory: "../dir-dep", type: "directory" }),
+    ]);
+    expect(exact.failures).toEqual([]);
+    expect(exact.excepted.map((e) => e.package)).toEqual([DIR, GIT, TAR]);
+
+    const other = await check([
+      exception(TAR, {
+        tarball: "https://example.com/tar-dep-1.0.0.tgz",
+        integrity: "sha512-BBBB",
+      }),
+      exception(TAR, {
+        tarball: "https://example.com/tar-dep-1.0.1.tgz",
+        integrity: "sha512-AAAA",
+      }),
+      exception(GIT, { commit: "4567def", repo, type: "git" }),
+      exception(GIT, { commit: "0123abc", repo }),
+      exception(DIR, { directory: "../other", type: "directory" }),
+      exception(DIR, { directory: "../dir-dep", type: "directory", path: "x" }),
+    ]);
+    expect(other.failures.map((f) => [f.package, f.reason])).toEqual([
+      [DIR, "not_registry"],
+      [GIT, "not_registry"],
+      [TAR, "not_registry"],
+    ]);
+    expect(other.excepted).toEqual([]);
+  });
+
+  it("R8-03: an exception accepts only the failure it names", async () => {
+    const text = lockfile([
+      registryEntry("a@1.0.0"),
+      "  dir-dep@file:../dir-dep:\n    resolution: {directory: ../dir-dep, type: directory}\n    version: 1.0.0",
+    ]);
+    const { fetch } = mockFetch(REGISTRY_A);
+    const result = await checkReleaseAge(
+      text,
+      options(fetch, {
+        exceptions: [
+          {
+            package: "a@1.0.0",
+            accepts: "not_registry",
+            resolution: {
+              integrity: "sha512-AAAA",
+              tarball: "https://registry.npmjs.org/a/-/a-1.0.0.tgz",
+            },
+            reason: "the registry tarball",
+          },
+          { package: "dir-dep@file:../dir-dep", accepts: "too_young", reason: "local" },
+        ],
+      }),
+    );
+    expect(result.failures.map((f) => [f.package, f.reason])).toEqual([
+      ["a@1.0.0", "too_young"],
+      ["dir-dep@file:../dir-dep", "not_registry"],
+    ]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("R8-03: refuses an exception it cannot apply, and never one for unverified or mismatch", async () => {
+    const refuses = async (exception: unknown, message: RegExp) => {
+      const { fetch } = mockFetch(REGISTRY_A);
+      const check = checkReleaseAge(
+        lockfile([registryEntry("a@1.0.0")]),
+        options(fetch, { exceptions: [exception as Exception] }),
+      );
+      await expect(check).rejects.toThrow(message);
+    };
+    const NEVER =
+      /^EXCEPTIONS: the exception for a@1\.0\.0 must accept "too_young" or "not_registry"; no exception accepts an integrity mismatch or a version the check could not verify$/;
+    for (const accepts of ["unverified", "mismatch", undefined, "TOO_YOUNG"]) {
+      await refuses({ package: "a@1.0.0", accepts, reason: "fix" }, NEVER);
+    }
+    await refuses(
+      {
+        ...YOUNG_A,
+        resolution: { tarball: "https://example.com/a.tgz", integrity: "sha512-AAAA" },
+      },
+      /^EXCEPTIONS: the exception for a@1\.0\.0 accepts too_young, which applies to the registry's version only, and names a resolution/,
+    );
+    const foreign = (resolution: unknown) => ({
+      package: "a@1.0.0",
+      accepts: "not_registry",
+      resolution,
+      reason: "fork",
+    });
+    await refuses(
+      foreign(undefined),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names no resolution/,
+    );
+    await refuses(foreign("../a"), /^EXCEPTIONS: the exception for a@1\.0\.0 names no resolution/);
+    await refuses(
+      foreign({ tarball: "https://example.com/a.tgz" }),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names a tarball without its integrity/,
+    );
+    await refuses(
+      foreign({ type: "directory" }),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names no tarball, commit or directory/,
+    );
+    await refuses(
+      foreign({ directory: 1, type: "directory" }),
+      /^EXCEPTIONS: the exception for a@1\.0\.0 names a resolution with a value that is not a string/,
+    );
+    await refuses(
+      { ...YOUNG_A, reason: " " },
+      /^EXCEPTIONS: the exception for a@1\.0\.0 gives no reason/,
+    );
+    await refuses(
+      { ...YOUNG_A, package: "a" },
+      /^EXCEPTIONS: the exception for "a" does not name an exact lockfile key/,
+    );
+    const { code, err } = await runMain(checkout(), {
+      exceptions: [{ package: "a@1.0.0", accepts: "unverified" } as unknown as Exception],
+    });
+    expect(code).toBe(1);
+    expect(err).toEqual([expect.stringMatching(/^error: EXCEPTIONS: the exception for a@1\.0\.0/)]);
   });
 });
 
@@ -954,7 +1173,7 @@ describe("R6-04: the pnpm version package.json pins", () => {
 
   it("R6-04: the exception list applies to the pnpm version", async () => {
     const result = await check(manifest({ packageManager: "pnpm@10.34.9" }), {
-      exceptions: [{ package: "pnpm@10.34.9", reason: "security fix" }],
+      exceptions: [{ package: "pnpm@10.34.9", accepts: "too_young", reason: "security fix" }],
     });
     expect(result.failures).toEqual([]);
     expect(result.excepted).toMatchObject([{ package: "pnpm@10.34.9" }]);
@@ -1004,6 +1223,346 @@ describe("R6-04: the pnpm version package.json pins", () => {
   });
 });
 
+/** A workspace file in the layout the repository uses. */
+const WORKSPACE = [
+  "packages:",
+  "  - apps/*",
+  "  - packages/*",
+  "",
+  "onlyBuiltDependencies:",
+  "  - esbuild",
+  "",
+  "# Only resolve versions released at least 14 days ago.",
+  "minimumReleaseAge: 20160",
+  "",
+].join("\n");
+
+const checkouts: string[] = [];
+afterEach(() => {
+  for (const root of checkouts.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+/**
+ * A checkout in a temporary directory: package.json, pnpm-lock.yaml and
+ * pnpm-workspace.yaml that pass, with `files` (paths relative to the root) over them.
+ */
+function checkout(files: Record<string, string> = {}): string {
+  const root = mkdtempSync(join(tmpdir(), "virga-release-age-"));
+  checkouts.push(root);
+  const all: Record<string, string> = {
+    "package.json": manifest({ packageManager: "pnpm@10.28.0" }),
+    "pnpm-lock.yaml": lockfile([]),
+    "pnpm-workspace.yaml": WORKSPACE,
+    ...files,
+  };
+  for (const [path, text] of Object.entries(all)) put(join(root, path), text);
+  return root;
+}
+
+/** main on a checkout, with pnpm 10.28.0 in the registry. */
+async function runMain(root: string, extra: Partial<MainOptions> = {}) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const { fetch } = mockFetch(PNPM_REGISTRY);
+  const code = await main({
+    root,
+    fetch,
+    now: NOW,
+    exceptions: [],
+    retryDelayMs: 0,
+    log: (line) => out.push(line),
+    error: (line) => err.push(line),
+    ...extra,
+  });
+  return { code, out, err };
+}
+
+/** main exits 1 with one error line that matches `message`. */
+async function refusedBy(root: string, message: RegExp) {
+  const { code, out, err } = await runMain(root);
+  expect({ code, out, err }).toEqual({ code: 1, out: [], err: [expect.stringMatching(message)] });
+}
+
+const PASSES = {
+  code: 0,
+  out: [
+    "ok: all 0 locked package versions and pnpm 10.28.0 (packageManager) were published at least 14 days before 2026-10-30T12:00:00.000Z",
+  ],
+  err: [],
+};
+
+describe("R8-01: config dependencies are refused", () => {
+  /** A config dependency as pnpm declares one: version and integrity. */
+  const PLUGIN = `pnpm-plugin-young: 1.0.0+sha512-${"A".repeat(86)}==`;
+  const workspace = (text: string) => checkout({ "pnpm-workspace.yaml": text });
+  const CONFIG_DEPENDENCIES =
+    /configDependencies: pnpm installs config dependencies outside the lockfile/;
+
+  it("R8-01: refuses configDependencies as a block key in pnpm-workspace.yaml", async () => {
+    await refusedBy(
+      workspace(`${WORKSPACE}\nconfigDependencies:\n  ${PLUGIN}\n`),
+      new RegExp(`^error: pnpm-workspace\\.yaml line 11: ${CONFIG_DEPENDENCIES.source}`),
+    );
+    await refusedBy(
+      workspace(`configDependencies: {${PLUGIN}}\n${WORKSPACE}`),
+      new RegExp(`^error: pnpm-workspace\\.yaml line 1: ${CONFIG_DEPENDENCIES.source}`),
+    );
+  });
+
+  it("R8-01: refuses configDependencies as a quoted key", async () => {
+    for (const key of ["'configDependencies'", '"configDependencies"']) {
+      await refusedBy(
+        workspace(`packages:\n  - apps/*\n${key}:\n  ${PLUGIN}\n`),
+        /^error: pnpm-workspace\.yaml line 3: expected a setting written as "name:" or "name: value"/,
+      );
+    }
+  });
+
+  it("R8-01: refuses configDependencies in a flow map", async () => {
+    await refusedBy(
+      workspace(`{packages: [apps/*], configDependencies: {${PLUGIN}}}\n`),
+      /^error: pnpm-workspace\.yaml line 1: expected a setting/,
+    );
+    await refusedBy(
+      workspace(`packages: [apps/*, {configDependencies: {${PLUGIN}}}]\n`),
+      /^error: pnpm-workspace\.yaml line 1: write packages as a block sequence/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\n  - {configDependencies: {${PLUGIN}}}\n`),
+      /^error: pnpm-workspace\.yaml line 3: expected a "- " item/,
+    );
+  });
+
+  it("R8-01: refuses configDependencies under an anchor or merge key", async () => {
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\n<<: {configDependencies: {${PLUGIN}}}\n`),
+      /^error: pnpm-workspace\.yaml line 3: expected a setting/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\n<<:\n  configDependencies:\n    ${PLUGIN}\n`),
+      /^error: pnpm-workspace\.yaml line 3: expected a setting/,
+    );
+    await refusedBy(
+      workspace(`packages: &plugins\n  - apps/*\nminimumReleaseAge: *plugins\n`),
+      /^error: pnpm-workspace\.yaml line 1: "&", which starts an anchor/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - apps/*\nminimumReleaseAge: *plugins\n`),
+      /^error: pnpm-workspace\.yaml line 3: "\*", which starts an anchor, alias/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - !!str apps/*\n`),
+      /^error: pnpm-workspace\.yaml line 2: "!", which starts an anchor, alias, tag/,
+    );
+  });
+
+  it("R8-01: refuses configDependencies nested under another key", async () => {
+    await refusedBy(
+      workspace(
+        `packages:\n  - apps/*\nonlyBuiltDependencies:\n  configDependencies:\n    ${PLUGIN}\n`,
+      ),
+      /^error: pnpm-workspace\.yaml line 4: expected a "- " item/,
+    );
+    await refusedBy(
+      workspace(`packages:\n  - configDependencies:\n      ${PLUGIN}\n`),
+      /^error: pnpm-workspace\.yaml line 2: expected a "- " item/,
+    );
+    await refusedBy(
+      workspace(`minimumReleaseAge: 20160\n  configDependencies: {${PLUGIN}}\n`),
+      /^error: pnpm-workspace\.yaml line 2: expected a "- " item/,
+    );
+  });
+
+  it("R8-01: refuses configDependencies and a pnpm field that is not an object in package.json", async () => {
+    const root = (pnpm: unknown) =>
+      checkout({ "package.json": manifest({ packageManager: "pnpm@10.28.0", pnpm }) });
+    await refusedBy(
+      root({ configDependencies: { "pnpm-plugin-young": `1.0.0+sha512-${"A".repeat(86)}==` } }),
+      /^error: package\.json pnpm\.configDependencies: pnpm installs config dependencies outside the lockfile/,
+    );
+    for (const pnpm of ["configDependencies", [], null]) {
+      await refusedBy(root(pnpm), /^error: package\.json pnpm is not an object/);
+    }
+    expect(await runMain(root({ overrides: {} }))).toEqual(PASSES);
+  });
+
+  it("R8-01: refuses settings that make pnpm read another lockfile or run code", async () => {
+    for (const setting of [
+      "gitBranchLockfile: true",
+      "sharedWorkspaceLockfile: false",
+      "lockfileDir: ..",
+      "pnpmfile: .pnpmfile.cjs",
+      "globalPnpmfile: /tmp/x.cjs",
+      "useNodeVersion: 22.0.0",
+      "packageExtensions:",
+    ]) {
+      await refusedBy(
+        workspace(`${WORKSPACE}${setting}\n`),
+        new RegExp(
+          `^error: pnpm-workspace\\.yaml line 10: ${setting.slice(0, setting.indexOf(":"))} is not a setting the check accepts`,
+        ),
+      );
+    }
+  });
+
+  it("R8-01: reads pnpm-workspace.yaml strictly", async () => {
+    const cases: [string, RegExp][] = [
+      ["packages:\n  - apps/*\npackages:\n  - packages/*\n", /line 3: packages appears twice/],
+      ["packages:\n  - apps/* # apps\n", /line 2: a comment after a value/],
+      ["packages:\n  -\tapps/*\n", /line 2: a tab/],
+      ["packages:\n\t- apps/*\n", /line 2: a tab/],
+      ["minimumReleaseAge: |\n  20160\n", /line 1: a block scalar/],
+      ["minimumReleaseAge:\n  20160\n", /line 1: minimumReleaseAge needs a value on its line/],
+      ["packages:\n    - apps/*\n", /line 2: expected a "- " item/],
+      ["packages:\n- apps/*\n", /line 2: expected a setting/],
+      ["packages:\n  - 'apps/*\n  - x'\n", /line 2: a quoted value that continues/],
+      ["---\npackages:\n  - apps/*\n", /line 1: expected a setting/],
+      ["packages :\n  - apps/*\n", /line 1: expected a setting/],
+      ["packages:\n  - apps/*:\n", /line 2: expected a "- " item/],
+      ["packages:\n  - - apps/*\n", /line 2: expected a "- " item/],
+    ];
+    for (const [text, message] of cases) {
+      await refusedBy(
+        workspace(text),
+        new RegExp(`^error: pnpm-workspace\\.yaml ${message.source}`),
+      );
+    }
+  });
+
+  it("R8-01: accepts the layout the repository uses, and the committed file", async () => {
+    expect(await runMain(checkout())).toEqual(PASSES);
+    const quoted = [
+      "\uFEFFpackages:\r\n  - 'apps/*'\r\n  - \"packages/*\"   ",
+      "  # not built",
+      "onlyBuiltDependencies: ",
+      "minimumReleaseAge: 20160",
+      "minimumReleaseAgeExclude:",
+      "  - '@scope/fix'",
+      "",
+    ].join("\n");
+    expect(await runMain(workspace(quoted))).toEqual(PASSES);
+    const committed = await runMain(REPO_ROOT, {
+      lockfile: lockfile([]),
+      packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
+    });
+    expect(committed).toEqual(PASSES);
+    const settings = parseWorkspace(readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"));
+    expect(settings.get("packages")).toContain("apps/*");
+    expect(settings.get("minimumReleaseAge")).toBe("20160");
+  });
+});
+
+describe("R8-02: only the root names the package manager", () => {
+  /** The review's pin: pnpm 10.33.2, published three days before NOW. */
+  const YOUNG = "pnpm@10.33.2";
+  const ONLY_ROOT =
+    /only the root package\.json may name the package manager: corepack takes the nearest package\.json that names one/;
+  const web = (fields: Record<string, unknown>) => ({
+    "apps/web/package.json": manifest({ name: "@virga/web", ...fields }),
+  });
+
+  it("R8-02: refuses packageManager in apps/web/package.json", async () => {
+    await refusedBy(
+      checkout(web({ packageManager: YOUNG })),
+      new RegExp(`^error: apps/web/package\\.json names packageManager; ${ONLY_ROOT.source}`),
+    );
+    await refusedBy(
+      checkout(web({ packageManager: "pnpm@https://example.com/pnpm.tgz" })),
+      /^error: apps\/web\/package\.json names packageManager/,
+    );
+  });
+
+  it("R8-02: refuses devEngines.packageManager in apps/web/package.json", async () => {
+    await refusedBy(
+      checkout(web({ devEngines: { packageManager: { name: "pnpm", version: "10.33.2" } } })),
+      new RegExp(
+        `^error: apps/web/package\\.json names devEngines\\.packageManager; ${ONLY_ROOT.source}`,
+      ),
+    );
+    await refusedBy(
+      checkout(web({ devEngines: "pnpm" })),
+      /^error: apps\/web\/package\.json devEngines is not an object/,
+    );
+  });
+
+  it("R8-02: refuses .corepack.env at the root, in apps and in apps/web", async () => {
+    const env = "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\n";
+    for (const path of [".corepack.env", "apps/.corepack.env", "apps/web/.corepack.env"]) {
+      await refusedBy(
+        checkout({ ...web({}), [path]: env }),
+        new RegExp(
+          `^error: ${path.replaceAll(".", "\\.")}: corepack loads \\.corepack\\.env files`,
+        ),
+      );
+    }
+    await refusedBy(
+      checkout({ "apps/web/.COREPACK.ENV": env }),
+      /^error: apps\/web\/\.COREPACK\.ENV: corepack loads/,
+    );
+  });
+
+  it("R8-02: refuses a pnpm-workspace.yaml other than the root", async () => {
+    await refusedBy(
+      checkout({ "apps/web/pnpm-workspace.yaml": "configDependencies: {}\n" }),
+      /^error: apps\/web\/pnpm-workspace\.yaml: only the root may hold pnpm-workspace\.yaml/,
+    );
+  });
+
+  it("R8-02: refuses a package.json it cannot read", async () => {
+    await refusedBy(
+      checkout({ "apps/web/package.json": "{" }),
+      /^error: apps\/web\/package\.json is not valid JSON/,
+    );
+    await refusedBy(
+      checkout({ "apps/web/package.json": "[]" }),
+      /^error: apps\/web\/package\.json is not a JSON object/,
+    );
+  });
+
+  it("R8-02: does not follow symbolic links, and refuses them", async () => {
+    // Outside the checkout, with a young pin that corepack would read through the links.
+    const target = checkout({ "package.json": manifest({ packageManager: YOUNG }) });
+    const linkedFile = checkout();
+    mkdirSync(join(linkedFile, "apps", "web"), { recursive: true });
+    symlinkSync(join(target, "package.json"), join(linkedFile, "apps", "web", "package.json"));
+    await refusedBy(
+      linkedFile,
+      /^error: apps\/web\/package\.json is a symbolic link, which the check does not follow; corepack and pnpm would/,
+    );
+    const linkedDirectory = checkout();
+    mkdirSync(join(linkedDirectory, "apps"));
+    symlinkSync(target, join(linkedDirectory, "apps", "web"));
+    await refusedBy(linkedDirectory, /^error: apps\/web is a symbolic link/);
+  });
+
+  it("R8-02: leaves out node_modules and .git", async () => {
+    const pinned = manifest({ packageManager: YOUNG });
+    const root = checkout({
+      "node_modules/.corepack.env": "",
+      "node_modules/x/package.json": pinned,
+      "apps/web/node_modules/.corepack.env": "",
+      "apps/web/node_modules/.pnpm/x@1.0.0/node_modules/x/package.json": pinned,
+      ".git/package.json": pinned,
+      ...web({ scripts: { build: "vite build" } }),
+    });
+    symlinkSync("../../../elsewhere", join(root, "apps", "web", "node_modules", "y"));
+    expect(await runMain(root)).toEqual(PASSES);
+  });
+
+  it("R8-02: accepts package.json files without a package manager, and the real checkout", async () => {
+    const root = checkout({
+      ...web({ scripts: { build: "vite build" }, devEngines: { runtime: { name: "node" } } }),
+      "packages/graph/package.json": manifest({ name: "@virga/graph" }),
+    });
+    expect(await runMain(root)).toEqual(PASSES);
+    const real = await runMain(REPO_ROOT, {
+      lockfile: lockfile([]),
+      packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
+    });
+    expect(real).toEqual(PASSES);
+  });
+});
+
 describe("EXCEPTIONS", () => {
   it("names exact versions and says why", () => {
     for (const exception of EXCEPTIONS) {
@@ -1011,26 +1570,50 @@ describe("EXCEPTIONS", () => {
       expect(exception.reason.trim()).not.toBe("");
     }
   });
+
+  it("R8-03: each names the failure it accepts and, for a non-registry package, its resolution", async () => {
+    const { fetch } = mockFetch({});
+    const check = checkReleaseAge(lockfile([]), options(fetch, { exceptions: EXCEPTIONS }));
+    await expect(check).resolves.toMatchObject({ failures: [] });
+  });
 });
 
 describe("CI workflow", () => {
-  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
+  const workflow = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
 
-  /** The text of each job under `jobs:`, by job name. */
-  function jobs(text: string): Map<string, string> {
-    const result = new Map<string, string>();
+  /**
+   * The text of each job under `jobs:`, by job name, and the lines under
+   * `jobs:` that belong to no job the guard can read, such as a quoted job name.
+   */
+  function readJobs(text: string): { jobs: Map<string, string>; unread: string[] } {
+    const jobs = new Map<string, string>();
+    const unread: string[] = [];
+    const lines = text.split(/\r\n|\r|\n/);
+    const start = lines.indexOf("jobs:");
+    if (start < 0) return { jobs, unread: ["(no jobs: line)"] };
     let name: string | undefined;
-    for (const line of text.slice(text.indexOf("\njobs:\n")).split("\n").slice(2)) {
+    for (const line of lines.slice(start + 1)) {
+      if (/^ *(?:#.*)?$/.test(line)) continue;
+      // The next top-level key ends jobs:.
+      if (/^[\w-]+:/.test(line)) break;
       const header = /^ {2}([\w-]+):$/.exec(line);
       if (header?.[1] !== undefined) {
         name = header[1];
-        result.set(name, "");
+        jobs.set(name, "");
       } else if (name !== undefined && line.startsWith("    ")) {
-        result.set(name, `${result.get(name)}${line}\n`);
+        jobs.set(name, `${jobs.get(name)}${line}\n`);
+      } else {
+        // The lines below belong to what the guard could not read, not to the job above.
+        name = undefined;
+        unread.push(line);
       }
     }
-    return result;
+    return { jobs, unread };
   }
+
+  /** The text of each job under `jobs:`, by job name. */
+  const jobs = (text: string) => readJobs(text).jobs;
 
   /** The jobs a job needs, from `needs: a` or `needs: [a, b]`. */
   function needs(job: string): string[] {
@@ -1041,10 +1624,12 @@ describe("CI workflow", () => {
 
   /**
    * A job that installs packages or runs a package manager: pnpm/action-setup
-   * (which installs pnpm itself), a setup-node package cache, or any pnpm, npm,
-   * npx, yarn or corepack command.
+   * (which installs pnpm itself), a setup-node package cache, any pnpm, npm,
+   * npx, yarn or corepack command, or a reusable workflow (job-level `uses:`),
+   * whose steps the guard cannot see.
    */
-  const INSTALLS = /uses: pnpm\/action-setup@|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
+  const INSTALLS =
+    /uses: pnpm\/action-setup@|^ {4}uses:|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
 
   /** Jobs other than release-age that install without waiting for it. */
   const ungated = (text: string) =>
@@ -1052,6 +1637,103 @@ describe("CI workflow", () => {
       .filter(([name, job]) => name !== "release-age" && INSTALLS.test(job))
       .filter(([, job]) => !needs(job).includes("release-age"))
       .map(([name]) => name);
+
+  /**
+   * What lets a workflow install before the check (R8-04): a job the guard
+   * cannot read, a job that installs without needing release-age, a
+   * release-age job that does not run the check alone, a pnpm/action-setup
+   * version input, or an action not pinned by commit SHA.
+   */
+  function gateProblems(text: string): string[] {
+    const { jobs: all, unread } = readJobs(text);
+    const problems = unread.map((line) => `cannot read ${JSON.stringify(line)} under jobs:`);
+    for (const name of ungated(text)) problems.push(`job ${name} installs before release-age`);
+    if ([...all.values()].some((job) => INSTALLS.test(job))) {
+      const check = all.get("release-age");
+      if (
+        check === undefined ||
+        !check.includes("      - run: node scripts/check-release-age.ts\n") ||
+        INSTALLS.test(check) ||
+        needs(check).length > 0
+      ) {
+        problems.push("no release-age job that runs the check before anything else");
+      }
+    }
+    for (const [, inputs] of text.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)) {
+      if (/\bversion:/.test(inputs ?? "")) problems.push("pnpm/action-setup has a version input");
+    }
+    for (const [, action] of text.matchAll(/uses: (\S+)/g)) {
+      if (!/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(action ?? "")) {
+        problems.push(`${action} is not pinned by commit SHA`);
+      }
+    }
+    return problems;
+  }
+
+  /** gateProblems of every file in a workflow directory, prefixed with its name. */
+  const workflowProblems = (dir: string) =>
+    readdirSync(dir)
+      .sort()
+      .flatMap((file) =>
+        gateProblems(readFileSync(join(dir, file), "utf8")).map((problem) => `${file}: ${problem}`),
+      );
+
+  it("R8-04: every workflow in .github/workflows installs only after its release-age job", () => {
+    expect(readdirSync(WORKFLOWS)).toContain("ci.yml");
+    expect(workflowProblems(WORKFLOWS)).toEqual([]);
+  });
+
+  it("R8-04: the guard reads every file in the workflow directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "virga-workflows-"));
+    checkouts.push(dir);
+    put(join(dir, "ci.yml"), workflow);
+    const sha = "0".repeat(40);
+    put(
+      join(dir, "deploy.yml"),
+      [
+        "name: Deploy",
+        "",
+        "on:",
+        "  push:",
+        "    branches: [main]",
+        "",
+        "jobs:",
+        "  # A job named release-age that does not run the check.",
+        "  release-age:",
+        "    steps:",
+        "      - run: echo ok",
+        "  deploy:",
+        "    needs: release-age",
+        "    steps:",
+        `      - uses: pnpm/action-setup@${sha}`,
+        "        with:",
+        "          version: 10.34.9",
+        "      - run: pnpm install --frozen-lockfile && pnpm deploy",
+        "  'quoted':",
+        "    steps:",
+        "      - run: npm ci",
+        "  reusable:",
+        "    uses: example/workflows/.github/workflows/deploy.yml@main",
+        "",
+      ].join("\n"),
+    );
+    expect(workflowProblems(dir)).toEqual([
+      `deploy.yml: cannot read "  'quoted':" under jobs:`,
+      `deploy.yml: cannot read "    steps:" under jobs:`,
+      `deploy.yml: cannot read "      - run: npm ci" under jobs:`,
+      "deploy.yml: job reusable installs before release-age",
+      "deploy.yml: no release-age job that runs the check before anything else",
+      "deploy.yml: pnpm/action-setup has a version input",
+      "deploy.yml: example/workflows/.github/workflows/deploy.yml@main is not pinned by commit SHA",
+    ]);
+  });
+
+  it("R8-05: deploy-dry-run needs release-age and check, so one green status covers rules:check", () => {
+    const deploy = jobs(workflow).get("deploy-dry-run") ?? "";
+    expect(deploy).toContain("- run: node scripts/deploy.ts --dry-run\n");
+    expect(needs(deploy).sort()).toEqual(["check", "release-age"]);
+    expect(jobs(workflow).get("check")).toContain("- run: pnpm rules:check\n");
+  });
 
   it("R4-07: runs the check in its own job, which installs nothing and runs no package code", () => {
     const check = jobs(workflow).get("release-age") ?? "";

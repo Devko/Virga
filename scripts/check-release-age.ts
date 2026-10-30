@@ -8,30 +8,62 @@
 // holds, and pnpm/action-setup and corepack run whatever packageManager names.
 // A version the check cannot date (not from the registry, no publish time,
 // registry error) fails too, and so does a locked integrity that is not the
-// registry's digest for the version dated (R6-03). Needs network access to
-// registry.npmjs.org and nothing else; CI runs it before anything is installed.
-import { readFileSync } from "node:fs";
+// registry's digest for the version dated (R6-03). pnpm also installs config
+// dependencies outside the lockfile, so the check reads pnpm-workspace.yaml
+// strictly and refuses them (R8-01), and corepack reads the nearest
+// packageManager and any .corepack.env from the directory a command runs in,
+// so only the root may name the package manager (R8-02). Needs network access
+// to registry.npmjs.org and nothing else; CI runs it before anything is installed.
+import { type Dirent, readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 export const MIN_AGE_DAYS = 14;
 
-export interface Exception {
-  /** The exact lockfile entry: name@version, or the lockfile key of a non-registry package. */
-  package: string;
-  reason: string;
-}
+/**
+ * A failure the project accepts (R8-03). An exception is bound to the failure
+ * it names and, for a package not from the registry, to its exact resolution;
+ * it never accepts an integrity mismatch or a version the check could not
+ * verify.
+ */
+export type Exception =
+  | {
+      /** name@version from the registry, or pnpm@<version> for the pnpm package.json pins. */
+      package: string;
+      /**
+       * Younger than 14 days. The check reaches this only after the locked
+       * integrity matched the registry's, so it accepts only the registry's bytes.
+       */
+      accepts: "too_young";
+      reason: string;
+    }
+  | {
+      /** The lockfile key of a package not resolved from the npm registry. */
+      package: string;
+      accepts: "not_registry";
+      /**
+       * Its resolution exactly as the lockfile records it: the tarball and its
+       * integrity, the repository and commit, or the directory.
+       */
+      resolution: Readonly<Record<string, string>>;
+      reason: string;
+    };
 
 /**
- * Versions the project accepts although they fail the check, for example a
- * security fix that cannot wait 14 days. One entry per exact version, each with
- * a comment and a reason. The check names entries it no longer needs.
+ * Failures the project accepts, for example a security fix that cannot wait
+ * 14 days. One entry per exact version, each with a comment and a reason. The
+ * check names entries it no longer needs.
  */
 export const EXCEPTIONS: readonly Exception[] = [];
 
 const REGISTRY = "https://registry.npmjs.org";
 const DAY_MS = 86_400_000;
 
-export class LockfileError extends Error {}
+/** An input the check refuses; main prints it and exits 1. */
+export class CheckError extends Error {}
+
+export class LockfileError extends CheckError {}
 
 export interface LockedPackage {
   /** The key in the lockfile's packages section, for example `@types/node@22.20.5`. */
@@ -42,6 +74,8 @@ export interface LockedPackage {
   registry: boolean;
   /** For a registry package: the lockfile's integrity, compared with the registry's digest. */
   integrity?: string;
+  /** For any other package: its resolution, which an exception must name exactly (R8-03). */
+  resolution?: Readonly<Record<string, string>>;
 }
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -306,7 +340,8 @@ function lockedPackage(key: string, resolution: Map<string, string>): LockedPack
     [...resolution.keys()].every((field) => field === "integrity" || field === "tarball") &&
     (tarball === undefined ||
       tarball === `${REGISTRY}/${name}/-/${name.slice(name.indexOf("/") + 1)}-${version}.tgz`);
-  return registry ? { key, name, version, registry, integrity } : { key, name, version, registry };
+  if (registry) return { key, name, version, registry, integrity };
+  return { key, name, version, registry, resolution: Object.fromEntries(resolution) };
 }
 
 /** pnpm's removeSuffix: a dependency path without its peer and patch suffix (its packages key). */
@@ -509,7 +544,109 @@ export function parseLockfile(text: string): LockedPackage[] {
   return packages;
 }
 
-export class PackageJsonError extends Error {}
+export class WorkspaceError extends CheckError {}
+
+/**
+ * The settings of pnpm-workspace.yaml the check accepts, with the YAML each
+ * takes: a block sequence of one-line values, or a value on the key's line.
+ */
+const WORKSPACE_SETTINGS: ReadonlyMap<string, "list" | "value"> = new Map([
+  ["packages", "list"],
+  ["onlyBuiltDependencies", "list"],
+  ["minimumReleaseAge", "value"],
+  ["minimumReleaseAgeExclude", "list"],
+]);
+
+const workspaceError = (line: number, problem: string) =>
+  new WorkspaceError(`pnpm-workspace.yaml line ${line}: ${problem}`);
+
+/** A plain value without spaces: no indicator first. */
+const PLAIN_VALUE = /^[^\s'"#&*!|>%@`{}[\],?:<-]\S*$/;
+
+/** A value on one line: quoted, or plain without spaces and without `:` last (which makes it a key). */
+function oneLineValue(text: string): string | undefined {
+  if (/^'(?:[^']|'')*'$/.test(text) || /^"(?:[^"\\]|\\.)*"$/.test(text)) return keyText(text);
+  return PLAIN_VALUE.test(text) && !text.endsWith(":") ? text : undefined;
+}
+
+function unknownSetting(key: string): string {
+  if (key === "configDependencies") {
+    return "configDependencies: pnpm installs config dependencies outside the lockfile, and runs pnpm-plugin-* ones on every command, so the check cannot date them; the project declares none";
+  }
+  return `${key} is not a setting the check accepts (${[...WORKSPACE_SETTINGS.keys()].join(", ")}); a setting can make pnpm read another lockfile, or install or run code the check does not date, so extend the check before adding one`;
+}
+
+/**
+ * The settings in pnpm-workspace.yaml (R8-01). pnpm installs config
+ * dependencies declared there outside the lockfile, and other settings make it
+ * read another lockfile or a pnpmfile, so the check accepts only the settings
+ * the project uses, in block layout, and refuses anything else with its line
+ * number: flow collections, anchors, aliases, tags, merge keys, quoted or
+ * duplicate keys and values that continue on the next line. Whole-line
+ * comments are allowed.
+ */
+export function parseWorkspace(text: string): Map<string, string | string[]> {
+  const settings = new Map<string, string | string[]>();
+  /** The list of the setting above, while its items follow. */
+  let list: string[] | undefined;
+  const lines = text.replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
+  for (const [index, line] of lines.entries()) {
+    const number = index + 1;
+    const content = line.replace(/ +$/, "");
+    if (content === "" || /^ *#/.test(content)) continue;
+    const indent = content.length - content.replace(/^ +/, "").length;
+    const shape = lineShape(content.slice(indent));
+    if (typeof shape === "object") {
+      throw workspaceError(
+        number,
+        shape.problem === "a comment"
+          ? "a comment after a value; write comments on their own line"
+          : shape.problem,
+      );
+    }
+    if (shape === "block")
+      throw workspaceError(number, "a block scalar; write the value on one line");
+    if (indent === 0) {
+      const [, key, value] = TOP_LEVEL_KEY.exec(content) ?? [];
+      if (key === undefined) {
+        throw workspaceError(
+          number,
+          `expected a setting written as "name:" or "name: value", with a plain name; found ${preview(content)}`,
+        );
+      }
+      if (settings.has(key)) throw workspaceError(number, `${key} appears twice`);
+      const kind = WORKSPACE_SETTINGS.get(key);
+      if (kind === undefined) throw workspaceError(number, unknownSetting(key));
+      if (kind === "list") {
+        if (value !== undefined) {
+          throw workspaceError(number, `write ${key} as a block sequence, one "- " item per line`);
+        }
+        list = [];
+        settings.set(key, list);
+        continue;
+      }
+      const scalar = value === undefined ? undefined : oneLineValue(value);
+      if (scalar === undefined) throw workspaceError(number, `${key} needs a value on its line`);
+      settings.set(key, scalar);
+      list = undefined;
+      continue;
+    }
+    const item =
+      list !== undefined && indent === 2 && content.startsWith("- ", 2)
+        ? oneLineValue(content.slice(4))
+        : undefined;
+    if (list === undefined || item === undefined) {
+      throw workspaceError(
+        number,
+        `expected a "- " item with a one-line value at indent 2, under a list setting such as packages:; found ${preview(content.slice(indent))}`,
+      );
+    }
+    list.push(item);
+  }
+  return settings;
+}
+
+export class PackageJsonError extends CheckError {}
 
 export interface PackageManagerPin {
   /** Where package.json names the version. */
@@ -544,7 +681,9 @@ function pnpmPin(field: PackageManagerPin["field"], value: string): PackageManag
 /**
  * The pnpm versions package.json pins (R6-04): packageManager, which
  * pnpm/action-setup in CI and corepack follow and which therefore must name
- * an exact pnpm version, and devEngines.packageManager if present.
+ * an exact pnpm version, and devEngines.packageManager if present. Refuses
+ * config dependencies in the pnpm field (R8-01), which pnpm installs outside
+ * the lockfile.
  */
 export function parsePackageManager(text: string): PackageManagerPin[] {
   let manifest: unknown;
@@ -554,7 +693,19 @@ export function parsePackageManager(text: string): PackageManagerPin[] {
     throw new PackageJsonError("package.json is not valid JSON");
   }
   if (!isRecord(manifest)) throw new PackageJsonError("package.json is not a JSON object");
-  const { packageManager, devEngines } = manifest;
+  const { packageManager, devEngines, pnpm } = manifest;
+  if (pnpm !== undefined) {
+    if (!isRecord(pnpm)) {
+      throw new PackageJsonError(
+        "package.json pnpm is not an object, so the check cannot tell which settings pnpm reads from it",
+      );
+    }
+    if (Object.hasOwn(pnpm, "configDependencies")) {
+      throw new PackageJsonError(
+        "package.json pnpm.configDependencies: pnpm installs config dependencies outside the lockfile, and runs pnpm-plugin-* ones on every command, so the check cannot date them; the project declares none",
+      );
+    }
+  }
   if (typeof packageManager !== "string") {
     throw new PackageJsonError(
       'package.json names no packageManager; CI (pnpm/action-setup) and corepack take the pnpm version from it, so pin an exact one such as "pnpm@10.28.0"',
@@ -586,6 +737,105 @@ export function parsePackageManager(text: string): PackageManagerPin[] {
   return pins;
 }
 
+export class CheckoutError extends CheckError {}
+
+/** ` (ENOENT)` for a Node file system error, for messages. */
+const errorCode = (cause: unknown) =>
+  isRecord(cause) && typeof cause.code === "string" ? ` (${cause.code})` : "";
+
+const ONLY_ROOT =
+  "only the root package.json may name the package manager: corepack takes the nearest package.json that names one, starting from the directory a command runs in";
+
+/** A package.json below the root: it must not name a package manager (R8-02). */
+function checkNestedManifest(path: string, shown: string): void {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (cause) {
+    throw new CheckoutError(`${shown} cannot be read${errorCode(cause)}`);
+  }
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new CheckoutError(
+      `${shown} is not valid JSON, so the check cannot tell whether it names a package manager`,
+    );
+  }
+  if (!isRecord(manifest)) {
+    throw new CheckoutError(
+      `${shown} is not a JSON object, so the check cannot tell whether it names a package manager`,
+    );
+  }
+  if (Object.hasOwn(manifest, "packageManager")) {
+    throw new CheckoutError(`${shown} names packageManager; ${ONLY_ROOT}`);
+  }
+  const { devEngines } = manifest;
+  if (devEngines === undefined) return;
+  if (!isRecord(devEngines)) {
+    throw new CheckoutError(
+      `${shown} devEngines is not an object, so the check cannot tell whether it names a package manager`,
+    );
+  }
+  if (Object.hasOwn(devEngines, "packageManager")) {
+    throw new CheckoutError(`${shown} names devEngines.packageManager; ${ONLY_ROOT}`);
+  }
+}
+
+/**
+ * Package-manager inputs below the root (R8-02). Corepack takes the nearest
+ * package.json that names packageManager or devEngines.packageManager, and
+ * loads .corepack.env files, starting from the directory a command runs in;
+ * pnpm takes the nearest pnpm-workspace.yaml in the same way. So only the root
+ * package.json may name the package manager, only the root may hold
+ * pnpm-workspace.yaml, and no directory may hold .corepack.env. Walks the
+ * checkout without node_modules and .git, and refuses symbolic links rather
+ * than follow them, since corepack and pnpm would. Names are compared without
+ * case, as a case-insensitive file system opens them.
+ */
+export function checkCheckout(root: string): void {
+  const top = resolve(root);
+  const shownPath = (path: string) => relative(top, path).split(sep).join("/") || ".";
+  const walk = (dir: string) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (cause) {
+      throw new CheckoutError(`${shownPath(dir)} cannot be read${errorCode(cause)}`);
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const path = join(dir, entry.name);
+      const shown = shownPath(path);
+      const name = entry.name.toLowerCase();
+      const atRoot = dir === top;
+      if (entry.isSymbolicLink()) {
+        throw new CheckoutError(
+          `${shown} is a symbolic link, which the check does not follow; corepack and pnpm would`,
+        );
+      }
+      if (name === ".corepack.env") {
+        throw new CheckoutError(
+          `${shown}: corepack loads .corepack.env files from the directories it walks, and their variables change which pnpm it runs and where it fetches it from; the project uses none`,
+        );
+      }
+      if (name === "pnpm-workspace.yaml" && !(atRoot && entry.name === name)) {
+        throw new CheckoutError(
+          `${shown}: only the root may hold pnpm-workspace.yaml; pnpm takes the nearest one, starting from the directory a command runs in, with its settings and config dependencies`,
+        );
+      }
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (name === "package.json" && !(atRoot && entry.name === name)) {
+        if (!entry.isFile()) throw new CheckoutError(`${shown} is not a regular file`);
+        checkNestedManifest(path, shown);
+      }
+    }
+  };
+  walk(top);
+}
+
 export interface CheckOptions {
   /** package.json's text, whose pnpm versions are dated too; main always passes it. */
   packageJson?: string;
@@ -604,7 +854,10 @@ export interface CheckOptions {
 
 export interface Failure {
   package: string;
-  /** `mismatch`: the integrity is not the registry's; no exception accepts it. */
+  /**
+   * `mismatch`: the integrity is not the registry's. No exception accepts a
+   * mismatch or `unverified` (R8-03).
+   */
   reason: "too_young" | "not_registry" | "unverified" | "mismatch";
   detail: string;
 }
@@ -797,6 +1050,80 @@ function versionProblem(
 const byPackage = (a: { package: string }, b: { package: string }) =>
   a.package < b.package ? -1 : a.package > b.package ? 1 : 0;
 
+export class ExceptionError extends CheckError {}
+
+const EXCEPTION_KEY = /^(@[^@/]+\/)?[^@/]+@\S+$/;
+
+/** Why the check cannot apply an exception, or undefined (R8-03). */
+function exceptionProblem(exception: Record<string, unknown>): string | undefined {
+  const { package: key, accepts, resolution, reason } = exception;
+  if (typeof key !== "string" || !EXCEPTION_KEY.test(key)) {
+    return "does not name an exact lockfile key (name@version) or pnpm@<version>";
+  }
+  if (accepts === "too_young") {
+    if (Object.hasOwn(exception, "resolution")) {
+      return "accepts too_young, which applies to the registry's version only, and names a resolution; an exception for a package not from the registry accepts not_registry";
+    }
+  } else if (accepts === "not_registry") {
+    if (!isRecord(resolution)) {
+      return "names no resolution; an exception for a package not from the registry names its resolution exactly as the lockfile records it";
+    }
+    if (Object.values(resolution).some((value) => typeof value !== "string")) {
+      return "names a resolution with a value that is not a string";
+    }
+    if (!["tarball", "commit", "directory"].some((field) => Object.hasOwn(resolution, field))) {
+      return "names no tarball, commit or directory in its resolution";
+    }
+    if (Object.hasOwn(resolution, "tarball") && !Object.hasOwn(resolution, "integrity")) {
+      return "names a tarball without its integrity, so it would accept whatever that URL serves";
+    }
+  } else {
+    return 'must accept "too_young" or "not_registry"; no exception accepts an integrity mismatch or a version the check could not verify';
+  }
+  if (typeof reason !== "string" || reason.trim() === "") return "gives no reason";
+  return undefined;
+}
+
+function checkExceptions(exceptions: readonly Exception[]): void {
+  for (const exception of exceptions) {
+    const fields: Record<string, unknown> = isRecord(exception) ? exception : {};
+    const problem = exceptionProblem(fields);
+    if (problem === undefined) continue;
+    const key = fields.package;
+    const shown =
+      typeof key === "string" && EXCEPTION_KEY.test(key) ? key : preview(String(key ?? ""));
+    throw new ExceptionError(`EXCEPTIONS: the exception for ${shown} ${problem}`);
+  }
+}
+
+function sameResolution(
+  a: Readonly<Record<string, string>>,
+  b: Readonly<Record<string, string>>,
+): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
+  );
+}
+
+/**
+ * Whether `exception` accepts `problem` (R8-03): the same package and the
+ * failure it names, and for a package not from the registry the resolution
+ * locked (`resolution`) exactly. An integrity mismatch or a version the check
+ * could not verify is never accepted.
+ */
+function excepts(
+  exception: Exception,
+  problem: Failure,
+  resolution: Readonly<Record<string, string>> | undefined,
+): boolean {
+  if (problem.reason === "mismatch" || problem.reason === "unverified") return false;
+  if (exception.package !== problem.package || exception.accepts !== problem.reason) return false;
+  if (exception.accepts === "too_young") return true;
+  return resolution !== undefined && sameResolution(exception.resolution, resolution);
+}
+
 export async function checkReleaseAge(
   lockfile: string,
   options: CheckOptions = {},
@@ -810,6 +1137,7 @@ export async function checkReleaseAge(
   const attempts = Math.max(1, Math.floor(options.attempts ?? 3));
   const retryDelayMs = options.retryDelayMs ?? 1_000;
 
+  checkExceptions(exceptions);
   const packages = parseLockfile(lockfile);
   const pins = options.packageJson === undefined ? [] : parsePackageManager(options.packageJson);
   const wanted = new Map<string, Set<string>>();
@@ -864,9 +1192,9 @@ export async function checkReleaseAge(
     }
   }
 
-  const accepted = new Set(exceptions.map((exception) => exception.package));
+  const resolutions = new Map(packages.map((locked) => [locked.key, locked.resolution]));
   const isExcepted = (problem: Failure) =>
-    problem.reason !== "mismatch" && accepted.has(problem.package);
+    exceptions.some((exception) => excepts(exception, problem, resolutions.get(problem.package)));
   const failures = problems.filter((problem) => !isExcepted(problem)).sort(byPackage);
   const excepted = problems
     .filter(isExcepted)
@@ -887,12 +1215,24 @@ export async function checkReleaseAge(
 }
 
 export interface MainOptions extends CheckOptions {
-  /** The lockfile's text; by default pnpm-lock.yaml at the repository root. */
+  /** The checkout to check; by default the repository root. */
+  root?: string;
+  /** The lockfile's text; by default pnpm-lock.yaml under root. */
   lockfile?: string;
-  /** By default package.json at the repository root. */
+  /** By default package.json under root. */
   packageJson?: string;
   log?: (line: string) => void;
   error?: (line: string) => void;
+}
+
+const REPOSITORY = fileURLToPath(new URL("..", import.meta.url));
+
+function readText(root: string, name: string): string {
+  try {
+    return readFileSync(join(root, name), "utf8");
+  } catch (cause) {
+    throw new CheckError(`${name} cannot be read${errorCode(cause)}`);
+  }
 }
 
 const LABELS: Record<Failure["reason"], string> = {
@@ -907,16 +1247,20 @@ export async function main(options: MainOptions = {}): Promise<number> {
   const error = options.error ?? console.error;
   const now = options.now ?? new Date();
   const minAgeDays = options.minAgeDays ?? MIN_AGE_DAYS;
-  const lockfile =
-    options.lockfile ?? readFileSync(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
-  const packageJson =
-    options.packageJson ?? readFileSync(new URL("../package.json", import.meta.url), "utf8");
+  const root = options.root ?? REPOSITORY;
 
   let result: CheckResult;
   try {
+    const lockfile = options.lockfile ?? readText(root, "pnpm-lock.yaml");
+    const packageJson = options.packageJson ?? readText(root, "package.json");
+    // R8-01: config dependencies and settings that make pnpm read another
+    // lockfile or a pnpmfile are refused before anything is fetched.
+    parseWorkspace(readText(root, "pnpm-workspace.yaml"));
+    // R8-02: corepack and pnpm read these from the directory a command runs in.
+    checkCheckout(root);
     result = await checkReleaseAge(lockfile, { ...options, packageJson, now, minAgeDays });
   } catch (cause) {
-    if (!(cause instanceof LockfileError || cause instanceof PackageJsonError)) throw cause;
+    if (!(cause instanceof CheckError)) throw cause;
     error(`error: ${cause.message}`);
     return 1;
   }
