@@ -118,7 +118,7 @@ const POLICY_BYPASS = "56119f96-992c-402c-950b-8a6c76d6d9cf";
 const POLICY_HEALTH = "faa1737b-b574-4278-9075-43af1fa13beb";
 const GROUP_STAFF = "a30a625c-bfd9-453e-aed1-f299024f1314";
 
-const TUNNEL_EDGE = "958098ee-467d-4161-a056-47df6b3dd0d6";
+export const TUNNEL_EDGE = "958098ee-467d-4161-a056-47df6b3dd0d6";
 const TUNNEL_TEAM = "4c7d2b1e-8a3f-4e6d-9b5c-2f1a0e9d8c7b";
 const TUNNEL_DEBUG = "a1e5c9d3-7b2f-4a8e-b6d0-3c9f1e7a5b2d";
 const TUNNEL_OPS = "e8b2f6a4-1d9c-4e3b-a7f5-9d2c6b0e4a1f";
@@ -133,9 +133,32 @@ export const LONG_PATH_SHA256 = "995d65c317155455d894ec05327bc8d4eb8e91efedf35a0
 export interface AccountState {
   /** CF-021: the managed r2.dev domain of `public-assets` is enabled. */
   publicAssetsR2Dev: boolean;
+  /** R5-06: the edge tunnel's ingress has 1,000 more hostname rules. */
+  edgeIngressFlood: boolean;
 }
 
-export const initialState = (): AccountState => ({ publicAssetsR2Dev: true });
+export const initialState = (): AccountState => ({
+  publicAssetsR2Dev: true,
+  edgeIngressFlood: false,
+});
+
+/** Hostnames the flood adds to the edge tunnel, before its catch-all. */
+export const FLOOD_HOSTNAMES = 1000;
+
+/** A remotely managed tunnel configuration; the last ingress rule is the catch-all. */
+type TunnelConfig = { ingress: object[] } & Record<string, unknown>;
+
+/** The edge tunnel's configuration with FLOOD_HOSTNAMES more hostname rules. */
+function flooded(config: TunnelConfig) {
+  const extra = Array.from({ length: FLOOD_HOSTNAMES }, (_, i) => ({
+    hostname: `f${String(i).padStart(4, "0")}.example.com`,
+    service: "http://localhost:8080",
+  }));
+  return {
+    ...config,
+    ingress: [...config.ingress.slice(0, -1), ...extra, ...config.ingress.slice(-1)],
+  };
+}
 
 // Workers ---------------------------------------------------------------------
 
@@ -551,7 +574,7 @@ const originAccess = {
 };
 
 /** Remotely managed configurations by tunnel. */
-const TUNNEL_CONFIGS: Record<string, { name: string; config: object }> = {
+const TUNNEL_CONFIGS: Record<string, { name: string; config: TunnelConfig }> = {
   [TUNNEL_EDGE]: {
     name: "edge",
     config: {
@@ -856,8 +879,9 @@ export function fakeAccount(
     routes[`${base}/access/apps/${app.id}/policies`] = envelope(ranked, listInfo(ranked.length));
   }
   for (const [id, { config }] of Object.entries(TUNNEL_CONFIGS)) {
+    const served = id === TUNNEL_EDGE && state.edgeIngressFlood ? flooded(config) : config;
     routes[`${base}/cfd_tunnel/${id}/configurations`] = envelope(
-      tunnelConfig(accountId, id, config),
+      tunnelConfig(accountId, id, served),
     );
   }
   return { routes, graphql: trafficGraphql(trafficRows).handler };

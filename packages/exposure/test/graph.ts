@@ -175,12 +175,14 @@ export class Graph {
     hostname: string,
     path = "",
     service = "ssh://localhost:22",
-    { tunnelId = "tun-1", accessRequired = false, viaFallthrough = false } = {},
+    { tunnelId = "tun-1", accessRequired = false, viaFallthrough = false, truncated = false } = {},
   ): string {
+    // Every hostname of one tunnel must pass the same `truncated`: the last one wins.
     const tunnel = this.node("tunnel", tunnelId, "tunnel", {
       tunnel_type: "cfd_tunnel",
       status: "healthy",
       config_src: "cloudflare",
+      ingress_truncated: truncated,
     });
     const scheme = service.slice(0, service.indexOf(":"));
     const id = this.node("tunnel_hostname", `${tunnelId}:${hostname}:${path}`, hostname, {

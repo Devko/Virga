@@ -101,6 +101,8 @@ export interface GraphInput {
   groups: Map<string, GraphNode>;
   /** Access app ID to `ALLOWS` edges pointing at it. */
   allows: Map<string, GraphEdge[]>;
+  /** Tunnel node IDs whose entry points the collector did not all emit (`ingress_truncated`). */
+  truncatedTunnels: Set<string>;
 }
 
 const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
@@ -158,6 +160,12 @@ export function readGraph(db: SqlRunner): GraphInput {
   const allows = new Map<string, GraphEdge[]>();
   for (const e of edges(db, "ALLOWS")) push(allows, e.dst, e);
 
+  const truncatedTunnels = new Set(
+    nodes(db, ["tunnel"])
+      .filter((t) => t.props.ingress_truncated === true)
+      .map((t) => t.id),
+  );
+
   const byId = (list: GraphNode[]) => new Map(list.map((n) => [n.id, n]));
   return {
     accessCoverage,
@@ -170,5 +178,6 @@ export function readGraph(db: SqlRunner): GraphInput {
     policies: byId(nodes(db, ["access_policy"])),
     groups: byId(nodes(db, ["access_group"])),
     allows,
+    truncatedTunnels,
   };
 }

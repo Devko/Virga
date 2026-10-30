@@ -1,4 +1,4 @@
-import { sha256 } from "@virga/graph";
+import { nodeId, sha256 } from "@virga/graph";
 import {
   chunk,
   GraphBuilder,
@@ -33,7 +33,14 @@ interface CfTunnelConfig {
 }
 
 const TUNNEL_TYPES = ["cfd_tunnel", "warp_connector"];
-const TUNNELS_PER_CHUNK = 25;
+/**
+ * Rules without a hostname are expanded per hostname, so one tunnel's
+ * ingress can describe about a million entry points in 96 KB (review R5-06).
+ * Past this many the tunnel is marked `ingress_truncated`.
+ */
+export const MAX_HOSTNAMES_PER_TUNNEL = 1000;
+// At most 10,000 tunnel_hostname nodes per chunk.
+const TUNNELS_PER_CHUNK = 10;
 const TUNNELS_PER_PAGE = 1000;
 
 function listTunnels(ctx: CollectorContext): Promise<CfTunnel[]> {
@@ -143,12 +150,14 @@ export const tunnelsCollector: Collector<string> = {
       const type = str(tunnel.tun_type);
       // Mesh nodes have no ingress configuration.
       const src = type === "warp_connector" ? null : configSource(tunnel);
-      const tunnelId = g.node("tunnel", id, displayName(tunnel.name), {
+      const truncated =
+        src === "cloudflare" && (await collectIngress(ctx, id, nodeId("tunnel", id), g));
+      g.node("tunnel", id, displayName(tunnel.name), {
         tunnel_type: type,
         status: str(tunnel.status),
         config_src: src,
+        ingress_truncated: truncated,
       });
-      if (src === "cloudflare") await collectIngress(ctx, id, tunnelId, g);
     }
     return g.output();
   },
@@ -217,13 +226,19 @@ function hostnameIds(tunnelId: string): (hostname: string, path: string) => Prom
  * path), so each hostname and path has one node whatever the rule's
  * position. Hostnames that only DNS sends to the tunnel stay unknown to the
  * collector.
+ *
+ * Returns true when the ingress has more than MAX_HOSTNAMES_PER_TUNNEL entry
+ * points; those past the limit are not emitted (review R5-06). The work is
+ * linear in the number of rules: a rule without a hostname visits only the
+ * hostnames no earlier rule took whole, and a path such a rule took is never
+ * expanded again.
  */
 async function collectIngress(
   ctx: CollectorContext,
   id: string,
   tunnelNode: string,
   g: GraphBuilder,
-): Promise<void> {
+): Promise<boolean> {
   const path = `/accounts/${ctx.accountId}/cfd_tunnel/${id}/configurations`;
   const result = await unlessGone(ctx.api.get<CfTunnelConfig | null>(path));
   const config = isObject(result?.config) ? result.config : {};
@@ -236,8 +251,12 @@ async function collectIngress(
   // Hostname and path pairs that a hostname rule took.
   const takenPairs = new Set<string>();
   const pair = (hostname: string, path: string) => JSON.stringify([hostname, path]);
+  let count = 0;
 
-  const emit = async (rule: IngressRule, hostname: string) => {
+  /** False, and nothing emitted, when the tunnel already has its maximum. */
+  const emit = async (rule: IngressRule, hostname: string): Promise<boolean> => {
+    if (count === MAX_HOSTNAMES_PER_TUNNEL) return false;
+    count++;
     const nativeId = await nextId(hostname, rule.path);
     const hostId = g.node("tunnel_hostname", nativeId, displayName(hostname), {
       hostname,
@@ -249,6 +268,7 @@ async function collectIngress(
       via_fallthrough: rule.hostname === null,
     });
     g.edge("ROUTES_TO", hostId, tunnelNode);
+    return true;
   };
 
   for (const rule of rules) {
@@ -258,15 +278,18 @@ async function collectIngress(
       if (!open.has(rule.hostname) || takenPairs.has(key)) continue;
       takenPairs.add(key);
       if (rule.path === "") open.delete(rule.hostname);
-      await emit(rule, rule.hostname);
+      if (!(await emit(rule, rule.hostname))) return true;
       continue;
     }
     if (originScheme(rule.service) !== "http_status") {
       for (const hostname of open) {
-        if (!takenPairs.has(pair(hostname, rule.path))) await emit(rule, hostname);
+        if (takenPairs.has(pair(hostname, rule.path))) continue;
+        if (!(await emit(rule, hostname))) return true;
       }
     }
+    // A rule without a hostname or path takes every request: none after it applies.
+    if (rule.path === "") break;
     takenPaths.add(rule.path);
-    if (rule.path === "") open.clear();
   }
+  return false;
 }

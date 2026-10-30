@@ -739,6 +739,49 @@ const cases: Case[] = [
     ],
   },
   {
+    name: "R5-06: every entry point of a tunnel whose ingress was truncated is unknown",
+    build: (g) => {
+      // The collector stopped at its limit, so rules that take requests
+      // before these entry points may be missing.
+      const big = { tunnelId: "tun-big", truncated: true };
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", big);
+      g.tunnelHostname("app.example.com", "^/admin", "http://localhost:9000", {
+        ...big,
+        accessRequired: true,
+      });
+      g.tunnelHostname("web.example.com", "", "http://localhost:8080", {
+        ...big,
+        viaFallthrough: true,
+      });
+      allowApp(g, "web", [host("web.example.com")]);
+      // Another tunnel that serves the same hostname is decided as before.
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { tunnelId: "tun-1" });
+    },
+    expect: [
+      [TH("app.example.com", "^/admin", "tun-big"), "/admin*", "unknown", 0, "tunnel:tun-big"],
+      [TH("ssh.example.com", "", "tun-1"), "/", "public", 2, null],
+      [TH("ssh.example.com", "", "tun-big"), "/", "unknown", 0, "tunnel:tun-big"],
+      [TH("web.example.com", "", "tun-big"), "/", "unknown", 0, "tunnel:tun-big"],
+    ],
+  },
+  {
+    name: "R5-06: a tunnel that is not truncated, or whose flag is not true, is evaluated",
+    build: (g) => {
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { truncated: false });
+      g.tunnelHostname("git.example.com", "", "ssh://localhost:22", { tunnelId: "tun-2" });
+      g.node("tunnel", "tun-2", "tunnel", {
+        tunnel_type: "cfd_tunnel",
+        status: "healthy",
+        config_src: "cloudflare",
+        ingress_truncated: "true",
+      });
+    },
+    expect: [
+      [TH("git.example.com", "", "tun-2"), "/", "public", 2, null],
+      [TH("ssh.example.com"), "/", "public", 2, null],
+    ],
+  },
+  {
     name: "a tunnel hostname that requires an Access token stays unknown where Access is undecided",
     build: (g) => {
       g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { accessRequired: true });

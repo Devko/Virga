@@ -78,7 +78,7 @@ const hostProps = (
 });
 
 describe("tunnels collector", () => {
-  it("lists cfd tunnels and Mesh nodes that are not deleted, in chunks of 25", async () => {
+  it("lists cfd tunnels and Mesh nodes that are not deleted, in chunks of 10", async () => {
     const { chunks, calls, output } = await run(tunnelsCollector, routes);
     expect(chunks).toEqual([[BLOG, LOCAL, LEGACY, MESH].sort()]);
     expect(calls[0]).toBe(
@@ -98,22 +98,28 @@ describe("tunnels collector", () => {
     const plan = await tunnelsCollector.plan(ctx);
     expect(transport.calls.map((c) => /page=(\d+)/.exec(c)?.[1])).toEqual(["1", "2"]);
     expect(plan.flat()).toHaveLength(1001);
-    expect(plan.map((c) => c.length).slice(-2)).toEqual([25, 1]);
+    expect(plan.map((c) => c.length).slice(-2)).toEqual([10, 1]);
   });
 
   it("emits tunnel nodes with the contract props", async () => {
     const { output } = await run(tunnelsCollector, routes);
-    expectProps(output, "tunnel", ["tunnel_type", "status", "config_src"]);
+    expectProps(output, "tunnel", ["tunnel_type", "status", "config_src", "ingress_truncated"]);
     expect(node(output, `tunnel:${BLOG}`)).toEqual({
       type: "tunnel",
       nativeId: BLOG,
       name: "blog",
-      props: { tunnel_type: "cfd_tunnel", status: "healthy", config_src: "cloudflare" },
+      props: {
+        tunnel_type: "cfd_tunnel",
+        status: "healthy",
+        config_src: "cloudflare",
+        ingress_truncated: false,
+      },
     });
     expect(node(output, `tunnel:${LOCAL}`).props).toEqual({
       tunnel_type: "cfd_tunnel",
       status: "down",
       config_src: "local",
+      ingress_truncated: false,
     });
     // Falls back to the deprecated remote_config flag.
     expect(node(output, `tunnel:${LEGACY}`).props?.config_src).toBe("cloudflare");
@@ -121,7 +127,12 @@ describe("tunnels collector", () => {
       type: "tunnel",
       nativeId: MESH,
       name: "branch-office",
-      props: { tunnel_type: "warp_connector", status: "degraded", config_src: null },
+      props: {
+        tunnel_type: "warp_connector",
+        status: "degraded",
+        config_src: null,
+        ingress_truncated: false,
+      },
     });
   });
 
@@ -485,6 +496,85 @@ describe("tunnels collector", () => {
       ]),
     ).toEqual({
       [await pairHash(hostname, "")]: hostProps(hostname, "", "ssh://localhost:22", false, false),
+    });
+  });
+
+  describe("R5-06: at most 1,000 entry points per tunnel", () => {
+    const pathRules = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ path: `^/p${i}`, service: "http://localhost:8080" }));
+    const hostRules = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        hostname: `h${i}.example.com`,
+        service: "http://localhost:8081",
+      }));
+
+    /** The blog tunnel's hostname node count and its ingress_truncated. */
+    async function blogIngress(ingress: object[]) {
+      const { output } = await run(tunnelsCollector, withBlogConfig({ ingress }));
+      const hostnames = output.nodes.filter(
+        (n) => n.type === "tunnel_hostname" && n.props?.tunnel_id === BLOG,
+      );
+      const routes = output.edges.filter(
+        (e) => e.type === "ROUTES_TO" && e.dst === `tunnel:${BLOG}`,
+      );
+      expect(routes).toHaveLength(hostnames.length);
+      // The other tunnel of the chunk is collected as before.
+      expect(node(output, `tunnel:${LEGACY}`).props?.ingress_truncated).toBe(false);
+      expect(nodeIds(output, "tunnel_hostname")).toContain(legacyHost("wiki.example.com"));
+      return {
+        count: hostnames.length,
+        truncated: node(output, `tunnel:${BLOG}`).props?.ingress_truncated,
+        ids: hostnames.map((n) => n.nativeId.slice(BLOG.length + 1)),
+      };
+    }
+
+    it("R5-06: stops at 1,000 for the review's 96 KB configuration and marks the tunnel", async () => {
+      // Case 1 of the review: 1,000 path-only and 1,000 hostname rules gave 1,001,001 nodes.
+      const ingress = [...pathRules(1000), ...hostRules(1000), { service: "http_status:404" }];
+      expect(JSON.stringify(ingress).length).toBeGreaterThan(95_000);
+      const started = Date.now();
+      const { count, truncated, ids } = await blogIngress(ingress);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(count).toBe(1000);
+      expect(truncated).toBe(true);
+      // Rule order, then hostnames in sorted order: the first path-only rule
+      // reaches all 1,000 hostnames.
+      expect(ids.every((id) => id.endsWith(":^/p0"))).toBe(true);
+    });
+
+    it("R5-06: marks the review's 200 by 200 configuration truncated", async () => {
+      // Case 2 of the review: 40,201 nodes.
+      const ingress = [...pathRules(200), ...hostRules(200), { service: "http_status:404" }];
+      expect(await blogIngress(ingress)).toMatchObject({ count: 1000, truncated: true });
+    });
+
+    it("R5-06: is not truncated at exactly 1,000 entry points, and is at 1,001", async () => {
+      const at = await blogIngress([...hostRules(1000), { service: "http_status:404" }]);
+      expect(at).toMatchObject({ count: 1000, truncated: false });
+      const over = await blogIngress([...hostRules(1001), { service: "http_status:404" }]);
+      expect(over).toMatchObject({ count: 1000, truncated: true });
+    });
+
+    it("R5-06: does not count rules that yield no node, and stops expanding after a catch-all", async () => {
+      // Status-code rules without a hostname, shadowed rules and rules after a
+      // catch-all origin yield nothing, however many there are.
+      const blocked = Array.from({ length: 5000 }, (_, i) => ({
+        path: `^/b${i}`,
+        service: "http_status:403",
+      }));
+      const ingress = [
+        ...hostRules(999),
+        ...blocked,
+        { hostname: "h0.example.com", service: "http://localhost:9" },
+        { service: "http://localhost:8080" },
+        ...pathRules(5000),
+      ];
+      const { count, truncated, ids } = await blogIngress(ingress);
+      // The hostname rules take every path of their hostnames, so the
+      // catch-all origin and the path rules after it reach none of them.
+      expect(count).toBe(999);
+      expect(truncated).toBe(false);
+      expect(ids.every((id) => id.endsWith(".example.com:"))).toBe(true);
     });
   });
 

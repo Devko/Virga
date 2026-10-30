@@ -17,6 +17,7 @@ import {
   type AccountState,
   CLEAN,
   EXPOSURE,
+  FLOOD_HOSTNAMES,
   fakeAccount,
   initialState,
   LONG_PATH,
@@ -26,6 +27,7 @@ import {
   type Routes,
   SECRET_VALUES,
   SEEDED,
+  TUNNEL_EDGE,
   tunnelHostname,
 } from "./account.ts";
 
@@ -88,6 +90,7 @@ let state: AccountState;
 let first: Snapshot;
 let second: Snapshot;
 let third: Snapshot;
+let fourth: Snapshot;
 
 async function scan(name: string, now: number): Promise<Snapshot> {
   const scanId = `${name}-${accountId}`;
@@ -175,6 +178,8 @@ beforeAll(async () => {
   second = await scan("unchanged", NOW + DAY);
   state.publicAssetsR2Dev = false;
   third = await scan("r2-dev-off", NOW + 2 * DAY);
+  state.edgeIngressFlood = true;
+  fourth = await scan("ingress-flood", NOW + 3 * DAY);
 }, 60_000);
 
 describe("every scan", () => {
@@ -187,7 +192,7 @@ describe("every scan", () => {
   });
 
   it("only reads, and only paths that the fake account serves", () => {
-    for (const s of [first, second, third]) {
+    for (const s of [first, second, third, fourth]) {
       expect(s.calls.length, s.scanId).toBeGreaterThan(0);
       for (const call of s.calls) expect(call).toMatch(/^(GET \/|POST \/graphql$)/);
       expect(s.calls).toContain("POST /graphql");
@@ -214,7 +219,7 @@ describe("every scan", () => {
       );
       stored.push(...rows.map((r) => r.text ?? ""));
     }
-    const steps = [first, second, third].map((s) => s.stepResults).join("\n");
+    const steps = [first, second, third, fourth].map((s) => s.stepResults).join("\n");
     for (const secret of SECRET_VALUES) {
       expect(stored.filter((text) => text.includes(secret))).toEqual([]);
       expect(steps.includes(secret)).toBe(false);
@@ -241,7 +246,11 @@ describe("first scan of the seeded account", () => {
               props ->> '$.tunnel_id' AS tunnel
        FROM nodes WHERE type = 'tunnel_hostname' AND deleted_at IS NULL ORDER BY id`,
     );
-    expect(rows.map((r) => r.hostname).sort()).toEqual([
+    // The graph is read after every scan: the fourth adds f0000.example.com and on.
+    const flood = /^f\d{4}\.example\.com$/;
+    expect(rows.filter((r) => flood.test(r.hostname))).toHaveLength(997);
+    const seeded = rows.filter((r) => !flood.test(r.hostname));
+    expect(seeded.map((r) => r.hostname).sort()).toEqual([
       "app.example.com",
       "dash.example.com",
       "dash.example.com",
@@ -469,5 +478,68 @@ describe("third scan, after r2.dev is turned off on public-assets", () => {
     expect(third.exposure).toEqual(
       first.exposure.filter((r) => r.entry_id !== `r2_public_domain:${R2_DEV_HOST}`),
     );
+  });
+});
+
+describe("fourth scan, after the edge tunnel's ingress grows past 1,000 entry points", () => {
+  const edge = `tunnel:${TUNNEL_EDGE}`;
+  const ssh = tunnelHostname(TUNNEL_EDGE, "ssh.example.com");
+
+  it("R5-06: completes the tunnels class with 1,000 entry points and marks the tunnel", async () => {
+    expect(fourth.summary.status).toBe("complete");
+    expect(fourth.summary.classes.tunnels).toMatchObject({ status: "complete" });
+    const [tunnel] = await sql<{ truncated: number }>(
+      stub,
+      "SELECT props ->> '$.ingress_truncated' AS truncated FROM nodes WHERE id = ?",
+      edge,
+    );
+    expect(tunnel?.truncated).toBe(1);
+    const [count] = await sql<{ n: number }>(
+      stub,
+      `SELECT count(*) AS n FROM edges e JOIN nodes h ON h.id = e.src AND h.deleted_at IS NULL
+       WHERE e.type = 'ROUTES_TO' AND e.dst = ? AND e.deleted_at IS NULL`,
+      edge,
+    );
+    // Three rules of its own and the flood: the last three hostnames are left out.
+    expect(count?.n).toBe(1000);
+    expect(FLOOD_HOSTNAMES + 3).toBeGreaterThan(1000);
+    const others = await sql<{ truncated: number }>(
+      stub,
+      `SELECT props ->> '$.ingress_truncated' AS truncated FROM nodes
+       WHERE type = 'tunnel' AND id <> ? AND deleted_at IS NULL`,
+      edge,
+    );
+    expect(others.map((t) => t.truncated)).toEqual(others.map(() => 0));
+  });
+
+  it("R5-06: decides every entry point of that tunnel unknown, and the others as before", async () => {
+    const entries = new Set(
+      (
+        await sql<{ src: string }>(
+          stub,
+          "SELECT src FROM edges WHERE type = 'ROUTES_TO' AND dst = ? AND deleted_at IS NULL",
+          edge,
+        )
+      ).map((r) => r.src),
+    );
+    const ofEdge = fourth.exposure.filter((r) => entries.has(r.entry_id));
+    expect(ofEdge).toHaveLength(1000);
+    for (const r of ofEdge) {
+      expect(r).toMatchObject({ decision: "unknown", confidence: 0, reason_id: edge });
+    }
+    expect(fourth.exposure.filter((r) => !entries.has(r.entry_id))).toEqual(
+      third.exposure.filter((r) => !entries.has(r.entry_id)),
+    );
+  });
+
+  it("R5-06: keeps the open CF-004 finding of the SSH hostname open and opens nothing", () => {
+    expect(fourth.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
+    expect(fourth.findings).toEqual(third.findings);
+    expect(byFingerprint(fourth, `CF-004:${ssh}`)).toMatchObject({ status: "open" });
+    // Every entry point of the tunnel but its status-code rule is undecided.
+    expect(fourth.ruleRuns.find((r) => r.rule_id === "CF-004")).toMatchObject({
+      status: "evaluated",
+      undecided: 999,
+    });
   });
 });
