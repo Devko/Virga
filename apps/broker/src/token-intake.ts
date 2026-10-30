@@ -187,8 +187,16 @@ export class TokenIntake extends WorkerEntrypoint<BrokerEnv> {
     }
   }
 
+  /**
+   * Offboarding: deletes the stored token, then clears the account's rate
+   * budget. `removed` says whether a token was stored. Idempotent, so a retry
+   * after a failure finishes the job; a failure throws.
+   */
   async remove(accountId: string): Promise<{ removed: boolean }> {
     if (typeof accountId !== "string" || !ACCOUNT_ID.test(accountId)) return { removed: false };
-    return { removed: await deleteToken(this.env.VAULT, accountId) };
+    const removed = await deleteToken(this.env.VAULT, accountId);
+    const budgets = this.env.RATE_BUDGET;
+    await budgets.get(budgets.idFromName(accountId)).clear();
+    return { removed };
   }
 }
