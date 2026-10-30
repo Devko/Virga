@@ -113,7 +113,8 @@ v6_text AS MATERIALIZED (
       SELECT a.token_id, a.entry_key,
              CASE
                WHEN instr(a.tail, '.') = 0 THEN a.address
-               WHEN q.v4 IS NOT NULL
+               -- the IPv4 part follows a colon, or a hex digit would join it
+               WHEN q.v4 IS NOT NULL AND a.address GLOB ('*:' || a.tail)
                  THEN substr(a.address, 1, length(a.address) - length(a.tail))
                       || printf('%x:%x', q.v4 >> 16, q.v4 & 65535)
              END AS h

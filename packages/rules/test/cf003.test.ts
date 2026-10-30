@@ -136,6 +136,7 @@ describe("R4-06: CF-003 reads every spelling of an IPv4-mapped range", () => {
     ["three colons", "2001:db8:::1/128"],
     ["an IPv4 part of three octets", "::ffff:1.2.3/120"],
     ["an IPv4 part that is not last", "::ffff:1.2.3.4:5/120"],
+    ["a hex digit glued to the IPv4 part", "::ffff:a1.2.3.4/120"],
     ["a zone", "fe80::1%eth0/128"],
     ["a quote", '2001:db8::"/48'],
     ["an octet above 255", "256.0.0.0/8"],
