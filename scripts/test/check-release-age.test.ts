@@ -7,7 +7,9 @@ import {
   EXCEPTIONS,
   LockfileError,
   main,
+  PackageJsonError,
   parseLockfile,
+  parsePackageManager,
 } from "../check-release-age.ts";
 import { REPO_ROOT } from "./helpers.ts";
 
@@ -286,6 +288,7 @@ describe("R6-03: the lockfile is read strictly", () => {
       const { fetch } = mockFetch(REVIEW_REGISTRY);
       const code = await main({
         lockfile: reviewLayout(layout),
+        packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
         fetch,
         now: NOW,
         exceptions: [],
@@ -527,7 +530,7 @@ describe("R6-03: the locked integrity is the one the registry publishes", () => 
         package: "a@1.0.0",
         reason: "mismatch",
         detail:
-          "the lockfile's integrity is not the sha512 digest the registry publishes for this version, so pnpm would install other bytes than the version checked",
+          "the lockfile's integrity is not the sha512 digest the registry publishes for this version, so the bytes installed would not be the version checked",
       },
     ]);
     expect(result.excepted).toEqual([]);
@@ -782,6 +785,225 @@ describe("checkReleaseAge", () => {
   });
 });
 
+/** A package.json with the given fields. */
+const manifest = (fields: Record<string, unknown>) =>
+  JSON.stringify({ name: "virga", private: true, ...fields }, null, 2);
+
+const PNPM_INTEGRITY =
+  "sha512-Bd9x0UIfITmeBT/eVnzqNNRG+gLHZXFEG/wceVbpjjYwiJgtlARl/TRIDU2QoGaLwSNi+KqIAApk6D0LDke+SA==";
+/** The corepack form of PNPM_INTEGRITY: `pnpm@10.28.0+sha512.<hex>`. */
+const PNPM_SHA512 = Buffer.from(PNPM_INTEGRITY.slice("sha512-".length), "base64").toString("hex");
+
+/** pnpm as the registry lists it: 10.28.0 from January, 10.34.9 from five days before NOW. */
+const PNPM_REGISTRY: Registry = {
+  pnpm: () =>
+    Response.json(
+      registryDocument(
+        "pnpm",
+        { "10.28.0": "2026-01-09T23:05:04.751Z", "10.34.9": "2026-10-25T17:54:00.000Z" },
+        { "10.28.0": { integrity: PNPM_INTEGRITY } },
+      ),
+    ),
+};
+
+describe("R6-04: the pnpm version package.json pins", () => {
+  const refuses = (text: string, message: RegExp) => {
+    expect(() => parsePackageManager(text)).toThrow(PackageJsonError);
+    expect(() => parsePackageManager(text)).toThrow(message);
+  };
+  const check = (packageJson: string, extra: Partial<CheckOptions> = {}) => {
+    const { fetch } = mockFetch(PNPM_REGISTRY);
+    return checkReleaseAge(lockfile([]), options(fetch, { packageJson, ...extra }));
+  };
+
+  it("R6-04: reads the exact version in packageManager, with or without a sha512 hash", () => {
+    expect(parsePackageManager(manifest({ packageManager: "pnpm@10.28.0" }))).toEqual([
+      { field: "packageManager", version: "10.28.0" },
+    ]);
+    expect(
+      parsePackageManager(manifest({ packageManager: `pnpm@10.28.0+sha512.${PNPM_SHA512}` })),
+    ).toEqual([{ field: "packageManager", version: "10.28.0", sha512: PNPM_SHA512 }]);
+  });
+
+  it("R6-04: reads devEngines.packageManager as one entry or a list", () => {
+    const one = manifest({
+      packageManager: "pnpm@10.28.0",
+      devEngines: { packageManager: { name: "pnpm", version: "10.34.9", onFail: "download" } },
+    });
+    expect(parsePackageManager(one)).toEqual([
+      { field: "packageManager", version: "10.28.0" },
+      { field: "devEngines.packageManager", version: "10.34.9" },
+    ]);
+    const list = manifest({
+      packageManager: "pnpm@10.28.0",
+      devEngines: {
+        runtime: { name: "node" },
+        packageManager: [{ name: "pnpm", version: "10.28.0" }],
+      },
+    });
+    expect(parsePackageManager(list)).toEqual([
+      { field: "packageManager", version: "10.28.0" },
+      { field: "devEngines.packageManager", version: "10.28.0" },
+    ]);
+  });
+
+  it("R6-04: refuses a packageManager without an exact pnpm version, and says why", () => {
+    refuses(manifest({}), /names no packageManager; CI \(pnpm\/action-setup\) and corepack/);
+    refuses(manifest({ packageManager: 10 }), /names no packageManager/);
+    refuses(manifest({ packageManager: "yarn@4.5.0" }), /"yarn@4\.5\.0", not pnpm/);
+    for (const version of ["^10.28.0", "10", "latest", "10.28.x", "https://example.com/pnpm.tgz"]) {
+      refuses(
+        manifest({ packageManager: `pnpm@${version}` }),
+        /packageManager names pnpm ".*", not an exact version, so the check cannot date the pnpm that runs/,
+      );
+    }
+    refuses("{", /package\.json is not valid JSON/);
+    refuses("[]", /package\.json is not a JSON object/);
+  });
+
+  it("R6-04: refuses a hash it cannot compare with the registry, and says why", () => {
+    for (const hash of [
+      "sha256.6b9dfa2f0b8bd45d7d0f5d18a2a59c95a1b6e3d1a2a8a9a87e6e0e1e9a0d7e3a",
+      "sha224.abc",
+      `sha512.${PNPM_SHA512.slice(2)}`,
+      `sha512.${PNPM_SHA512}zz`,
+    ]) {
+      refuses(
+        manifest({ packageManager: `pnpm@10.28.0+${hash}` }),
+        /pins pnpm 10\.28\.0 with the hash ".*", which the check cannot compare: the registry publishes a sha512 digest for each version/,
+      );
+    }
+  });
+
+  it("R6-04: refuses devEngines.packageManager without an exact pnpm version", () => {
+    const withEngines = (packageManager: unknown) =>
+      manifest({ packageManager: "pnpm@10.28.0", devEngines: { packageManager } });
+    refuses(
+      withEngines({ name: "pnpm", version: "^10.0.0" }),
+      /devEngines\.packageManager names pnpm "\^10\.0\.0", not an exact version/,
+    );
+    refuses(withEngines({ name: "pnpm" }), /devEngines\.packageManager gives no pnpm version/);
+    refuses(
+      withEngines({ name: "yarn", version: "4.5.0" }),
+      /devEngines\.packageManager has an entry that does not name pnpm/,
+    );
+    refuses(
+      withEngines([
+        { name: "pnpm", version: "10.28.0" },
+        { name: "npm", version: "11.0.0" },
+      ]),
+      /does not name pnpm/,
+    );
+    refuses(withEngines("pnpm@10.28.0"), /does not name pnpm/);
+    refuses(
+      manifest({ packageManager: "pnpm@10.28.0", devEngines: [] }),
+      /devEngines is not an object/,
+    );
+  });
+
+  it("R6-04: fails a pnpm in packageManager published 5 days ago", async () => {
+    // The review's scenario: pnpm@10.34.9, published 2026-10-25T17:54Z.
+    const result = await check(manifest({ packageManager: "pnpm@10.34.9" }));
+    expect(result.failures).toEqual([
+      {
+        package: "pnpm@10.34.9",
+        reason: "too_young",
+        detail: "packageManager in package.json: published 2026-10-25T17:54:00.000Z, 4.8 days ago",
+      },
+    ]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("R6-04: fails a young pnpm in devEngines.packageManager", async () => {
+    const result = await check(
+      manifest({
+        packageManager: "pnpm@10.28.0",
+        devEngines: { packageManager: { name: "pnpm", version: "10.34.9" } },
+      }),
+    );
+    expect(result.failures).toMatchObject([
+      {
+        package: "pnpm@10.34.9",
+        reason: "too_young",
+        detail: expect.stringMatching(/^devEngines\.packageManager in package\.json: published/),
+      },
+    ]);
+    expect(result.checked).toBe(2);
+  });
+
+  it("R6-04: passes an old pnpm and a sha512 hash that is the registry's", async () => {
+    const plain = await check(manifest({ packageManager: "pnpm@10.28.0" }));
+    expect(plain).toMatchObject({ checked: 1, failures: [] });
+    const hashed = await check(manifest({ packageManager: `pnpm@10.28.0+sha512.${PNPM_SHA512}` }));
+    expect(hashed).toMatchObject({ checked: 1, failures: [] });
+  });
+
+  it("R6-04: fails a sha512 hash that is not the registry's", async () => {
+    const other = `${PNPM_SHA512.slice(0, -2)}00`;
+    const result = await check(manifest({ packageManager: `pnpm@10.28.0+sha512.${other}` }));
+    expect(result.failures).toMatchObject([
+      {
+        package: "pnpm@10.28.0",
+        reason: "mismatch",
+        detail: expect.stringMatching(
+          /^packageManager in package\.json: the hash in packageManager is not the sha512 digest the registry publishes/,
+        ),
+      },
+    ]);
+  });
+
+  it("R6-04: the exception list applies to the pnpm version", async () => {
+    const result = await check(manifest({ packageManager: "pnpm@10.34.9" }), {
+      exceptions: [{ package: "pnpm@10.34.9", reason: "security fix" }],
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.excepted).toMatchObject([{ package: "pnpm@10.34.9" }]);
+  });
+
+  it("R6-04: main exits 1 for a young pnpm and for a packageManager it cannot check", async () => {
+    const run = async (packageJson: string) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const { fetch } = mockFetch(PNPM_REGISTRY);
+      const code = await main({
+        lockfile: lockfile([]),
+        packageJson,
+        fetch,
+        now: NOW,
+        exceptions: [],
+        log: (line) => out.push(line),
+        error: (line) => err.push(line),
+      });
+      return { code, out, err };
+    };
+    const young = await run(manifest({ packageManager: "pnpm@10.34.9" }));
+    expect(young.code).toBe(1);
+    expect(young.err[0]).toBe(
+      "too young: pnpm@10.34.9 (packageManager in package.json: published 2026-10-25T17:54:00.000Z, 4.8 days ago)",
+    );
+    const range = await run(manifest({ packageManager: "pnpm@^10.28.0" }));
+    expect(range.code).toBe(1);
+    expect(range.err).toEqual([
+      expect.stringMatching(/^error: package\.json packageManager names pnpm/),
+    ]);
+    const ok = await run(manifest({ packageManager: "pnpm@10.28.0" }));
+    expect(ok).toEqual({
+      code: 0,
+      out: [
+        "ok: all 0 locked package versions and pnpm 10.28.0 (packageManager) were published at least 14 days before 2026-10-30T12:00:00.000Z",
+      ],
+      err: [],
+    });
+  });
+
+  it("R6-04: the repository pins an exact pnpm in packageManager", () => {
+    const pins = parsePackageManager(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+    expect(pins).toEqual([
+      { field: "packageManager", version: expect.stringMatching(/^\d+\.\d+\.\d+$/) },
+    ]);
+  });
+});
+
 describe("EXCEPTIONS", () => {
   it("names exact versions and says why", () => {
     for (const exception of EXCEPTIONS) {
@@ -836,9 +1058,10 @@ describe("main", () => {
   const run = async (registry: Registry, entries: string[]) => {
     const out: string[] = [];
     const err: string[] = [];
-    const { fetch } = mockFetch(registry);
+    const { fetch } = mockFetch({ ...PNPM_REGISTRY, ...registry });
     const code = await main({
       lockfile: lockfile(entries),
+      packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
       fetch,
       now: NOW,
       exceptions: [],
@@ -857,7 +1080,7 @@ describe("main", () => {
     expect(code).toBe(1);
     expect(err).toEqual([
       "too young: a@1.0.0 (published 2026-10-27T12:00:00.000Z, 3.0 days ago)",
-      "error: 1 of 2 locked package versions fail the 14-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts",
+      "error: 1 of 3 package versions fail the 14-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts",
     ]);
   });
 
@@ -866,7 +1089,7 @@ describe("main", () => {
     expect(code).toBe(0);
     expect(err).toEqual([]);
     expect(out).toEqual([
-      "ok: all 1 locked package versions were published at least 14 days before 2026-10-30T12:00:00.000Z",
+      "ok: all 1 locked package versions and pnpm 10.28.0 (packageManager) were published at least 14 days before 2026-10-30T12:00:00.000Z",
     ]);
   });
 });

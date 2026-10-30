@@ -1,13 +1,15 @@
 // Usage: node scripts/check-release-age.ts
 //
-// Checks that every package version in pnpm-lock.yaml was published to the
-// npm registry at least 14 days ago (R4-07). minimumReleaseAge in
-// pnpm-workspace.yaml applies only when pnpm resolves a version; an install
-// from the lockfile, as in CI, takes whatever the lockfile holds. A version the
-// check cannot date (not from the registry, no publish time, registry error)
-// fails too, and so does a locked integrity that is not the registry's digest
-// for the version dated (R6-03). Needs network access to registry.npmjs.org and
-// nothing else.
+// Checks that every package version in pnpm-lock.yaml (R4-07), and the pnpm
+// version package.json pins in packageManager and devEngines.packageManager
+// (R6-04), was published to the npm registry at least 14 days ago.
+// minimumReleaseAge in pnpm-workspace.yaml applies only when pnpm resolves a
+// version; an install from the lockfile, as in CI, takes whatever the lockfile
+// holds, and pnpm/action-setup and corepack run whatever packageManager names.
+// A version the check cannot date (not from the registry, no publish time,
+// registry error) fails too, and so does a locked integrity that is not the
+// registry's digest for the version dated (R6-03). Needs network access to
+// registry.npmjs.org and nothing else; CI runs it before anything is installed.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
@@ -507,7 +509,86 @@ export function parseLockfile(text: string): LockedPackage[] {
   return packages;
 }
 
+export class PackageJsonError extends Error {}
+
+export interface PackageManagerPin {
+  /** Where package.json names the version. */
+  field: "packageManager" | "devEngines.packageManager";
+  version: string;
+  /** The hex digest of a corepack hash (`pnpm@10.28.0+sha512.<hex>`), compared with the registry's. */
+  sha512?: string;
+}
+
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** An exact pnpm version, with the corepack hash after `+` if there is one. */
+function pnpmPin(field: PackageManagerPin["field"], value: string): PackageManagerPin {
+  const plus = value.indexOf("+");
+  const version = plus < 0 ? value : value.slice(0, plus);
+  if (!EXACT_VERSION.test(version)) {
+    throw new PackageJsonError(
+      `package.json ${field} names pnpm ${preview(version)}, not an exact version, so the check cannot date the pnpm that runs; pin an exact version such as 10.28.0`,
+    );
+  }
+  if (plus < 0) return { field, version };
+  const hash = value.slice(plus + 1);
+  const sha512 = /^sha512\.([0-9a-f]{128})$/i.exec(hash)?.[1];
+  if (sha512 === undefined) {
+    throw new PackageJsonError(
+      `package.json ${field} pins pnpm ${version} with the hash ${preview(hash)}, which the check cannot compare: the registry publishes a sha512 digest for each version, so only a 128-digit sha512 hash can be checked; drop the hash or use the one "corepack use pnpm@${version}" writes`,
+    );
+  }
+  return { field, version, sha512: sha512.toLowerCase() };
+}
+
+/**
+ * The pnpm versions package.json pins (R6-04): packageManager, which
+ * pnpm/action-setup in CI and corepack follow and which therefore must name
+ * an exact pnpm version, and devEngines.packageManager if present.
+ */
+export function parsePackageManager(text: string): PackageManagerPin[] {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new PackageJsonError("package.json is not valid JSON");
+  }
+  if (!isRecord(manifest)) throw new PackageJsonError("package.json is not a JSON object");
+  const { packageManager, devEngines } = manifest;
+  if (typeof packageManager !== "string") {
+    throw new PackageJsonError(
+      'package.json names no packageManager; CI (pnpm/action-setup) and corepack take the pnpm version from it, so pin an exact one such as "pnpm@10.28.0"',
+    );
+  }
+  if (!packageManager.startsWith("pnpm@")) {
+    throw new PackageJsonError(
+      `package.json packageManager names ${preview(packageManager)}, not pnpm; the check dates only pnpm, which this project uses`,
+    );
+  }
+  const pins = [pnpmPin("packageManager", packageManager.slice("pnpm@".length))];
+  if (devEngines === undefined) return pins;
+  if (!isRecord(devEngines)) throw new PackageJsonError("package.json devEngines is not an object");
+  const declared = devEngines.packageManager;
+  if (declared === undefined) return pins;
+  for (const entry of Array.isArray(declared) ? declared : [declared]) {
+    if (!isRecord(entry) || entry.name !== "pnpm") {
+      throw new PackageJsonError(
+        `package.json devEngines.packageManager has an entry that does not name pnpm: ${preview(JSON.stringify(entry) ?? "")}; the check dates only pnpm, which this project uses`,
+      );
+    }
+    if (typeof entry.version !== "string") {
+      throw new PackageJsonError(
+        "package.json devEngines.packageManager gives no pnpm version; give an exact one such as 10.28.0",
+      );
+    }
+    pins.push(pnpmPin("devEngines.packageManager", entry.version));
+  }
+  return pins;
+}
+
 export interface CheckOptions {
+  /** package.json's text, whose pnpm versions are dated too; main always passes it. */
+  packageJson?: string;
   fetch?: typeof fetch;
   now?: Date;
   minAgeDays?: number;
@@ -529,8 +610,10 @@ export interface Failure {
 }
 
 export interface CheckResult {
-  /** Every locked package version, from the registry or not. */
+  /** Every locked package version, from the registry or not, and every pnpm version pinned. */
   checked: number;
+  /** The pnpm versions package.json pins, among those checked. */
+  packageManager: PackageManagerPin[];
   failures: Failure[];
   /** Failures the exception list accepts. */
   excepted: { package: string; detail: string }[];
@@ -659,7 +742,7 @@ function digestProblem(
   if (published.some((d) => d.hex === digest.hex)) return undefined;
   return {
     reason: "mismatch",
-    detail: `${what} is not the ${digest.algorithm} digest the registry publishes for this version, so pnpm would install other bytes than the version checked`,
+    detail: `${what} is not the ${digest.algorithm} digest the registry publishes for this version, so the bytes installed would not be the version checked`,
   };
 }
 
@@ -694,6 +777,23 @@ function ageProblem(
   return { reason: "too_young", detail: `published ${time.toISOString()}, ${when}` };
 }
 
+/** Why a registry version fails: no publish time, a digest that is not the registry's, or its age. */
+function versionProblem(
+  document: RegistryDocument | undefined,
+  version: string,
+  digest: Digest | undefined,
+  what: string,
+  now: number,
+  minAgeMs: number,
+): Omit<Failure, "package"> | undefined {
+  if (document === undefined || "error" in document) {
+    return { reason: "unverified", detail: document?.error ?? "registry request failed" };
+  }
+  const age = ageProblem(document.times[version], now, minAgeMs);
+  if (age?.reason === "unverified" || digest === undefined) return age;
+  return digestProblem(digest, document.dists.get(version), what) ?? age;
+}
+
 const byPackage = (a: { package: string }, b: { package: string }) =>
   a.package < b.package ? -1 : a.package > b.package ? 1 : 0;
 
@@ -711,13 +811,12 @@ export async function checkReleaseAge(
   const retryDelayMs = options.retryDelayMs ?? 1_000;
 
   const packages = parseLockfile(lockfile);
+  const pins = options.packageJson === undefined ? [] : parsePackageManager(options.packageJson);
   const wanted = new Map<string, Set<string>>();
-  for (const locked of packages) {
-    if (!locked.registry) continue;
-    const versions = wanted.get(locked.name) ?? new Set<string>();
-    versions.add(locked.version);
-    wanted.set(locked.name, versions);
-  }
+  const want = (name: string, version: string) =>
+    wanted.set(name, (wanted.get(name) ?? new Set<string>()).add(version));
+  for (const locked of packages) if (locked.registry) want(locked.name, locked.version);
+  for (const pin of pins) want("pnpm", pin.version);
   const documents = new Map<string, RegistryDocument>();
   await forEachLimited([...wanted], concurrency, async ([name, versions]) => {
     documents.set(
@@ -736,21 +835,33 @@ export async function checkReleaseAge(
       });
       continue;
     }
-    const document = documents.get(locked.name) ?? { error: "registry request failed" };
-    if ("error" in document) {
-      problems.push({ package: locked.key, reason: "unverified", detail: document.error });
-      continue;
-    }
-    const age = ageProblem(document.times[locked.version], now, minAgeMs);
-    const digest = locked.integrity === undefined ? undefined : sriDigest(locked.integrity);
-    const dist = document.dists.get(locked.version);
+    const digest = sriDigest(locked.integrity ?? "");
     const problem =
-      age?.reason === "unverified"
-        ? age
-        : digest === undefined
-          ? { reason: "unverified" as const, detail: "the lockfile's integrity cannot be read" }
-          : (digestProblem(digest, dist, "the lockfile's integrity") ?? age);
+      digest === undefined
+        ? { reason: "unverified" as const, detail: "the lockfile's integrity cannot be read" }
+        : versionProblem(
+            documents.get(locked.name),
+            locked.version,
+            digest,
+            "the lockfile's integrity",
+            now,
+            minAgeMs,
+          );
     if (problem) problems.push({ package: locked.key, ...problem });
+  }
+  for (const pin of pins) {
+    // Without a hash, corepack and pnpm/action-setup fetch the version from
+    // the registry, so its publish time is what counts.
+    const digest = pin.sha512 === undefined ? undefined : { algorithm: "sha512", hex: pin.sha512 };
+    const what = `the hash in ${pin.field}`;
+    const problem = versionProblem(documents.get("pnpm"), pin.version, digest, what, now, minAgeMs);
+    if (problem) {
+      problems.push({
+        package: `pnpm@${pin.version}`,
+        reason: problem.reason,
+        detail: `${pin.field} in package.json: ${problem.detail}`,
+      });
+    }
   }
 
   const accepted = new Set(exceptions.map((exception) => exception.package));
@@ -766,12 +877,20 @@ export async function checkReleaseAge(
     .map((exception) => exception.package)
     .filter((key) => !used.has(key))
     .sort();
-  return { checked: packages.length, failures, excepted, unusedExceptions };
+  return {
+    checked: packages.length + pins.length,
+    packageManager: pins,
+    failures,
+    excepted,
+    unusedExceptions,
+  };
 }
 
 export interface MainOptions extends CheckOptions {
   /** The lockfile's text; by default pnpm-lock.yaml at the repository root. */
   lockfile?: string;
+  /** By default package.json at the repository root. */
+  packageJson?: string;
   log?: (line: string) => void;
   error?: (line: string) => void;
 }
@@ -790,12 +909,14 @@ export async function main(options: MainOptions = {}): Promise<number> {
   const minAgeDays = options.minAgeDays ?? MIN_AGE_DAYS;
   const lockfile =
     options.lockfile ?? readFileSync(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
+  const packageJson =
+    options.packageJson ?? readFileSync(new URL("../package.json", import.meta.url), "utf8");
 
   let result: CheckResult;
   try {
-    result = await checkReleaseAge(lockfile, { ...options, now, minAgeDays });
+    result = await checkReleaseAge(lockfile, { ...options, packageJson, now, minAgeDays });
   } catch (cause) {
-    if (!(cause instanceof LockfileError)) throw cause;
+    if (!(cause instanceof LockfileError || cause instanceof PackageJsonError)) throw cause;
     error(`error: ${cause.message}`);
     return 1;
   }
@@ -808,12 +929,20 @@ export async function main(options: MainOptions = {}): Promise<number> {
   }
   if (result.failures.length > 0) {
     error(
-      `error: ${result.failures.length} of ${result.checked} locked package versions fail the ${minAgeDays}-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts`,
+      `error: ${result.failures.length} of ${result.checked} package versions fail the ${minAgeDays}-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts`,
     );
     return 1;
   }
+  const pinned = new Map<string, string[]>();
+  for (const pin of result.packageManager) {
+    pinned.set(pin.version, [...(pinned.get(pin.version) ?? []), pin.field]);
+  }
+  const locked = result.checked - result.packageManager.length;
+  const pnpm = [...pinned].map(
+    ([version, fields]) => ` and pnpm ${version} (${fields.join(", ")})`,
+  );
   log(
-    `ok: all ${result.checked} locked package versions were published at least ${minAgeDays} days before ${now.toISOString()}`,
+    `ok: all ${locked} locked package versions${pnpm.join("")} were published at least ${minAgeDays} days before ${now.toISOString()}`,
   );
   return 0;
 }
