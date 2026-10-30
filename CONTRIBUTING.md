@@ -27,6 +27,11 @@ A version it cannot date fails too: one not resolved from the npm registry, one 
 
 The check reads `pnpm-lock.yaml` strictly. It accepts only the YAML layout pnpm writes and refuses anything else with the line number: a comment, an entry written on one line, a different indentation, a value that continues on the next line, anchors, aliases and tags. A reader that skipped such a line could miss an entry that pnpm installs. Every snapshot and every importer dependency must also lead to an entry in `packages`. If a pnpm upgrade writes a layout the check refuses, extend the reader; do not rewrite the lockfile by hand.
 
+pnpm also installs config dependencies outside the lockfile, before it reads the lockfile, and runs `pnpm-plugin-*` ones as a pnpmfile on every command. The project declares none, and the check refuses them (review R8-01):
+
+- `pnpm-workspace.yaml` is read as strictly as the lockfile: block layout only, with comments on their own lines. It may hold only `packages`, `onlyBuiltDependencies`, `minimumReleaseAge` and `minimumReleaseAgeExclude`. Any other setting is refused with its line number: `configDependencies`, and also settings such as `pnpmfile`, `lockfileDir` or `gitBranchLockfile` that make pnpm run code or read another lockfile. To add a setting, extend the check first.
+- The `pnpm` field in `package.json`, if present, must be an object without `configDependencies`.
+
 - Run it after any change to `pnpm-lock.yaml` or `packageManager`. It needs network access to `registry.npmjs.org` and nothing else, so `pnpm run ci` does not run it.
 - CI runs it in the `release-age` job before anything is installed: every job that installs packages or pnpm needs that job, and pnpm/action-setup gets no `version` input, so it follows `packageManager`. The `release-age` job installs nothing and runs no package code, and the script imports only Node built-ins.
 
