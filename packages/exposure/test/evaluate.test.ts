@@ -819,6 +819,24 @@ const cases: Case[] = [
     ),
   },
   {
+    name: "a bypass or Service Auth policy without readable include rules is unknown",
+    build: (g) => {
+      tunnelApp(g, "empty", "bypass", []);
+      tunnelApp(g, "svc-empty", "non_identity", []);
+      const odd = (id: string, decision: string, include: unknown) => {
+        g.tunnelHostname(`${id}.example.com`);
+        g.node("access_policy", id, id, { decision, include, require: [], exclude: [] });
+        g.app(id, [host(`${id}.example.com`)], [POLICY(id)]);
+      };
+      odd("bad", "bypass", "?");
+      odd("svc-bad", "non_identity", { service_token: { token_id: "token-1" } });
+      odd("svc-item", "non_identity", ["?", TOKEN]);
+    },
+    expect: ["empty", "svc-empty", "bad", "svc-bad", "svc-item"].map((id) =>
+      tunnelRow(id, "unknown", 0, POLICY(id)),
+    ),
+  },
+  {
     name: "R2-01: Service Auth with service tokens or certificates is service_auth",
     build: (g) => {
       tunnelApp(g, "token", "non_identity", [TOKEN]);
