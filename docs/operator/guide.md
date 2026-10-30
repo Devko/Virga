@@ -328,20 +328,19 @@ Where to look:
 The removal runs in this order:
 
 1. The broker deletes the stored token, then the account's rate budget (`TokenIntake.remove`). A scan that still runs gets no more API access.
-2. Core deletes the account's index rows (`accounts`, `scan_runs`), then its whole graph: nodes, history and findings (`Admin.removeAccount`). The UI and the API stop showing the account, and the dispatcher starts no more scans of it. A scan that still runs is refused at its next write.
+2. Core deletes the account's index rows (`accounts`, `scan_runs`), then its whole graph: nodes, history and findings (`Admin.removeAccount`). The UI and the API stop showing the account, and the dispatcher starts no more scans of it. A scan that still runs is refused at its next write. A scan that was queued before the removal and begins after it stops at its first step, without an API call or a write (R4-03).
 
 | Response | Meaning |
 | --- | --- |
 | 200 `{ token: { removed }, account: { removed } }` | Done. `removed: false` means there was nothing left to delete, for example on a repeat |
 | 400 `confirmation_required` | The body does not name the account |
 | 502 `token_not_removed` | The broker step failed. Core was not called, so the account stays listed. Run the removal again |
-| 502 `account_not_removed` | The token is gone; the index rows or the graph may remain. Run the removal again |
+| 502 `account_not_removed` | The token is gone; the index rows or the graph may remain. Run the removal again. If the index rows are already gone, the account no longer shows in the UI while its graph remains (R5-08): repeat the removal over the API |
 
 Both steps are idempotent, so a repeat finishes a partial removal. To scan the account again, onboard it again with a new token.
 
 What stays behind:
 
-- **A scan that was queued before the removal and begins after it** (R4-03). Nothing stops it yet. It starts on the empty graph, gets `no_permission` for every class because the token is gone, and leaves a scan record in the graph and a `scan_runs` row in the index, but no inventory. Removing the account again clears both.
 - **Durable Object point-in-time recovery.** SQLite-backed Durable Objects keep 30 days of history for point-in-time recovery; whether it can restore a graph after `deleteAll()` is not documented: **verify**. No Virga entrypoint restores one.
 - **Workflow instances** for 3 days (completed) or 7 days (failed). They hold counters only; `npx wrangler workflows instances delete virga-scan <instance_id>` removes them earlier.
 - **D1 Time Travel** can restore deleted rows of `virga-vault` and `virga-index` within its retention window. The token ciphertext stays useless without the master key, and the token itself is revoked in step 1.

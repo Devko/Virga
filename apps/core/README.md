@@ -16,7 +16,7 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
 
 `ScanWorkflow` wires the bindings into `runScan` ([src/scan/run.ts](src/scan/run.ts)); the logic takes its dependencies (step, graph, index, reader, collectors) as arguments so tests run it with a fake step. Every effect is a step, and every step returns counters only: collectors write to the graph object, never into Workflow state.
 
-1. `begin`: `AccountGraph.beginScan` (idempotent; refuses while another scan of the account runs, and marks one older than 12 hours failed) and a `running` row in `scan_runs`.
+1. `begin`: checks that the account is in the index, then `AccountGraph.beginScan` (idempotent; refuses while another scan of the account runs, marks one older than 12 hours failed, and refuses after a removal) and a `running` row in `scan_runs`.
 2. For each collector, ordered by `after`:
    - `plan:<class>` returns the chunks, the only step result with data (at most 512 KiB).
    - `collect:<class>:<n>` runs `collect` with a reader over `brokerTransport(env.BROKER, accountId)` and writes the output with `AccountGraph.writeChunk` (nodes and edges, signals, and insights only from a single-chunk class).
@@ -26,7 +26,7 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
 5. `rules`: `AccountGraph.evaluateRules` runs the findings lifecycle over `RULES` and sums the runs: evaluated, not evaluated and failed rules, hits (decided rows), undecided rows, and opened and resolved findings. Each run is a `rule_runs` row with `hits`, `undecided` and, for a failed run, `error` (graph migration 2).
 6. `finish`: ends the scan in the graph and writes `scan_runs` (status and summary) and `accounts.last_scan_at`.
 
-The scan is `complete` when every class and exposure are complete, `partial` when rules ran on incomplete input, `failed` when rules did not run, and `skipped` when another scan was running. Evaluator failures are results, not retried exceptions.
+The scan is `complete` when every class and exposure are complete, `partial` when rules ran on incomplete input, `failed` when rules did not run, and `skipped` when another scan was running or the account is not in the index. Evaluator failures are results, not retried exceptions.
 
 Only the running scan that is current in the graph may write (R2-07). `writeChunk`, `applyBatch`, `recordCoverage`, `sweep`, `computeExposure` and `evaluateRules` throw `StaleScanError` for any other scan: one marked failed as stale, one that ended, or one a newer scan took over. Otherwise a stale instance that retries a chunk would mark live nodes as seen by itself, and the newer scan's sweep would tombstone them. The scan treats the refusal as a step result, not a retry: it stops, leaves the graph as it is, and ends its `scan_runs` row `failed` with the reason in `summary.detail`. `finishScan` returns the status the scan ended with; a scan marked failed as stale stays failed. `finishRun` only ends a `running` row, so an instance that runs again after its scan ended keeps the first result.
 
@@ -40,9 +40,18 @@ Only the running scan that is current in the graph may write (R2-07). `writeChun
 
 `getScanSummary` returns `{ account, lastRun, graph }`: the index row, the latest `scan_runs` row, and the graph's summary. `graph.ruleRuns` lists, per rule of the latest scan, its status, hits (decided rows), undecided rows, missing inputs and the error text (`Untrusted`, at most 500 characters). A rule that is not evaluated, or an undecided row, is not a pass.
 
-`Admin`: `addAccount({ id, name, cadenceHours, profile })`, `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running, and `removeAccount(accountId)`.
+`Admin`: `addAccount({ id, name, cadenceHours, profile })`, which also calls the account's graph object to clear its `removed` marker (`AccountGraph.clearRemoved`), so an account that is added again can be scanned again; `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running, and `removeAccount(accountId)`.
 
-`removeAccount` deletes the account's `accounts` and `scan_runs` rows, then its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, then an empty schema again). It returns `{ removed }`, true when the account was in the index, and is idempotent, so a retry finishes a partial removal. With the index rows gone, the dispatcher and `triggerScan` start no new scan. A scan that still runs is refused at its next write, and `finishRun` gives it no row back. A scan instance that was already queued and begins after the removal is not refused yet (R4-03): it starts on the empty graph and writes a scan record and a `scan_runs` row back. Full offboarding also needs the broker: the web Worker calls `TokenIntake.remove(accountId)` first, so a running scan gets no more API access, then `Admin.removeAccount(accountId)`.
+`removeAccount` deletes the account's `accounts` and `scan_runs` rows, then its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, an empty schema again, and a `removed` key in `meta`). It returns `{ removed }`, true when the account was in the index, and is idempotent, so a retry finishes a partial removal. After the removal (R4-03):
+
+- The dispatcher and `triggerScan` start no new scan.
+- A scan whose begin step runs after the removal (dispatched, already queued, or a retried begin step) finds the account missing from the index and ends `skipped` (detail `account <id> is not in the index`), with no write to the graph or the index and no API call.
+- While `removed` is set, `AccountGraph.beginScan` refuses with `{ started: false, removed: true }`, in case the removal lands between the index check and the graph call. The index's `beginRun` adds a `running` row only while the account exists.
+- A scan that still runs is refused at its next write, and `finishRun` gives it no row back.
+
+The index rows go first. If `deleteAll` then fails, the account no longer shows in any list while its graph remains, until the removal is repeated (R5-08; round 6 changes the order).
+
+Full offboarding also needs the broker: the web Worker calls `TokenIntake.remove(accountId)` first, so a running scan gets no more API access, then `Admin.removeAccount(accountId)`.
 
 ## Tests
 
