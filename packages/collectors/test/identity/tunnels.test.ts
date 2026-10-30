@@ -14,6 +14,7 @@ import {
   DELETED,
   LEGACY,
   LOCAL,
+  legacyConfig,
   local,
   MESH,
   ORIGIN_PASSWORD,
@@ -525,6 +526,7 @@ describe("tunnels collector", () => {
         count: hostnames.length,
         truncated: node(output, `tunnel:${BLOG}`).props?.ingress_truncated,
         ids: hostnames.map((n) => n.nativeId.slice(BLOG.length + 1)),
+        reasons: output.truncated,
       };
     }
 
@@ -550,9 +552,30 @@ describe("tunnels collector", () => {
 
     it("R5-06: is not truncated at exactly 1,000 entry points, and is at 1,001", async () => {
       const at = await blogIngress([...hostRules(1000), { service: "http_status:404" }]);
-      expect(at).toMatchObject({ count: 1000, truncated: false });
+      expect(at).toMatchObject({ count: 1000, truncated: false, reasons: [] });
       const over = await blogIngress([...hostRules(1001), { service: "http_status:404" }]);
       expect(over).toMatchObject({ count: 1000, truncated: true });
+    });
+
+    it("0005: reports a truncated reason for each tunnel with ingress_truncated", async () => {
+      const ingress = [...hostRules(1001), { service: "http_status:404" }];
+      const { output } = await run(tunnelsCollector, {
+        ...withBlogConfig({ ingress }),
+        [`${BASE}/cfd_tunnel/${LEGACY}/configurations`]: envelope({
+          ...legacyConfig,
+          config: { ingress },
+        }),
+      });
+      for (const id of [BLOG, LEGACY]) {
+        expect(node(output, `tunnel:${id}`).props?.ingress_truncated).toBe(true);
+      }
+      // One chunk, tunnels in ID order.
+      expect(output.truncated).toEqual([
+        `tunnel ${LEGACY}: ingress has more than 1000 entry points`,
+        `tunnel ${BLOG}: ingress has more than 1000 entry points`,
+      ]);
+      // The fixture's own configurations truncate nothing.
+      expect((await run(tunnelsCollector, routes)).output.truncated).toEqual([]);
     });
 
     it("R5-06: does not count rules that yield no node, and stops expanding after a catch-all", async () => {

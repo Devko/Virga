@@ -39,6 +39,7 @@ const TUNNEL_TYPES = ["cfd_tunnel", "warp_connector"];
  * Past this many the tunnel is marked `ingress_truncated`.
  */
 export const MAX_HOSTNAMES_PER_TUNNEL = 1000;
+const OVER_COUNT = `ingress has more than ${MAX_HOSTNAMES_PER_TUNNEL} entry points`;
 // At most 10,000 tunnel_hostname nodes per chunk.
 const TUNNELS_PER_CHUNK = 10;
 const TUNNELS_PER_PAGE = 1000;
@@ -143,6 +144,7 @@ export const tunnelsCollector: Collector<string> = {
       const id = str(t.id);
       if (id) tunnels.set(id, t);
     }
+    const truncated: string[] = [];
     for (const id of [...ids].sort()) {
       const tunnel = tunnels.get(id);
       // Absent when it was deleted after the plan step.
@@ -150,16 +152,18 @@ export const tunnelsCollector: Collector<string> = {
       const type = str(tunnel.tun_type);
       // Mesh nodes have no ingress configuration.
       const src = type === "warp_connector" ? null : configSource(tunnel);
-      const truncated =
-        src === "cloudflare" && (await collectIngress(ctx, id, nodeId("tunnel", id), g));
+      const leftOut =
+        src === "cloudflare" ? await collectIngress(ctx, id, nodeId("tunnel", id), g) : null;
+      // Entry points that were left out must not resolve findings (decision 0005).
+      if (leftOut) truncated.push(`tunnel ${id}: ${leftOut}`);
       g.node("tunnel", id, displayName(tunnel.name), {
         tunnel_type: type,
         status: str(tunnel.status),
         config_src: src,
-        ingress_truncated: truncated,
+        ingress_truncated: leftOut !== null,
       });
     }
-    return g.output();
+    return { ...g.output(), truncated };
   },
 };
 
@@ -227,18 +231,18 @@ function hostnameIds(tunnelId: string): (hostname: string, path: string) => Prom
  * position. Hostnames that only DNS sends to the tunnel stay unknown to the
  * collector.
  *
- * Returns true when the ingress has more than MAX_HOSTNAMES_PER_TUNNEL entry
- * points; those past the limit are not emitted (review R5-06). The work is
- * linear in the number of rules: a rule without a hostname visits only the
- * hostnames no earlier rule took whole, and a path such a rule took is never
- * expanded again.
+ * Returns why entry points were left out, or null when every one was
+ * emitted: past MAX_HOSTNAMES_PER_TUNNEL nothing more is emitted (review
+ * R5-06). The work is linear in the number of rules: a rule without a
+ * hostname visits only the hostnames no earlier rule took whole, and a path
+ * such a rule took is never expanded again.
  */
 async function collectIngress(
   ctx: CollectorContext,
   id: string,
   tunnelNode: string,
   g: GraphBuilder,
-): Promise<boolean> {
+): Promise<string | null> {
   const path = `/accounts/${ctx.accountId}/cfd_tunnel/${id}/configurations`;
   const result = await unlessGone(ctx.api.get<CfTunnelConfig | null>(path));
   const config = isObject(result?.config) ? result.config : {};
@@ -278,18 +282,18 @@ async function collectIngress(
       if (!open.has(rule.hostname) || takenPairs.has(key)) continue;
       takenPairs.add(key);
       if (rule.path === "") open.delete(rule.hostname);
-      if (!(await emit(rule, rule.hostname))) return true;
+      if (!(await emit(rule, rule.hostname))) return OVER_COUNT;
       continue;
     }
     if (originScheme(rule.service) !== "http_status") {
       for (const hostname of open) {
         if (takenPairs.has(pair(hostname, rule.path))) continue;
-        if (!(await emit(rule, hostname))) return true;
+        if (!(await emit(rule, hostname))) return OVER_COUNT;
       }
     }
     // A rule without a hostname or path takes every request: none after it applies.
     if (rule.path === "") break;
     takenPaths.add(rule.path);
   }
-  return false;
+  return null;
 }

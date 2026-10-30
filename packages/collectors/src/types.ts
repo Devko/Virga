@@ -27,6 +27,9 @@ export interface CollectorContext {
   now: number;
 }
 
+/** Bounds of `CollectorOutput.truncated`; the scan refuses a chunk that exceeds them. */
+export const TRUNCATED_LIMITS = { reasons: 100, length: 1024 } as const;
+
 /** What one chunk produces. All rows belong to the collector's resource class. */
 export interface CollectorOutput {
   nodes: NodeInput[];
@@ -34,6 +37,14 @@ export interface CollectorOutput {
   signals?: SignalRow[];
   /** Only the `insights` collector returns these; they replace the whole insights table. */
   insights?: InsightRow[];
+  /**
+   * One reason per unit whose resources this chunk left out, for example a
+   * tunnel past its entry point cap (decision 0005). The class is then
+   * `partial`: it is not swept and the rules that require it are not
+   * evaluated, so nothing that was left out resolves a finding. Reasons may
+   * name IDs from the scanned account, so they are untrusted text.
+   */
+  truncated?: string[];
 }
 
 /**

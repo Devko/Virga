@@ -59,6 +59,7 @@ export async function run<U>(
   const edges = new Map<string, EdgeInput>();
   const signals = new Map<string, SignalRow>();
   const insights = new Map<string, InsightRow>();
+  const truncated: string[] = [];
   for (const unit of chunks) {
     const out = await collector.collect(ctx, unit);
     expectSorted(out);
@@ -66,6 +67,7 @@ export async function run<U>(
     for (const e of out.edges) edges.set(edgeId(e.type, e.src, e.dst, e.key), e);
     for (const s of out.signals ?? []) signals.set(`${s.nodeId}#${s.name}`, s);
     for (const i of out.insights ?? []) insights.set(i.id, i);
+    truncated.push(...(out.truncated ?? []));
   }
   return {
     chunks,
@@ -74,6 +76,8 @@ export async function run<U>(
       edges: sorted(edges),
       signals: sorted(signals),
       insights: sorted(insights),
+      // In chunk order, as the scan records them.
+      truncated,
     },
     calls: transport.calls,
   };
