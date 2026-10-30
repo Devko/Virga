@@ -127,10 +127,10 @@ Emitted only when the script has `preview_urls: true`.
 | --- | --- | --- |
 | `bucket` | string | |
 | `kind` | string | `r2_dev` or `custom` |
-| `enabled` | boolean | |
+| `enabled` | boolean \| null | `null` when the API omits the field or sends another type (custom domains) |
 | `zone_id` | string \| null | |
 
-Emitted for the managed `r2.dev` domain only when it is enabled.
+Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point; review R4-02 proposes emitting it with `enabled: null` instead.
 
 `d1_database` — native ID: database UUID; name: database name. Props: `created_at` (string \| null).
 
@@ -334,7 +334,7 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
 1. **Entry points** are:
    - `worker_route`, `worker_custom_domain`, `workers_dev`, `worker_preview_url`
    - `pages_domain`, `pages_preview`
-   - `r2_public_domain` with `enabled: true`
+   - `r2_public_domain` unless `enabled` is `false`; with `enabled` `null` the entry point is `unknown`
    - `tunnel_hostname`
 2. **Matching.**
    - Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one.
