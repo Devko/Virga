@@ -128,6 +128,12 @@ Round 7 status (2026-10-30): all four packages are merged.
 | `core-web-5` | R6-07 (`last_scan_at` only for a run the index holds); the MCP and SPA text for a `partial` class with resources left out; removal offered for a `removing` account whose summary fails | `apps/core/**` except `test/e2e/**` and `test/rules-runtime.test.ts`, `apps/web/**` except `vite.config.ts` | Tests per case |
 | `review-7` | Read-only review of the round 7 changes | none (report only) | New findings verified with a concrete input |
 
+Round 8 status (2026-10-30): stopped part way when the cloud session was handed over to a local agent.
+
+- Merged: `deploy-build` (R6-01), `supply-chain-2` (R6-03, R6-04), and the compiler half of `rules-5` (R6-02: bracket identifiers in the parameter scan, no statement tail). Not yet verified by a review.
+- Not done: the run-time half of `rules-5` (a rule run that writes is refused and rolled back, with a workerd test in a new `apps/core/test/rules-runtime.test.ts`); `collectors-5` and `core-web-5` did not start. Their rows above still apply.
+- The [round 7 review](../reviews/2026-10-30-review-round-7.md) found R7-01 (`NODE_DEBUG` prints the token) and R7-02 (`LD_LIBRARY_PATH` and the macOS `DYLD_*` paths load code into the deploy). Both belong in `UNSAFE_VARS` in `scripts/lib/run.ts`.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.

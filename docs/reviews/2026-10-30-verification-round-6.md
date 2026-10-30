@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 4 verification](2026-10-30-verification-round-4.md) (R4-01 to R4-07, fixed in round 5) and the [round 5 verification](2026-10-30-verification-round-5.md) (R5-01 to R5-08, fixed in round 6) fixed? (2) review of the round 5 and round 6 changes, at commit 3617367
-- Status: new findings R6-01 to R6-07 open; fixes are planned in round 8 of the [work packages](../team/work-packages.md)
+- Status: round 8 of the [work packages](../team/work-packages.md) fixed R6-01 (`deploy-build`), R6-03 and R6-04 (`supply-chain-2`) and the compiler half of R6-02 (`rules-5`); not yet verified by a review. Open: the run-time half of R6-02, R6-05, R6-06, R6-07
 
 ## Summary
 
