@@ -256,6 +256,38 @@ describe("storage collector", () => {
     expect(nodeIds(out)).toEqual([`r2_public_domain:${managedEnabled.domain}`]);
   });
 
+  it("R6-06: fails the chunk on a custom domain entry that names no domain and is not disabled", async () => {
+    // The same premise one level down: an entry read as no entry point.
+    const custom = `${base}/r2/buckets/example-bucket/domains/custom`;
+    const named = { domain: "files.example.com", enabled: true, zoneId: "z1" };
+    for (const entry of [
+      {},
+      { enabled: true },
+      { enabled: null },
+      { domain: null, enabled: true },
+      { domain: 42 },
+      { domain: "" },
+      null,
+      "files.example.com",
+      [],
+    ]) {
+      const read = bucketDomains("example-bucket", {
+        [custom]: envelope({ domains: [named, entry] }),
+      });
+      await expect(read, JSON.stringify(entry)).rejects.toThrow(
+        `expected a domain on every enabled entry of ${custom}`,
+      );
+    }
+    // Control: a disabled entry without a domain is no entry point.
+    const out = await bucketDomains("example-bucket", {
+      [custom]: envelope({ domains: [named, { enabled: false }] }),
+    });
+    expect(nodeIds(out)).toEqual([
+      "r2_public_domain:files.example.com",
+      `r2_public_domain:${managedEnabled.domain}`,
+    ]);
+  });
+
   it("follows pagination of every listing", async () => {
     const buckets = Array.from({ length: 1001 }, (_, i) => ({
       name: `b-${String(i).padStart(4, "0")}`,

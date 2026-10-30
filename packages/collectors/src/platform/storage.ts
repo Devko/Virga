@@ -2,7 +2,16 @@ import { CfApiError, NoPermissionError } from "@virga/cf-api";
 import { nodeId } from "@virga/graph";
 import type { Collector, CollectorContext } from "../types.ts";
 import { listDoNamespaces, listQueues } from "./lists.ts";
-import { bool, chunk, GraphBuilder, listByPage, sortedUnique, str, unlessGone } from "./util.ts";
+import {
+  bool,
+  chunk,
+  GraphBuilder,
+  isObject,
+  listByPage,
+  sortedUnique,
+  str,
+  unlessGone,
+} from "./util.ts";
 
 /** developers.cloudflare.com/api/resources/r2/subresources/buckets/methods/list */
 interface CfBucket {
@@ -263,9 +272,19 @@ async function collectBucketDomains(
   if (!Array.isArray(domains)) {
     throw new CfApiError(0, customPath, [], `expected a domains array on ${customPath}`);
   }
-  for (const domain of domains) {
+  for (const item of domains as unknown[]) {
+    // An entry without a domain is an entry point we cannot name, unless it is disabled.
+    const domain = isObject(item) ? item : {};
     const host = str(domain.domain)?.toLowerCase();
-    if (!host) continue;
+    if (!host) {
+      if (isObject(item) && domain.enabled === false) continue;
+      throw new CfApiError(
+        0,
+        customPath,
+        [],
+        `expected a domain on every enabled entry of ${customPath}`,
+      );
+    }
     const id = g.node("r2_public_domain", host, host, {
       bucket,
       kind: "custom",
