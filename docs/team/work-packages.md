@@ -80,6 +80,20 @@ Round 4 status (2026-10-30): all four packages are merged; R3-01 to R3-07 are fi
 | `docs` | Apply the documentation changes requested in round 4; ADR for the scope of CF-024; review status tables | `docs/**`, `apps/broker/README.md`, `apps/core/README.md` | Every request is applied or answered |
 | `review-4` | Read-only verification of R3-01 to R3-07; review of the round 4 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
 
+Round 5 status (2026-10-30): all five packages are merged. R4-01 to R4-07 are fixed, except the collector half of R4-02 (r2.dev with an unknown `enabled`). A lockfile check enforces the 14-day minimum release age in CI.
+
+- Open trade-off: to pass the age gate, the lockfile went back to body-parser 2.3.0 and fast-uri 3.1.8, which have published advisories. Both reach `apps/web` through the MCP SDK. The patched versions, body-parser 2.4.0 and fast-uri 3.1.9, are old enough on 2026-11-05 and 2026-11-02; an exception in the age gate is a decision for the maintainer.
+- The [round 5 verification](../reviews/2026-10-30-verification-round-5.md) rates R3-01 and R3-04 to R3-06 as fixed. It rates R3-02, R3-03 and R3-07 as partly fixed, and found R5-01 to R5-08.
+
+## Packages for phase 1, round 6
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `deploy-hardening` | R5-01 (`__proto__` and other parser differences), R5-02 (`unsafe`, `workflows`, `build` and every other key Wrangler deploys), R5-03 (`.env` files Wrangler loads) | `scripts/**`, `docs/operator/**` | Tests reproduce each finding and pass; the dry run passes |
+| `tunnels-limits` | R5-04 to R5-06 as the graph contract now says; the collector half of R4-02 (r2.dev domain with `enabled: null`); R5-07 (Pages env vars the API did not return are unknown, not empty) | `packages/collectors/src/**`, `packages/collectors/test/**`, `packages/exposure/**`, `apps/core/test/e2e/**` | Tests reproduce each finding and pass |
+| `core-offboarding` | R5-08: removal order and markers such that a partial failure never hides an account with data left | `apps/core/**` except `test/e2e/**`, `apps/web/src/**` if the route needs to change | Tests cover each failure point |
+| `docs-2` | Apply the documentation changes requested in round 5; document `pnpm check:release-age`; update the review status tables | `docs/**` except `team/`, `CONTRIBUTING.md`, `CLAUDE.md`, `apps/broker/README.md`, `apps/core/README.md` | Every request is applied or answered |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
