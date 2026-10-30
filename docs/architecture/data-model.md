@@ -29,7 +29,7 @@ Status: implemented in [`packages/graph`](../../packages/graph). The schema is [
 | `vulns` | Advisory matches per package node |
 | `insights` | Native Security Insights as inputs that findings can enrich |
 | `findings`, `finding_nodes` | Rule hits with lifecycle, and the nodes each finding is about (replaces the `AFFECTS` edge) |
-| `rule_runs` | Per scan and rule: `evaluated`, `not_evaluated` (with missing coverage), `error` |
+| `rule_runs` | Per scan and rule: `evaluated`, `not_evaluated` (with missing coverage) or `error`; `hits` (decided rows), `undecided` and `error` text (migration 2) |
 | `events` | Relevant Audit Logs v2 events, idempotent by audit log ID, for detection rules |
 
 The schema has no foreign key constraints. The write path keeps references consistent, and the sweep tombstones edges whose nodes disappear.
@@ -114,7 +114,7 @@ Implemented in [`packages/rules/src/evaluate.ts`](../../packages/rules/src/evalu
 - Suppression always has `suppressed_until`, a reason and the actor. It expires on its own. While it lasts, the accepted severity is kept and a higher severity ends it.
 - A rule whose query fails or breaks the output contract is `error` for that run and changes no finding; the rules after it still run.
 - Unknown is a result. A row with `decided = 0` says the rule cannot decide that fingerprint, for example because the entry points that decide it have exposure `unknown`. It neither opens nor resolves: an existing finding keeps its status, severity, evidence, node links and `last_seen` (an open, suppressed or resolved finding stays so; an expired suppression waits for the next decided row), and without a finding nothing opens. Before round 2, such a finding was resolved as soon as its exposure turned `unknown`.
-- `rule_runs.hits` counts decided rows only; the run summary reports undecided rows apart (`undecided`). `rule_runs` has no column for them yet.
+- `rule_runs.hits` counts decided rows only; the run summary reports undecided rows apart (`undecided`). `rule_runs.undecided` counts them (migration 2); `rule_runs.error` holds the message of a failed run, capped at 500 characters.
 - Changing the rule version keeps the fingerprints unless the rule's meaning changes. In that case the rule gets a new ID.
 
 ## Rule files
@@ -159,7 +159,10 @@ A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`,
 1. parses and validates the front matter (unknown keys fail)
 2. replaces `:name` parameters with positional `?` and an ordered binding list, and rejects positional `?`, a second statement, and parameters that are undeclared or unused
 3. prepares the statement against the current schema in Node SQLite and checks the required output columns
-4. requires at least one positive and one negative fixture, and runs all of them
+4. checks the fixtures and runs all of them:
+   - Fixture files must be named `positive-`, `negative-` or `undecided-<name>.yaml`; any other file fails.
+   - A positive fixture needs at least one hit, a negative fixture expects no rows, and an undecided fixture needs at least one undecided row.
+   - A rule that requires `exposure` needs an undecided fixture.
 5. rejects `requires` entries that are neither a resource class nor a derived input (`exposure`, `packages`, `vulns`)
 6. writes `rules.gen.ts` and `fixtures.gen.ts`
 

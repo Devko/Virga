@@ -2,7 +2,20 @@
 
 - Date: 2026-10-30
 - Scope: all code merged up to commit 0677dde (round 1), read-only review by a reviewer agent
-- Status: findings open; see the fix column in the [work packages](../team/work-packages.md) for round 3
+- Status: all findings fixed (rounds 2 and 3); a verification review runs in round 4
+
+| Finding | Fixed by | Test |
+| --- | --- | --- |
+| R2-01 | `fix-exposure`, decision 0003 | `packages/exposure/test` (R2-01 cases) |
+| R2-02 | `undecided` | `packages/rules/test/evaluate.test.ts`, `undecided-*` fixtures |
+| R2-03 | `fix-exposure` | `packages/exposure/test` (R2-03 cases) |
+| R2-04 | `fix-collectors` | `packages/collectors/test/identity/tunnels.test.ts` (R2-04) |
+| R2-05 | `access-v2` | `packages/collectors/test/identity/targets.test.ts` |
+| R2-06 | `access-v2`; regression tests by `fix-collectors` | `packages/collectors/test/identity` (R2-06) |
+| R2-07 | `fix-core` | `apps/core/test` (R2-07, stale and superseded scans) |
+| R2-08 | `fix-rules` | `packages/rules/test/cf003.test.ts`, CF-003 fixtures |
+| R2-09 | `fix-collectors` (Worker `json` bindings); Pages env vars are collected, CF-024 reads them in round 4 | `packages/collectors/test/platform` (R2-09) |
+| R2-10 | integrator: `minimumReleaseAge` in `pnpm-workspace.yaml` | — |
 
 ## Summary
 

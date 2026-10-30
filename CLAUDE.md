@@ -53,7 +53,7 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 - `packages/collectors`: `Collector` interface and registry; `src/platform/` and `src/identity/` hold the collectors.
 - `packages/exposure`: exposure evaluator.
 - `packages/rules`: parser and compiler (Node only: `parse.ts`, `compile.ts`, `cli.ts`), runtime (`runtime.ts`, `fixtures.ts`) used by the Worker.
-- `rules/CF-xxx/`: `rule.sql` with YAML front matter, `fixtures/positive-*.yaml` and `negative-*.yaml`, `fix/`.
+- `rules/CF-xxx/`: `rule.sql` with YAML front matter, `fixtures/positive-*.yaml`, `negative-*.yaml` and `undecided-*.yaml` (required when the rule requires exposure), `fix/`.
 - `apps/broker`: credential broker Worker: token vault, onboarding write check, `ApiCaller` with allowlist, rate budget. The only code that holds tokens.
 - `apps/core`: Worker and `AccountGraph` Durable Object, scan and dispatch Workflows, `GraphReader` and `Admin` entrypoints, account index D1; `test/e2e/` scans a fake account end to end. No routes, `workers_dev` and previews off.
 - `apps/web`: UI (React, Vite), JSON API and MCP server behind Access.

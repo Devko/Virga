@@ -80,7 +80,7 @@ Derived inputs: `exposure` (exposure evaluator), and from phase 2 `packages` and
 | `number` | number \| null | Version number |
 | `created_on` | string \| null | |
 | `source` | string \| null | `wrangler`, `dashboard`, `api`, ... |
-| `plain_text_vars` | `{ name, looks_secret, secret_pattern }[]` | Plain-text bindings without their values. `secret_pattern` names the matched pattern (`cfat_`, `cfut_`, `cfk_`, `aws_access_key`, `private_key`, `high_entropy`) or is `null` |
+| `plain_text_vars` | `{ name, kind, looks_secret, secret_pattern }[]` | Bindings that keep their value in plain text, without the values: `plain_text` (field `text`) and `json` (field `json`, every string and object key tested). `kind` is the binding type. `secret_pattern` is the strongest match in the order `cfat_`, `cfut_`, `cfk_`, `aws_access_key`, `private_key`, `high_entropy`, or `null`. `looks_secret` is `null` when there was no value to inspect |
 | `secret_names` | string[] | Names of `secret_text` bindings |
 
 Which versions: every version with traffic in the current deployment, and every version a preview URL points to. Phase 1 does not list the full version history.
@@ -111,6 +111,7 @@ Emitted only when the script has `preview_urls: true`.
 | `production_branch` | string \| null | |
 | `subdomain` | string | `<project>.pages.dev` |
 | `preview_deployments` | string | `all`, `none` or `custom`, from the preview branch settings |
+| `plain_text_vars` | `{ name, environment, kind, looks_secret, secret_pattern }[]` | Plain-text env vars of the preview and production configs, sorted by environment, then name. Secret env vars are never read and values are never stored; `looks_secret` is `null` when the API returns no value |
 
 `pages_domain` — native ID: custom domain or `<project>.pages.dev`; name: same. Props: `project`, `status`.
 
@@ -230,9 +231,18 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `service` | string | Origin as configured, for example `http://localhost:8080` or `ssh://localhost:22` |
 | `origin_scheme` | string | `http`, `https`, `ssh`, `rdp`, `tcp`, `smb`, `unix`, `http_status`, `other` |
 | `tunnel_id` | string | |
-| `access_required` | boolean | cloudflared validates an Access JWT before it proxies a request (`originRequest.access.required`). Read from the rule's own `originRequest.access` if it has one, otherwise from the top-level `config.originRequest.access`; anything but `true` is `false` |
+| `access_required` | boolean | cloudflared validates an Access JWT before it proxies a request. Read only from the rule's own `originRequest.access.required`: cloudflared builds the validator from the rule's own block, and the top-level `config.originRequest` does not enforce it (review R3-01). Anything but `true` is `false` |
+| `via_fallthrough` | boolean | `true` for nodes derived from an ingress rule without a hostname (see below) |
 
-Emitted from the remotely managed ingress configuration. Catch-all rules without a hostname and rules shadowed by an earlier rule are skipped. Credentials in a service URL are removed. Locally managed tunnels yield `tunnel` nodes but no `tunnel_hostname`.
+Emitted from the remotely managed ingress configuration:
+
+- **Hostname rules.** Every rule with a hostname yields one node. Rules shadowed by an earlier rule are skipped.
+- **Rules without a hostname** match every hostname that reaches the tunnel (review R3-02). This covers the final catch-all and path-only rules.
+  - Each such rule whose service is an origin (anything but `http_status:*`) yields one node per hostname that appears in the tunnel's ingress, with the rule's own path, service and `access_required`, and `via_fallthrough: true`.
+  - Requests that no hostname rule takes, such as other paths of a path-restricted hostname, are therefore evaluated as their own entry points.
+  - Hostnames that reach the tunnel only through DNS are not known to the collector, which is a known limit.
+- **Credentials.** For a `scheme://` value, everything from `//` through the last `@` of the authority is removed. The authority runs from `//` to the first `/`, `?` or `#`, as in Go's `url.Parse`, which cloudflared uses. A service with an `@` anywhere else, or an `@` without `scheme://`, is stored as `""`. The stored service never contains `@`.
+- **Locally managed tunnels** yield `tunnel` nodes but no `tunnel_hostname`.
 
 ### tokens
 
@@ -316,6 +326,7 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
    - `tunnel_hostname`
 2. **Matching.**
    - Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one.
+   - An Access hostname wildcard covers one label. It never covers a route or tunnel host that matches any depth: those deeper hosts are decided as if no hostname app matched them (Worker-level Access if it applies, otherwise `public` with confidence 1).
    - When host specificity and path length point to different apps, the result is `unknown`.
    - A `worker` target covers every entry point of that Worker; `scope: previews` covers only `worker_preview_url`.
    - `all_workers` covers every Worker below Worker-level targets. Targets of one tier that disagree are `unknown`. The order:
@@ -331,18 +342,21 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
      - A wildcard elsewhere in the path, or a trailing slash (the docs do not say whether `/admin/` covers `/admin`), cannot be placed: the evaluator returns `unknown` below its literal start.
 3. **Decision per covered prefix**, from the app's policies:
    - **Bypass** never asks for an identity ([decision 0003](../decisions/0003-bypass-and-service-auth-exposure.md)):
-     - A Bypass whose include holds `everyone`, or only non-identity selectors (`ip`, `geo`, `certificate`, `common_name`, `device_posture`, `service_token`, `any_valid_service_token`), → `public` with the reason. That holds even when require rules narrow it, for example to an office IP range. It can be a false positive, but never a false "protected".
-     - A Bypass with an `other` selector, or with identity selectors that a Bypass cannot evaluate (`email`, `group`, `idp_group`, `login_method`, ...), → `unknown`.
+     - A Bypass whose include holds `everyone` or any non-identity selector (`ip`, `geo`, `certificate`, `common_name`, `device_posture`, `service_token`, `any_valid_service_token`), directly or through an Access group, → `public` with the reason. That holds even when require rules narrow it, for example to an office IP range. It can be a false positive, but never a false "protected".
+     - → `unknown`: a Bypass that can match only through `other` or identity selectors, through an Access group missing from the graph, or that has no readable include rule.
    - **Service Auth** (`non_identity`):
-     - Includes of `service_token`, `any_valid_service_token`, `certificate` or `common_name` → `service_auth`.
-     - An include of `everyone`, `ip`, `geo` or `other` → `unknown`, except an IP include of `0.0.0.0/0` or `::/0`, which is `public`.
+     - Includes of `service_token`, `any_valid_service_token`, `certificate` or `common_name`, directly or through an Access group, → `service_auth`.
+     - Any IP include with prefix length 0 (`0.0.0.0/0`, `::/0`) makes the policy `public`, even next to credential includes.
+     - Every other include → `unknown`: `everyone`, `ip`, `geo`, `other`, identity selectors, `device_posture`, a missing group, or an empty or unreadable include.
    - Otherwise → `access`, including an app without any allow, bypass or Service Auth policy (deny by default). CF-010 judges how broad the allowed audience is, not the evaluator.
 4. **Origin-enforced Access.** A `tunnel_hostname` with `access_required: true` is never `public`. cloudflared rejects requests to that rule without a valid Access application token. Access issues one only after an Allow or Service Auth policy admits the request; Bypass enforces nothing.
-   - Where the Access evaluation alone yields `public` (no app, a Bypass for everyone, a public override), the row is `access` with confidence at most 1, and `reason_id` is set to the tunnel hostname, because the audience tags that cloudflared checks are not collected.
+   - Where the Access evaluation alone yields `public` (no app, a Bypass, a public override), the row is `access` with confidence at most 1, and `reason_id` is set to the tunnel hostname, because the audience tags that cloudflared checks are not collected.
+   - Exception: a `public` decision from a Service Auth policy that includes `0.0.0.0/0` or `::/0` stays `public`. Service Auth issues the Access token, so cloudflared accepts these requests.
    - `access`, `service_auth` and `unknown` rows stay as they are, and missing `access` coverage still makes the entry point `unknown`.
 5. **No matching app** → `public`. This also holds for a wildcard entry point (for example `*.<project>.pages.dev` or a `*.zone` route), with confidence 2: the decision does not depend on which hosts exist under the wildcard.
 6. **Unsupported input** → `unknown`.
-   - That covers a target of kind `other`, a target without the shape above (for example without `overrides`), a wildcard the evaluator cannot place, and missing coverage for `access` while the entry point exists.
+   - That covers a target of kind `other`, a target without the shape above (for example without `overrides`), a hostname target whose host has a port or a wildcard other than a leading `*.`, a wildcard the evaluator cannot place, and missing coverage for `access` while the entry point exists.
+   - An `other` target naming a `worker_id` that no `worker_script` carries may apply to every entry point whose Worker has `worker_id` `null`.
    - An `other` target only makes the entry points it might cover `unknown`: API type `all_workers` only Worker entry points, `all_preview_workers` only preview URLs, `worker` or `preview_worker` only that Worker's.
 7. **Confidence:**
    - 2 when the decision follows from complete data with exact matching
@@ -375,7 +389,9 @@ What the scan records, and what rules and the evaluator may rely on:
   - `partial`: some chunks were written before one failed; collection of a class stops at the first failed chunk
   - `no_permission`: the API answered 401 or 403
   - `error`: anything else
-- **Sweep** runs only for `complete` classes.
+- **Sweep** runs only for `complete` classes. A sweep never moves the current scan.
+- **Only the current scan writes.** Writes from a scan marked failed as stale, from one that ended, or from one a newer scan took over are refused (`StaleScanError`). That scan stops and ends `failed`, with the reason in `summary.detail`.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
 - **Undecided.** Where the exposure that decides a rule is `unknown`, the rule returns an undecided row (`decided = 0`). An undecided row changes no finding and is not a hit.
+- **`rule_runs`** records hits (decided rows), undecided rows, and for a failed run its error message (at most 500 characters).

@@ -55,6 +55,18 @@ Round 2 status (2026-10-30): all five builders are merged, CI is green, and the 
 | `fix-core` | R2-07 (a stale or superseded scan cannot write); `GraphReader.listAccounts`; `Admin.removeAccount` (index rows and the account's graph storage); migration 2 adding `undecided` and `error` to `rule_runs`, written by `evaluateRules` and summed in the scan counters | `apps/core/**`, `packages/graph/src/schema.ts`, `packages/graph/test/**`, `packages/rules/src/evaluate.ts`, `packages/rules/test/evaluate*.test.ts` | Tests cover each item; the web Worker's account list works against the real `GraphReader` signature |
 | `review-2` | Read-only security review of what round 2 added: `apps/web`, `scripts/`, the `access-v2` and `undecided` changes | none (report only) | A report of verified findings |
 
+Round 3 status (2026-10-30): all four fix packages are merged, and every finding of the round 2 review is fixed. The second review ([round 3 report](../reviews/2026-10-30-security-review-round-3.md)) found 1 high, 2 medium and 4 low issues in what round 2 added. The contract already describes the target behaviour for R3-01 and R3-02.
+
+## Packages for phase 1, round 4
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `fix-tunnels` | R3-01 (`access_required` only from the rule's own block) and R3-02 (rules without a hostname become `via_fallthrough` entry points per hostname), as the graph contract now says | `packages/collectors/src/identity/**`, `packages/collectors/test/identity/**`, `packages/exposure/**`, `apps/core/test/e2e/**` | Tests reproduce both findings end to end (collector, evaluator, CF-004) and pass |
+| `fix-deploy` | R3-03 to R3-06 | `scripts/**`, `docs/operator/**` | Tests reproduce each finding and pass; the dry run still passes |
+| `fix-lifecycle` | R3-07; a sweep never moves `current_scan`; CF-024 also reports Pages plain-text env vars | `packages/rules/src/evaluate.ts`, `packages/rules/test/evaluate*.test.ts`, `packages/graph/src/write.ts`, `packages/graph/test/**`, `rules/CF-024/**`, `packages/rules/src/*.gen.ts` | Tests cover each item |
+| `offboarding` | Account removal end to end: web route and UI (admin only) calling `TokenIntake.remove`, then `Admin.removeAccount`; the broker also clears the account's rate budget; the scan summary shows undecided and error counts | `apps/web/**`, `apps/broker/src/token-intake.ts`, `apps/broker/src/rate-budget.ts`, `apps/broker/test/**`, `apps/core/src/graph/**` | Tests cover removal and the summary |
+| `review-3` | Read-only verification: are R2-01 to R2-10 really fixed? Review of the round 3 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
