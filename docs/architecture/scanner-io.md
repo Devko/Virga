@@ -131,11 +131,22 @@ The reader never returns or keeps a raw secret:
 1. gitleaks: `Secret` is read once, inside the loop over findings, to see whether it starts with a known prefix (`cfat_`, `cfut_`, `cfk_`, followed by at least one character). `Match` and `Line` are never read. Trivy: no member that holds the secret is read; Trivy masks them by default, but Virga does not rely on that.
 2. What leaves is the rule ID, the file, the lines, the prefix and `masked`: the prefix followed by `********`. The prefix is Virga's own constant, not a slice of the input. The mask is the same for every secret, whatever its length.
 3. No hash of the secret is kept. A hash of a weak or short secret can be guessed, which would turn the finding store into a secret store.
-4. Two guards keep a secret from leaving through another field. A gitleaks finding whose file or rule ID contains its own secret (without the prefix, eight characters or more) is rejected. Any kept string in any reader that contains a Cloudflare token shape (a prefix and 40 or more token characters) is rejected with `secret_in_kept_field`. A secret of one finding inside the file name of another is not searched for; file names are account metadata, not scanner classifications.
+4. Two guards keep a secret from leaving through another field, both with `secret_in_kept_field`. Any kept string in any reader that contains a Cloudflare token shape (a prefix and 40 or more token characters) is rejected. A gitleaks finding whose file or rule ID holds a piece of its own secret is rejected; see [the piece rule](#the-piece-rule). A secret of one finding inside the file name of another is not searched for; file names are account metadata, not scanner classifications.
 
 Trivy findings therefore have `prefix: null`; the kind is the rule ID. A Virga-supplied Trivy rule for Cloudflare tokens would need a rule-ID-to-prefix map, which does not exist yet. A prefix links a finding to the token inventory by kind only: without the value or a hash, it cannot name the token.
 
-`test/masking.test.ts` seeds dummy secrets (built at run time, so no token-shaped literal sits in the repository) into every member that holds a secret. It checks that no six-character piece of any secret body appears in a result, nor in the message, stack, own properties or string form of any rejection, for ten kinds of broken report.
+`test/masking.test.ts` seeds dummy secrets (built at run time, so no token-shaped literal sits in the repository) into every member that holds a secret. It checks that no six-character piece of any secret body appears in a result, nor in the message, stack, own properties or string form of any rejection, for eleven kinds of broken report.
+
+### The piece rule
+
+The search runs on the secret's body: the secret without its known prefix, and without PEM armor (`-----BEGIN RSA PRIVATE KEY-----` and the `END` line), which gitleaks keeps in the secret of a private key. The armor names the kind of key and is no secret; left in, a key in `PRIVATE_KEY.pem` would reject its own report. A kept field holds a piece of the body when it contains:
+
+- six consecutive characters of it, when the body has six or more. Six is the measure the masking test uses for a leak. Until round 10 only the whole body was searched, so a file with 23 of the 24 characters of its secret passed (R9 hardening).
+- all of it, when the body has four or five characters.
+
+A body under four characters is not searched: it would match ordinary paths, and three characters are no secret worth a gap in the report. Neither is `REDACTED`, which gitleaks writes with `--redact`. The search is linear in both lengths: a rolling hash over the pieces of the shorter text finds candidates in the longer one, and a candidate counts only when the piece itself matches. Nothing of the secret outlives the check. 60 findings with 250,000-character secrets and 1,000-character paths are read in about 0.6 s in Node.
+
+What the rule does not catch: a file that spreads the secret in runs of five characters or fewer between other characters. The guard is for files and rules named after a secret, by accident or by a tool; a workload that hides its own secret on purpose has the secret already. A file that shares six characters with its own secret by chance is rejected, which turns the report into a gap; for random secrets that is rare.
 
 ## Fuzz test (gate 6)
 

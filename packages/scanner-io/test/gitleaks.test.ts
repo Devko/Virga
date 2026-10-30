@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ScannerOutputRejected } from "../src/errors.ts";
 import { readGitleaks } from "../src/gitleaks.ts";
-import { MASK } from "../src/secrets.ts";
+import { holdsSecretPiece, MASK, SECRET_PIECE } from "../src/secrets.ts";
 import { LINE_SEPARATOR } from "./chars.ts";
+import { prng } from "./mutate.ts";
 import { CF_SECRET, gitleaksSample, json } from "./samples.ts";
 
 type Finding = Record<string, unknown>;
@@ -110,6 +111,121 @@ describe("readGitleaks", () => {
     const findings = clone();
     Object.assign(findings[0] ?? {}, { File: `dist/${CF_SECRET.slice(5)}.js` });
     expect(rejection(findings)).toMatchObject({ reason: "secret_in_kept_field", at: "/0" });
+  });
+
+  describe("secret guard (R9 hardening)", () => {
+    // Synthetic secrets, built at run time like the samples.
+    const SECRET = ["Ab3dE6gH", "9jK2mN5p", "Q8sT1vW4"].join("");
+    const withSecret = (secret: string, fields: Record<string, unknown>): Finding[] => {
+      const findings = clone();
+      Object.assign(findings[1] ?? {}, { Secret: secret, ...fields });
+      return findings;
+    };
+    const guard = (secret: string, fields: Record<string, unknown>) =>
+      rejection(withSecret(secret, fields));
+    const accepts = (secret: string, fields: Record<string, unknown>) =>
+      readGitleaks(json(withSecret(secret, fields)));
+
+    it("R9 secret guard: rejects a file with 23 of the 24 characters of its secret", () => {
+      for (const part of [SECRET.slice(1), SECRET.slice(0, -1)]) {
+        expect(guard(SECRET, { File: `dist/${part}.js` })).toMatchObject({
+          reason: "secret_in_kept_field",
+          at: "/1",
+        });
+      }
+    });
+
+    it("R9 secret guard: rejects any six consecutive characters of the secret", () => {
+      for (let i = 0; i + 6 <= SECRET.length; i++) {
+        const piece = SECRET.slice(i, i + 6);
+        expect(guard(SECRET, { File: `a/${piece}/b.js` }).reason).toBe("secret_in_kept_field");
+        expect(guard(SECRET, { RuleID: `rule-${piece}` }).reason).toBe("secret_in_kept_field");
+      }
+    });
+
+    it("R9 secret guard: keeps a file that shares five characters with the secret", () => {
+      const report = accepts(SECRET, { File: `a/${SECRET.slice(3, 8)}/b.js` });
+      expect(report.secrets.map((s) => s.file)).toContain(`a/${SECRET.slice(3, 8)}/b.js`);
+    });
+
+    it("R9 secret guard: searches a 7-character secret", () => {
+      const short = SECRET.slice(0, 7);
+      expect(guard(short, { File: `x${short.slice(1)}.js` }).reason).toBe("secret_in_kept_field");
+      expect(guard(short, { File: `${short}.js` }).reason).toBe("secret_in_kept_field");
+    });
+
+    it("R9 secret guard: searches a secret of four or five characters whole", () => {
+      for (const short of [SECRET.slice(0, 4), SECRET.slice(0, 5)]) {
+        expect(guard(short, { File: `cfg/${short}.txt` }).reason).toBe("secret_in_kept_field");
+        expect(() => accepts(short, { File: `cfg/${short.slice(1)}.txt` })).not.toThrow();
+      }
+    });
+
+    it("R9 secret guard: does not search a secret under four characters", () => {
+      const tiny = SECRET.slice(0, 3);
+      expect(() => accepts(tiny, { File: `src/${tiny}.js` })).not.toThrow();
+    });
+
+    it("R9 secret guard: leaves the known prefix out of the search", () => {
+      const token = `cfat_${SECRET}`;
+      const report = accepts(token, { File: "docs/cfat_tokens.md" });
+      expect(report.secrets.find((s) => s.file === "docs/cfat_tokens.md")).toMatchObject({
+        prefix: "cfat_",
+      });
+      expect(guard(token, { File: `docs/${SECRET.slice(10, 16)}.md` }).reason).toBe(
+        "secret_in_kept_field",
+      );
+    });
+
+    it("R9 secret guard: leaves PEM armor out of the search, not the key", () => {
+      const material = ["MIIEvQIBADAN", "BgkqhkiG9w0B", "Zq8Rw2Lm4Tn6"].join("");
+      const pem = `-----BEGIN RSA PRIVATE KEY-----\n${material}\n-----END RSA PRIVATE KEY-----`;
+      for (const file of ["keys/PRIVATE_KEY.pem", "BEGIN RSA PRIVATE KEY.txt", "certs/END.pem"]) {
+        expect(() => accepts(pem, { File: file })).not.toThrow();
+      }
+      expect(guard(pem, { File: `keys/${material.slice(20, 26)}.pem` }).reason).toBe(
+        "secret_in_kept_field",
+      );
+    });
+
+    it("R9 secret guard: the piece search agrees with a naive search", () => {
+      const naive = (kept: string, body: string): boolean => {
+        if (body.length < SECRET_PIECE) return kept.includes(body);
+        for (let i = 0; i + SECRET_PIECE <= body.length; i++) {
+          if (kept.includes(body.slice(i, i + SECRET_PIECE))) return true;
+        }
+        return false;
+      };
+      const rng = prng(9);
+      // A small alphabet, so that pieces often match; a surrogate pair too.
+      const alphabet = ["a", "b", "c", "/", ".", "😀", String.fromCharCode(0xffff)];
+      const text = (max: number) =>
+        Array.from({ length: rng.int(max) }, () => rng.pick(alphabet)).join("");
+      let matches = 0;
+      for (let i = 0; i < 20_000; i++) {
+        const kept = text(30);
+        const body = text(rng.chance(0.2) ? 6 : 24);
+        const expected = naive(kept, body);
+        if (expected) matches++;
+        expect(holdsSecretPiece(kept, body), JSON.stringify([kept, body])).toBe(expected);
+      }
+      expect(matches).toBeGreaterThan(1_000);
+    });
+
+    it("R9 secret guard: searches long secrets and long paths in linear time", () => {
+      // 60 findings, each with a 250,000-character secret and a 1,000-character path.
+      const body = Array.from({ length: 25_000 }, (_, i) => `${i}`.padStart(10, "z")).join("");
+      const findings = Array.from({ length: 60 }, (_, i) => ({
+        RuleID: "private-key",
+        File: `${"p".repeat(990)}/${i}.pem`,
+        StartLine: i,
+        EndLine: i,
+        Secret: body,
+      }));
+      const started = performance.now();
+      expect(readGitleaks(json(findings)).secrets).toHaveLength(60);
+      expect(performance.now() - started).toBeLessThan(2_000);
+    });
   });
 
   it("rejects too many findings instead of truncating", () => {
