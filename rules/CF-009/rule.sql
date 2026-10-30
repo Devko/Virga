@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-009
--- version: 1
+-- version: 2
 -- title: Idle Worker with bindings to production data
 -- severity: low
 -- kind: posture
@@ -20,7 +20,9 @@
 --    is in production use: another Worker with invocations binds it too, or
 --    the production environment of a Pages project does, and
 -- 4. no entry point of the Worker is decided `public`. Public Workers fall
---    under CF-001 and CF-006 instead.
+--    under CF-001 and CF-006 instead. An entry point with exposure `unknown`
+--    may be public, so a Worker that meets 1 to 3 and has one is undecided
+--    (decided = 0).
 --
 -- Gap: the graph has no marker for production data. "Also bound by a live
 -- workload" stands in for it, so a store that only the idle Worker uses is
@@ -67,21 +69,21 @@ production_use AS (
     AND pb.props ->> '$.environment' = 'production'
     AND t.type IN (SELECT type FROM store_type)
 ),
-public_script AS (
+exposed_script AS (
   -- route, Custom Domain, workers.dev
-  SELECT r.dst AS script_id
+  SELECT r.dst AS script_id, x.decision
   FROM edges r
   JOIN nodes e ON e.id = r.src AND e.deleted_at IS NULL
   JOIN nodes s ON s.id = r.dst AND s.type = 'worker_script'
-  JOIN exposure x ON x.entry_id = r.src AND x.decision = 'public'
+  JOIN exposure x ON x.entry_id = r.src AND x.decision IN ('public', 'unknown')
   WHERE r.type = 'ROUTES_TO' AND r.deleted_at IS NULL
   UNION
   -- version URLs
-  SELECT v.props ->> '$.script_node_id'
+  SELECT v.props ->> '$.script_node_id', x.decision
   FROM edges r
   JOIN nodes e ON e.id = r.src AND e.deleted_at IS NULL
   JOIN nodes v ON v.id = r.dst AND v.type = 'worker_version'
-  JOIN exposure x ON x.entry_id = r.src AND x.decision = 'public'
+  JOIN exposure x ON x.entry_id = r.src AND x.decision IN ('public', 'unknown')
   WHERE r.type = 'ROUTES_TO' AND r.deleted_at IS NULL
 )
 SELECT
@@ -89,6 +91,9 @@ SELECT
   'CF-009:' || s.script_id                AS fingerprint,
   'low'                                   AS severity,
   s.script_id                             AS subject_id,
+  NOT EXISTS (SELECT 1 FROM exposed_script es
+              WHERE es.script_id = s.script_id AND es.decision = 'unknown')
+                                          AS decided,
   json_group_array(DISTINCT b.store_id)   AS data_stores,
   json_group_array(DISTINCT pu.user_id)   AS shared_with
 FROM script s
@@ -97,5 +102,6 @@ JOIN binding b         ON b.script_id = s.script_id
 JOIN production_use pu ON pu.store_id = b.store_id AND pu.user_id <> s.script_id
 WHERE s.invocations = 0
   AND s.created_ms <= c.now_ms - :min_age_days * 86400000
-  AND NOT EXISTS (SELECT 1 FROM public_script ps WHERE ps.script_id = s.script_id)
+  AND NOT EXISTS (SELECT 1 FROM exposed_script es
+                  WHERE es.script_id = s.script_id AND es.decision = 'public')
 GROUP BY s.script_id

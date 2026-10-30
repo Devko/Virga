@@ -1,13 +1,14 @@
 # Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get/
 # Graph shape: docs/architecture/graph-contract.md, tunnel_hostname and exposure
 description: >
-  Access protects the SSH hostname, Service Auth the API, and the evaluator
-  could not decide the third hostname; unknown is never public.
+  Access protects the SSH hostname and Service Auth the API. The evaluator
+  could not decide a third hostname, which only answers with a status code:
+  it would not qualify even if it were public, so it is not undecided either.
 nodes:
   - { type: tunnel, id: t-1, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
   - { type: tunnel_hostname, id: ssh.example.com, name: ssh.example.com, props: { hostname: ssh.example.com, path: "", service: "ssh://localhost:22", origin_scheme: ssh, tunnel_id: t-1 } }
   - { type: tunnel_hostname, id: api.example.com, name: api.example.com, props: { hostname: api.example.com, path: "", service: "https://localhost:8443", origin_scheme: https, tunnel_id: t-1 } }
-  - { type: tunnel_hostname, id: odd.example.com, name: odd.example.com, props: { hostname: odd.example.com, path: "", service: "tcp://localhost:5432", origin_scheme: tcp, tunnel_id: t-1 } }
+  - { type: tunnel_hostname, id: odd.example.com, name: odd.example.com, props: { hostname: odd.example.com, path: "", service: "http_status:503", origin_scheme: http_status, tunnel_id: t-1 } }
 edges:
   - { type: ROUTES_TO, src: "tunnel_hostname:ssh.example.com", dst: "tunnel:t-1" }
   - { type: ROUTES_TO, src: "tunnel_hostname:api.example.com", dst: "tunnel:t-1" }

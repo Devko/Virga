@@ -109,11 +109,12 @@ The TypeScript evaluator writes one row per entry point and path prefix with `re
 Implemented in [`packages/rules/src/evaluate.ts`](../../packages/rules/src/evaluate.ts); its doc comment is the detailed reference.
 
 - One row per fingerprint. Rules choose the fingerprint granularity: CF-001 uses one per Worker, so a new CVE updates the finding and does not open a second one (D-10).
-- `open` → `resolved` only when the rule ran with status `evaluated` and no longer returns the fingerprint. A rule that is `not_evaluated` never resolves anything.
+- `open` → `resolved` only when the rule ran with status `evaluated` and no longer returns the fingerprint, decided or undecided. A rule that is `not_evaluated` never resolves anything.
 - A finding that comes back after `resolved` is reopened with its history intact.
 - Suppression always has `suppressed_until`, a reason and the actor. It expires on its own. While it lasts, the accepted severity is kept and a higher severity ends it.
 - A rule whose query fails or breaks the output contract is `error` for that run and changes no finding; the rules after it still run.
-- Open gap: when an entry point's exposure turns `unknown`, a rule that needs `public` stops returning the finding, and an evaluated rule then resolves it. Round 2 adds an "undecided" outcome so such findings stay as they are.
+- Unknown is a result. A row with `decided = 0` says the rule cannot decide that fingerprint, for example because the entry points that decide it have exposure `unknown`. It neither opens nor resolves: an existing finding keeps its status, severity, evidence, node links and `last_seen` (an open, suppressed or resolved finding stays so; an expired suppression waits for the next decided row), and without a finding nothing opens. Before round 2, such a finding was resolved as soon as its exposure turned `unknown`.
+- `rule_runs.hits` counts decided rows only; the run summary reports undecided rows apart (`undecided`). `rule_runs` has no column for them yet.
 - Changing the rule version keeps the fingerprints unless the rule's meaning changes. In that case the rule gets a new ID.
 
 ## Rule files
@@ -121,12 +122,13 @@ Implemented in [`packages/rules/src/evaluate.ts`](../../packages/rules/src/evalu
 ```
 rules/
   CF-001/
-    rule.sql          # front matter + one SELECT/WITH statement
+    rule.sql           # front matter + one SELECT/WITH statement
     fixtures/
-      positive-*.yaml # graph scenario -> expected fingerprints and severities
-      negative-*.yaml # graph scenario -> no hits
+      positive-*.yaml  # graph scenario -> expected fingerprints and severities
+      negative-*.yaml  # graph scenario -> no rows at all
+      undecided-*.yaml # graph scenario -> at least one undecided row
     fix/
-      README.md       # fix proposals; Wrangler and Terraform templates in phase 4
+      README.md        # fix proposals; Wrangler and Terraform templates in phase 4
 ```
 
 Front matter at the top of `rule.sql`, parsed as YAML:
@@ -134,11 +136,11 @@ Front matter at the top of `rule.sql`, parsed as YAML:
 ```sql
 -- ---
 -- id: CF-001
--- version: 1
+-- version: 2
 -- title: Public Worker with an exploitable critical vulnerability and access to data
 -- severity: critical
 -- kind: toxic                 # posture | toxic | detection
--- requires: [workers, routes, packages, vulns, storage, exposure]
+-- requires: [workers, packages, vulns, storage, exposure, access]
 -- params:
 --   sev_min: 4
 --   min_conf: 1
@@ -146,9 +148,11 @@ Front matter at the top of `rule.sql`, parsed as YAML:
 -- ---
 ```
 
-Output contract: each row has `rule_id`, `fingerprint` (starting with `<rule_id>:`), `severity` and `subject_id` (the node the finding is about), plus evidence columns. List-valued evidence uses `json_group_array(DISTINCT …)`, not `group_concat`, because hostnames and names can contain commas. Evidence lists are capped at 100 items and strings at 2,048 characters. Every node ID in an evidence list also lands in `finding_nodes`, with the column name as the role. Rules that depend on time read the `now_ms` parameter (the scan start).
+Output contract: each row has `rule_id`, `fingerprint` (starting with `<rule_id>:`), `severity` and `subject_id` (the node the finding is about), an optional `decided` (1 by default; 0 for an undecided row), plus evidence columns. An undecided row meets the same contract and its fingerprint is unique in the result too, so a rule that decides a subject on one path and cannot on another returns one decided row. List-valued evidence uses `json_group_array(DISTINCT …)`, not `group_concat`, because hostnames and names can contain commas. Evidence lists are capped at 100 items and strings at 2,048 characters. Every node ID in an evidence list also lands in `finding_nodes`, with the column name as the role. Rules that depend on time read the `now_ms` parameter (the scan start).
 
-A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`, `src`, `dst`, `key`, `props`, optional `deleted`), `exposure`, `vulns` (severity by name, `kev`), `signals` and the `expect` list. Fixtures load through the regular write path, so every fixture also exercises the batch upsert.
+Rules that read `exposure` require `exposure` and `access`. Where the entry points that decide such a rule have exposure `unknown`, and the rule would qualify if they were `public` (or, for CF-009, if they were not), the rule returns an undecided row instead of none; one entry point that decides the subject makes the row decided, with only the deciding entry points as evidence. CF-001, CF-002, CF-004, CF-009, CF-021 and CF-022 do this since version 2.
+
+A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`, `src`, `dst`, `key`, `props`, optional `deleted`), `exposure`, `vulns` (severity by name, `kev`), `signals` and the `expect` list. An `expect` entry has a `fingerprint`, an optional `severity`, and `decided: false` for an undecided row, which takes no severity; the fixture fails when a row's decided state differs from its entry. Fixtures load through the regular write path, so every fixture also exercises the batch upsert.
 
 `pnpm rules:build`, implemented in [`packages/rules`](../../packages/rules):
 
@@ -159,7 +163,7 @@ A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`,
 5. rejects `requires` entries that are neither a resource class nor a derived input (`exposure`, `packages`, `vulns`)
 6. writes `rules.gen.ts` and `fixtures.gen.ts`
 
-`pnpm rules:check` does the same and fails if the generated files are stale. The core Worker's tests run every fixture again in Durable Object SQLite, because it allows fewer SQL functions than Node does. 
+`pnpm rules:check` does the same and fails if the generated files are stale. The core Worker's tests run every fixture again in Durable Object SQLite, because it allows fewer SQL functions than Node does. The tests in `packages/rules` run every fixture through the findings lifecycle (an undecided row must leave a seeded open finding unchanged), check the fixture name prefixes above, and require a fixture with an undecided row for every rule that requires `exposure`.
 
 ## CF-001, revised
 
@@ -170,5 +174,6 @@ The rule is [`rules/CF-001/rule.sql`](../../rules/CF-001/rule.sql). Compared wit
 3. **Ambiguous lists.** `group_concat` changed to `json_group_array(DISTINCT …)`.
 4. **Traffic from `signals`**, not from node props (see above).
 5. **Alias collision.** `store_types(t)` shared its name with the table alias `t`. It worked, but it was confusing; renamed to `store_type`.
+6. **Unknown entry points** (version 2). A Worker that only entry points with exposure `unknown` serve would qualify if one were public, so it returns an undecided row. The fixture `undecided-unknown-entry-point` covers it.
 
 Not in the query: the spec's "a matching WAF virtual patch lowers one level". That needs WAF rule-to-CVE matching. It belongs in a severity modifier step after the query (D-13).

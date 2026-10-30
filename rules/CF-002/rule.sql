@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-002
--- version: 1
+-- version: 2
 -- title: Worker protected by Access on one entry point and reachable around it on another
 -- severity: high
 -- kind: toxic
@@ -13,16 +13,20 @@
 --    one entry point is decided `public` on another: workers.dev, a version
 --    URL, an extra route or Custom Domain. Each entry point is judged by the
 --    exposure row with the longest prefix that covers the path, so a host
---    that protects /admin everywhere is not reported. `unknown` never counts.
+--    that protects /admin everywhere is not reported. `unknown` is never
+--    public or protected: when it stands on either side, the path would be
+--    such a gap if the unknown went one way, so the pair is undecided.
 -- 2. The Worker has Worker-level Access, but an Access app with a hostname
 --    target on one of its entry points carries a Bypass policy or an Allow
 --    policy that includes Everyone. Hostname and path apps take precedence
 --    over Worker-level Access. Host matching is exact, or a `*.` wildcard
 --    that covers one label, as Access does.
 --
--- One finding per Worker. A route that only serves part of a host (for
--- example example.com/api/*) is compared on the whole host; the graph does
--- not split exposure by route path.
+-- One finding per Worker. A Worker with only undecided pairs returns an
+-- undecided row (decided = 0) that lists them; one decided pair or override
+-- decides it. A route that only serves part of a host (for example
+-- example.com/api/*) is compared on the whole host; the graph does not split
+-- exposure by route path.
 WITH
 entry AS (
   -- route, Custom Domain, workers.dev -> script
@@ -51,7 +55,7 @@ point AS (
 ),
 -- For every path any entry point of the Worker decides, the row of each entry
 -- point that decides it.
-decided AS (
+judged AS (
   SELECT pt.script_id, pt.path, d.entry_id, d.decision, d.confidence,
          row_number() OVER (
            PARTITION BY pt.script_id, pt.path, d.entry_id ORDER BY length(d.prefix) DESC
@@ -63,11 +67,13 @@ decided AS (
 ),
 around_access AS (
   SELECT a.script_id, a.path, a.entry_id AS protected_entry, b.entry_id AS public_entry,
-         min(a.confidence, b.confidence) AS confidence
-  FROM decided a
-  JOIN decided b ON b.script_id = a.script_id AND b.path = a.path AND b.entry_id <> a.entry_id
+         min(a.confidence, b.confidence) AS confidence,
+         a.decision <> 'unknown' AND b.decision <> 'unknown' AS decided
+  FROM judged a
+  JOIN judged b ON b.script_id = a.script_id AND b.path = a.path AND b.entry_id <> a.entry_id
   WHERE a.pos = 1 AND b.pos = 1
-    AND a.decision IN ('access', 'service_auth') AND b.decision = 'public'
+    AND a.decision IN ('access', 'service_auth', 'unknown')
+    AND b.decision IN ('public', 'unknown')
 ),
 worker_access AS (
   SELECT a.id AS app_id, 'worker_script:' || (t.value ->> '$.script') AS script_id
@@ -122,17 +128,22 @@ overridden AS (
 ),
 hit AS (
   SELECT script_id, path, protected_entry, public_entry, NULL AS overridden_entry,
-         NULL AS app_id, confidence
+         NULL AS app_id, confidence, decided
   FROM around_access
   UNION ALL
-  SELECT script_id, NULL, NULL, NULL, entry_id, app_id, NULL
+  SELECT script_id, NULL, NULL, NULL, entry_id, app_id, NULL, 1
   FROM overridden
+),
+deciding AS (
+  SELECT h.*, max(h.decided) OVER (PARTITION BY h.script_id) AS script_decided
+  FROM hit h
 )
 SELECT
   'CF-002'                  AS rule_id,
   'CF-002:' || script_id    AS fingerprint,
   'high'                    AS severity,
   script_id                 AS subject_id,
+  max(decided)              AS decided,
   json_group_array(DISTINCT protected_entry) FILTER (WHERE protected_entry IS NOT NULL)
                             AS protected_entry_points,
   json_group_array(DISTINCT public_entry) FILTER (WHERE public_entry IS NOT NULL)
@@ -144,5 +155,7 @@ SELECT
   json_group_array(DISTINCT app_id) FILTER (WHERE app_id IS NOT NULL)
                             AS overriding_apps,
   min(confidence)           AS exposure_confidence
-FROM hit
+FROM deciding
+-- decided pairs and overrides make up a decided row; undecided pairs only without them
+WHERE decided = 1 OR script_decided = 0
 GROUP BY script_id

@@ -14,7 +14,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { evaluateRules } from "../src/evaluate.ts";
 import type { CompiledRule, RuleSeverity } from "../src/types.ts";
 
-/** Flags every Worker script with `bad: true`; severity, a store and a note come from props. */
+/**
+ * Flags every Worker script with `bad: true`; severity, a store and a note come
+ * from props. A script with `unknown: true` is undecided.
+ */
 const RULE: CompiledRule = {
   id: "CF-900",
   version: 1,
@@ -26,6 +29,7 @@ const RULE: CompiledRule = {
   enriches: null,
   sql: `SELECT 'CF-900' AS rule_id, 'CF-900:' || s.id AS fingerprint,
                COALESCE(s.props ->> '$.severity', 'high') AS severity, s.id AS subject_id,
+               CASE WHEN s.props ->> '$.unknown' = 1 THEN 0 ELSE 1 END AS decided,
                json_array(s.props ->> '$.store') AS stores, s.props ->> '$.note' AS note,
                json_array(s.name) AS names
         FROM nodes s
@@ -43,6 +47,7 @@ const ruleWith = (id: string, sql: string, extra: Partial<CompiledRule> = {}): C
 interface Script {
   name: string;
   bad?: boolean;
+  unknown?: boolean;
   severity?: RuleSeverity;
   store?: string;
   note?: string;
@@ -66,6 +71,7 @@ async function scan(
         name: s.name,
         props: {
           bad: s.bad ?? true,
+          unknown: s.unknown ?? false,
           severity: s.severity ?? null,
           store: s.store ?? null,
           note: s.note ?? null,
@@ -136,7 +142,15 @@ describe("evaluateRules: opening and updating", () => {
   it("opens a finding with evidence, title and node links", async () => {
     await scan(db, "s1", 1000, [{ name: "a", store: "kv_namespace:k1", note: "first" }]);
     expect(evaluateRules(db, [RULE], "s1", 1000)).toEqual([
-      { ruleId: "CF-900", status: "evaluated", hits: 1, missing: [], opened: 1, resolved: 0 },
+      {
+        ruleId: "CF-900",
+        status: "evaluated",
+        hits: 1,
+        undecided: 0,
+        missing: [],
+        opened: 1,
+        resolved: 0,
+      },
     ]);
     const f = finding();
     expect(f).toMatchObject({
@@ -199,6 +213,7 @@ describe("evaluateRules: coverage", () => {
         ruleId: "CF-900",
         status: "not_evaluated",
         hits: 0,
+        undecided: 0,
         missing: ["workers"],
         opened: 0,
         resolved: 0,
@@ -207,6 +222,7 @@ describe("evaluateRules: coverage", () => {
         ruleId: "CF-901",
         status: "not_evaluated",
         hits: 0,
+        undecided: 0,
         missing: ["workers", "exposure"],
         opened: 0,
         resolved: 0,
@@ -357,6 +373,125 @@ describe("evaluateRules: suppression", () => {
   });
 });
 
+describe("evaluateRules: undecided rows", () => {
+  const ruleRun = (scanId: string) =>
+    db.query("SELECT status, hits FROM rule_runs WHERE scan_id = ? AND rule_id = 'CF-900'", scanId);
+
+  it("never opens a finding", async () => {
+    await scan(db, "s1", 1000, [{ name: "a", unknown: true }]);
+    expect(evaluateRules(db, [RULE], "s1", 1000)).toEqual([
+      {
+        ruleId: "CF-900",
+        status: "evaluated",
+        hits: 0,
+        undecided: 1,
+        missing: [],
+        opened: 0,
+        resolved: 0,
+      },
+    ]);
+    expect(findingCount()).toBe(0);
+    expect(links()).toEqual([]);
+  });
+
+  it("keeps an open finding open with its severity, evidence and node links", async () => {
+    await scan(db, "s1", 1000, [{ name: "a", store: "kv_namespace:k1", note: "first" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    const before = finding();
+
+    await scan(db, "s2", 2000, [{ name: "a", unknown: true, severity: "critical", note: "x" }]);
+    expect(evaluateRules(db, [RULE], "s2", 2000)[0]).toMatchObject({
+      status: "evaluated",
+      hits: 0,
+      undecided: 1,
+      opened: 0,
+      resolved: 0,
+    });
+    expect(finding()).toEqual(before);
+    expect(before).toMatchObject({ status: "open", severity: "high", last_seen: 1000 });
+    expect(links()).toEqual([
+      { node_id: "kv_namespace:k1", role: "stores" },
+      { node_id: "worker_script:a", role: "subject" },
+    ]);
+  });
+
+  it("keeps a resolved finding resolved", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    await scan(db, "s2", 2000, [{ name: "a", bad: false }]);
+    evaluateRules(db, [RULE], "s2", 2000);
+    const before = finding();
+    expect(before).toMatchObject({ status: "resolved", resolved_at: 2000 });
+
+    await scan(db, "s3", 3000, [{ name: "a", unknown: true }]);
+    expect(evaluateRules(db, [RULE], "s3", 3000)[0]).toMatchObject({
+      hits: 0,
+      undecided: 1,
+      opened: 0,
+      resolved: 0,
+    });
+    expect(finding()).toEqual(before);
+  });
+
+  it("keeps a suppression as it is, even past its end, until the rule decides again", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    suppress(1500);
+    await scan(db, "s2", 2000, [{ name: "a", unknown: true, severity: "critical" }]);
+    evaluateRules(db, [RULE], "s2", 2000);
+    expect(finding()).toMatchObject({
+      status: "suppressed",
+      severity: "high",
+      suppressed_until: 1500,
+      suppressed_by: "alice",
+    });
+
+    await scan(db, "s3", 3000, [{ name: "a" }]);
+    evaluateRules(db, [RULE], "s3", 3000);
+    expect(finding()).toMatchObject({ status: "open", suppressed_until: null, last_seen: 3000 });
+  });
+
+  it("resolves the finding once the rule decides the fingerprint is gone", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    await scan(db, "s2", 2000, [{ name: "a", unknown: true }]);
+    evaluateRules(db, [RULE], "s2", 2000);
+    await scan(db, "s3", 3000, [{ name: "a", bad: false }]);
+    expect(evaluateRules(db, [RULE], "s3", 3000)[0]).toMatchObject({ resolved: 1 });
+    expect(finding()).toMatchObject({ status: "resolved", resolved_at: 3000, last_seen: 1000 });
+  });
+
+  it("counts only decided rows as hits, and updates the decided ones as usual", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }, { name: "b" }, { name: "c" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    await scan(db, "s2", 2000, [
+      { name: "a", unknown: true },
+      { name: "b", note: "second" },
+      { name: "c", bad: false },
+      { name: "d", unknown: true },
+    ]);
+    expect(evaluateRules(db, [RULE], "s2", 2000)[0]).toMatchObject({
+      status: "evaluated",
+      hits: 1,
+      undecided: 2,
+      opened: 0,
+      resolved: 1,
+    });
+    expect(ruleRun("s2")).toEqual([{ status: "evaluated", hits: 1 }]);
+    expect(finding()).toMatchObject({ status: "open", last_seen: 1000 });
+    expect(finding("CF-900:worker_script:b")).toMatchObject({ status: "open", last_seen: 2000 });
+    expect(JSON.parse(finding("CF-900:worker_script:b").evidence).note).toBe("second");
+    expect(finding("CF-900:worker_script:c")).toMatchObject({ status: "resolved" });
+    expect(findingCount()).toBe(3);
+  });
+
+  it("does not store the decided column as evidence", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    expect(JSON.parse(finding().evidence)).not.toHaveProperty("decided");
+  });
+});
+
 describe("evaluateRules: rule runs and errors", () => {
   const broken = ruleWith("CF-902", "SELECT * FROM no_such_table");
 
@@ -435,6 +570,24 @@ describe("evaluateRules: rule runs and errors", () => {
       "a subject that is not a node ID",
       select(
         "'CF-900' AS rule_id, 'CF-900:' || s.id AS fingerprint, 'high' AS severity, s.name AS subject_id",
+      ),
+    ],
+    [
+      "a decided value other than 0 or 1",
+      select(
+        "'CF-900' AS rule_id, 'CF-900:' || s.id AS fingerprint, 'high' AS severity, s.id AS subject_id, 2 AS decided",
+      ),
+    ],
+    [
+      "a NULL decided value",
+      select(
+        "'CF-900' AS rule_id, 'CF-900:' || s.id AS fingerprint, 'high' AS severity, s.id AS subject_id, NULL AS decided",
+      ),
+    ],
+    [
+      "a decided and an undecided row with one fingerprint",
+      select(
+        "'CF-900' AS rule_id, 'CF-900:same' AS fingerprint, 'high' AS severity, s.id AS subject_id, s.name = 'a' AS decided",
       ),
     ],
     [

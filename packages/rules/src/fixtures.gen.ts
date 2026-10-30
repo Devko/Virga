@@ -893,6 +893,215 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-001",
+    "name": "undecided-unknown-entry-point",
+    "description": "Three vulnerable Workers with data access. The evaluator could not decide the only route of u, so u would qualify if the route were public: the row is undecided. m has the same kind of route plus a public workers.dev, which decides it. The unknown route of n serves a version without a data store, so n would not qualify either way.\n",
+    "nodes": [
+      {
+        "type": "worker_route",
+        "id": "r-u",
+        "name": "u.example.com/*"
+      },
+      {
+        "type": "worker_script",
+        "id": "u",
+        "name": "u"
+      },
+      {
+        "type": "worker_version",
+        "id": "u1",
+        "props": {
+          "script_node_id": "worker_script:u"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-m",
+        "name": "m.example.com/*"
+      },
+      {
+        "type": "workers_dev",
+        "id": "m.acme.workers.dev",
+        "name": "m.acme.workers.dev",
+        "props": {
+          "script": "m"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "m",
+        "name": "m"
+      },
+      {
+        "type": "worker_version",
+        "id": "m1",
+        "props": {
+          "script_node_id": "worker_script:m"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-n",
+        "name": "n.example.com/*"
+      },
+      {
+        "type": "worker_script",
+        "id": "n",
+        "name": "n"
+      },
+      {
+        "type": "worker_version",
+        "id": "n1",
+        "props": {
+          "script_node_id": "worker_script:n"
+        }
+      },
+      {
+        "type": "package",
+        "id": "pkg:npm/lodash@4.17.20",
+        "name": "lodash"
+      },
+      {
+        "type": "kv_namespace",
+        "id": "k1",
+        "name": "sessions"
+      },
+      {
+        "type": "d1_database",
+        "id": "main",
+        "name": "main"
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-u",
+        "dst": "worker_script:u"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:u",
+        "dst": "worker_version:u1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "CONTAINS",
+        "src": "worker_version:u1",
+        "dst": "package:pkg:npm/lodash@4.17.20",
+        "props": {
+          "confidence": 2
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:u1",
+        "dst": "kv_namespace:k1",
+        "key": "SESSIONS"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-m",
+        "dst": "worker_script:m"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:m.acme.workers.dev",
+        "dst": "worker_script:m"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:m",
+        "dst": "worker_version:m1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "CONTAINS",
+        "src": "worker_version:m1",
+        "dst": "package:pkg:npm/lodash@4.17.20",
+        "props": {
+          "confidence": 2
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:m1",
+        "dst": "d1_database:main",
+        "key": "DB"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-n",
+        "dst": "worker_script:n"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:n",
+        "dst": "worker_version:n1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "CONTAINS",
+        "src": "worker_version:n1",
+        "dst": "package:pkg:npm/lodash@4.17.20",
+        "props": {
+          "confidence": 2
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_route:r-u",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_route:r-u",
+        "path": "/admin",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-m",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "workers_dev:m.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-n",
+        "decision": "unknown",
+        "confidence": 0
+      }
+    ],
+    "vulns": [
+      {
+        "package": "package:pkg:npm/lodash@4.17.20",
+        "id": "GHSA-test-crit",
+        "severity": "critical"
+      }
+    ],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-001:worker_script:u",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-001:worker_script:m",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-002",
     "name": "negative-consistent-protection",
     "description": "admin is protected on every entry point; a removed route that was public is tombstoned. site keeps /admin behind Access on both of its hosts and is public elsewhere on both, so no protected path is public anywhere.\n",
@@ -1303,7 +1512,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-002",
     "name": "negative-unknown-or-all-public",
-    "description": "blog is public on every entry point, which is not a protection gap (CF-006 judges public Workers). tool is protected on its domain, but the evaluator could not decide workers.dev and has no row for the version URL; unknown is never public.\n",
+    "description": "blog is public on every entry point, which is not a protection gap (CF-006 judges public Workers). tool is protected on its domain and has no row for its version URL, which compares with nothing. solo has a single entry point, which the evaluator could not decide: with nothing to compare it with, it would not be a gap either way. The undecided fixture covers an unknown entry point next to a protected one.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -1352,14 +1561,6 @@ export const FIXTURES: readonly RuleFixture[] = [
         }
       },
       {
-        "type": "workers_dev",
-        "id": "tool.acme.workers.dev",
-        "name": "tool.acme.workers.dev",
-        "props": {
-          "script": "tool"
-        }
-      },
-      {
         "type": "worker_preview_url",
         "id": "t1-tool.acme.workers.dev",
         "name": "t1-tool.acme.workers.dev",
@@ -1368,6 +1569,19 @@ export const FIXTURES: readonly RuleFixture[] = [
           "kind": "version",
           "version_id": "t1",
           "alias": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "solo",
+        "name": "solo"
+      },
+      {
+        "type": "workers_dev",
+        "id": "solo.acme.workers.dev",
+        "name": "solo.acme.workers.dev",
+        "props": {
+          "script": "solo"
         }
       }
     ],
@@ -1389,13 +1603,13 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "ROUTES_TO",
-        "src": "workers_dev:tool.acme.workers.dev",
-        "dst": "worker_script:tool"
+        "src": "worker_preview_url:t1-tool.acme.workers.dev",
+        "dst": "worker_version:t1"
       },
       {
         "type": "ROUTES_TO",
-        "src": "worker_preview_url:t1-tool.acme.workers.dev",
-        "dst": "worker_version:t1"
+        "src": "workers_dev:solo.acme.workers.dev",
+        "dst": "worker_script:solo"
       }
     ],
     "exposure": [
@@ -1415,7 +1629,7 @@ export const FIXTURES: readonly RuleFixture[] = [
         "confidence": 2
       },
       {
-        "entry": "workers_dev:tool.acme.workers.dev",
+        "entry": "workers_dev:solo.acme.workers.dev",
         "decision": "unknown",
         "confidence": 0
       }
@@ -1824,6 +2038,257 @@ export const FIXTURES: readonly RuleFixture[] = [
     "expect": [
       {
         "fingerprint": "CF-002:worker_script:admin",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-002",
+    "name": "undecided-unknown-entry-point",
+    "description": "Unknown is neither public nor protected. tool is protected on its domain, and the evaluator could not decide workers.dev, which may be the way around Access. docs is public on its route and unknown on workers.dev, which may be the protected side. site is public on its route and on workers.dev, but the evaluator could not decide /admin on the route. All three are undecided. api has the same unknown workers.dev as tool, and its public version URL decides it.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "tool",
+        "name": "tool"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "tool.example.com",
+        "name": "tool.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "tool.example.com",
+          "service": "tool",
+          "environment": null
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "tool.acme.workers.dev",
+        "name": "tool.acme.workers.dev",
+        "props": {
+          "script": "tool"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "docs",
+        "name": "docs"
+      },
+      {
+        "type": "worker_route",
+        "id": "r-docs",
+        "name": "docs.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "docs.example.com/*",
+          "script": "docs"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "docs.acme.workers.dev",
+        "name": "docs.acme.workers.dev",
+        "props": {
+          "script": "docs"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "site",
+        "name": "site"
+      },
+      {
+        "type": "worker_route",
+        "id": "r-site",
+        "name": "www.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "www.example.com/*",
+          "script": "site"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "site.acme.workers.dev",
+        "name": "site.acme.workers.dev",
+        "props": {
+          "script": "site"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "workers_dev": true,
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "a1",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "api.example.com",
+        "name": "api.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "api.example.com",
+          "service": "api",
+          "environment": null
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "api.acme.workers.dev",
+        "name": "api.acme.workers.dev",
+        "props": {
+          "script": "api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "a1-api.acme.workers.dev",
+        "name": "a1-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "a1",
+          "alias": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:tool.example.com",
+        "dst": "worker_script:tool"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:tool.acme.workers.dev",
+        "dst": "worker_script:tool"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-docs",
+        "dst": "worker_script:docs"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:docs.acme.workers.dev",
+        "dst": "worker_script:docs"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-site",
+        "dst": "worker_script:site"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:site.acme.workers.dev",
+        "dst": "worker_script:site"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:a1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:api.example.com",
+        "dst": "worker_script:api"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:api.acme.workers.dev",
+        "dst": "worker_script:api"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:a1-api.acme.workers.dev",
+        "dst": "worker_version:a1"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:tool.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:tool.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_route:r-docs",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:docs.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_route:r-site",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_route:r-site",
+        "path": "/admin",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "workers_dev:site.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:api.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "workers_dev:api.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_preview_url:a1-api.acme.workers.dev",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:tool",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-002:worker_script:docs",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-002:worker_script:site",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-002:worker_script:api",
         "severity": "high"
       }
     ]
@@ -2478,7 +2943,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-004",
     "name": "negative-protected-or-unknown",
-    "description": "Access protects the SSH hostname, Service Auth the API, and the evaluator could not decide the third hostname; unknown is never public.\n",
+    "description": "Access protects the SSH hostname and Service Auth the API. The evaluator could not decide a third hostname, which only answers with a status code: it would not qualify even if it were public, so it is not undecided either.\n",
     "nodes": [
       {
         "type": "tunnel",
@@ -2521,8 +2986,8 @@ export const FIXTURES: readonly RuleFixture[] = [
         "props": {
           "hostname": "odd.example.com",
           "path": "",
-          "service": "tcp://localhost:5432",
-          "origin_scheme": "tcp",
+          "service": "http_status:503",
+          "origin_scheme": "http_status",
           "tunnel_id": "t-1"
         }
       }
@@ -2722,6 +3187,121 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "fingerprint": "CF-004:tunnel_hostname:remote.example.com/desk",
         "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
+    "name": "undecided-unknown-exposure",
+    "description": "The evaluator could not decide the database hostname, nor the /internal path of a web app that Access protects otherwise. Either would qualify if it were public, so both rows are undecided. On a third hostname the evaluator could not decide /, but /api is public, which decides it.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "t-1",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "db.example.com",
+        "name": "db.example.com",
+        "props": {
+          "hostname": "db.example.com",
+          "path": "",
+          "service": "tcp://localhost:5432",
+          "origin_scheme": "tcp",
+          "tunnel_id": "t-1"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "web.example.com",
+        "name": "web.example.com",
+        "props": {
+          "hostname": "web.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "t-1"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "mixed.example.com",
+        "name": "mixed.example.com",
+        "props": {
+          "hostname": "mixed.example.com",
+          "path": "",
+          "service": "https://localhost:8443",
+          "origin_scheme": "https",
+          "tunnel_id": "t-1"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:db.example.com",
+        "dst": "tunnel:t-1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:web.example.com",
+        "dst": "tunnel:t-1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:mixed.example.com",
+        "dst": "tunnel:t-1"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:db.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:web.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:web.example.com",
+        "path": "/internal",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:mixed.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:mixed.example.com",
+        "path": "/api",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:db.example.com",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:web.example.com",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:mixed.example.com",
+        "severity": "high"
       }
     ]
   },
@@ -3904,6 +4484,266 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "fingerprint": "CF-009:worker_script:nightly-sync",
         "severity": "low"
+      }
+    ]
+  },
+  {
+    "rule": "CF-009",
+    "name": "undecided-unknown-entry-point",
+    "description": "Evaluated on 2026-10-29. Three idle, old Workers bind the database that a busy Worker uses. The evaluator could not decide the workers.dev of quiet, nor the version URL of pinned; either may be public, which would rule the Worker out, so both are undecided. half has an unknown workers.dev as well, but its route is public, which rules it out.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "busy",
+        "name": "busy",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "b1",
+        "props": {
+          "script_node_id": "worker_script:busy"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "quiet",
+        "name": "quiet",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "q1",
+        "props": {
+          "script_node_id": "worker_script:quiet"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "quiet.acme.workers.dev",
+        "name": "quiet.acme.workers.dev",
+        "props": {
+          "script": "quiet"
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "pinned",
+        "name": "pinned",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "p1",
+        "props": {
+          "script_node_id": "worker_script:pinned"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "p1-pinned.acme.workers.dev",
+        "name": "p1-pinned.acme.workers.dev",
+        "props": {
+          "script": "pinned",
+          "kind": "version",
+          "version_id": "p1",
+          "alias": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "half",
+        "name": "half",
+        "props": {
+          "created_on": "2025-01-01T00:00:00.000Z",
+          "workers_dev": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "h1",
+        "props": {
+          "script_node_id": "worker_script:half"
+        }
+      },
+      {
+        "type": "workers_dev",
+        "id": "half.acme.workers.dev",
+        "name": "half.acme.workers.dev",
+        "props": {
+          "script": "half"
+        }
+      },
+      {
+        "type": "worker_route",
+        "id": "r-half",
+        "name": "half.example.com/*",
+        "props": {
+          "zone_id": "z1",
+          "pattern": "half.example.com/*",
+          "script": "half"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "orders",
+        "name": "orders"
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:busy",
+        "dst": "worker_version:b1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:b1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:quiet",
+        "dst": "worker_version:q1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:q1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:quiet.acme.workers.dev",
+        "dst": "worker_script:quiet"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:pinned",
+        "dst": "worker_version:p1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:p1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:p1-pinned.acme.workers.dev",
+        "dst": "worker_version:p1"
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:half",
+        "dst": "worker_version:h1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:h1",
+        "dst": "d1_database:orders",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "workers_dev:half.acme.workers.dev",
+        "dst": "worker_script:half"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_route:r-half",
+        "dst": "worker_script:half"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "workers_dev:quiet.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_preview_url:p1-pinned.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "workers_dev:half.acme.workers.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "worker_route:r-half",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "worker_script:busy",
+        "name": "invocations_30d",
+        "value": 50
+      },
+      {
+        "node": "worker_script:quiet",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:pinned",
+        "name": "invocations_30d",
+        "value": 0
+      },
+      {
+        "node": "worker_script:half",
+        "name": "invocations_30d",
+        "value": 0
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-009:worker_script:quiet",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-009:worker_script:pinned",
+        "decided": false
       }
     ]
   },
@@ -5739,7 +6579,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-021",
     "name": "negative-unknown-or-disabled",
-    "description": "Unknown is not public: the evaluator could not decide the custom domain of one bucket. The other bucket's custom domain is disabled, and a stale r2.dev node says enabled false.\n",
+    "description": "Unknown only matters on an entry point: the evaluator could not decide a custom domain of one bucket, but the domain is disabled. The other bucket's custom domain is disabled, and a stale r2.dev node says enabled false.\n",
     "nodes": [
       {
         "type": "r2_bucket",
@@ -5753,7 +6593,7 @@ export const FIXTURES: readonly RuleFixture[] = [
         "props": {
           "bucket": "reports",
           "kind": "custom",
-          "enabled": true,
+          "enabled": false,
           "zone_id": null
         }
       },
@@ -5946,9 +6786,187 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-021",
+    "name": "undecided-unknown-custom-domain",
+    "description": "The evaluator could not decide the only custom domain of reports, nor the /files prefix of a media domain that Access protects otherwise. Either would make the bucket public, so both rows are undecided. logs has an unknown custom domain too, but its r2.dev domain is enabled; photos has one, but another of its custom domains is public. Both are decided.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "reports",
+        "name": "reports"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "reports.example.com",
+        "name": "reports.example.com",
+        "props": {
+          "bucket": "reports",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "media",
+        "name": "media"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "media.example.com",
+        "name": "media.example.com",
+        "props": {
+          "bucket": "media",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "logs",
+        "name": "logs"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "logs.example.com",
+        "name": "logs.example.com",
+        "props": {
+          "bucket": "logs",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "name": "pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "props": {
+          "bucket": "logs",
+          "kind": "r2_dev",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "photos",
+        "name": "photos"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "photos.example.com",
+        "name": "photos.example.com",
+        "props": {
+          "bucket": "photos",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "cdn.example.com",
+        "name": "cdn.example.com",
+        "props": {
+          "bucket": "photos",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:reports.example.com",
+        "dst": "r2_bucket:reports"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:media.example.com",
+        "dst": "r2_bucket:media"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:logs.example.com",
+        "dst": "r2_bucket:logs"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:pub-0113a9e4549cf9b1ff1bf56e04da0cef.r2.dev",
+        "dst": "r2_bucket:logs"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:photos.example.com",
+        "dst": "r2_bucket:photos"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:cdn.example.com",
+        "dst": "r2_bucket:photos"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:reports.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "r2_public_domain:media.example.com",
+        "path": "/files",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:logs.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:photos.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:cdn.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-021:r2_bucket:reports",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:media",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:logs",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:photos",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-022",
     "name": "negative-previews-behind-access",
-    "description": "Previews share the production database, but an Access app covers the preview wildcard. Unknown exposure on a second project does not count as public either.\n",
+    "description": "Previews share the production database, but an Access app covers the preview wildcard. The evaluator could not decide the previews of a second project, but they bind nothing that production binds, so that project would not qualify even if they were public.\n",
     "nodes": [
       {
         "type": "pages_project",
@@ -5990,6 +7008,11 @@ export const FIXTURES: readonly RuleFixture[] = [
         "type": "d1_database",
         "id": "db-prod",
         "name": "prod"
+      },
+      {
+        "type": "d1_database",
+        "id": "db-blog-preview",
+        "name": "blog-preview"
       }
     ],
     "edges": [
@@ -6042,7 +7065,7 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "type": "BINDS",
         "src": "pages_project:blog",
-        "dst": "d1_database:db-prod",
+        "dst": "d1_database:db-blog-preview",
         "key": "preview:DB",
         "props": {
           "binding_type": "d1",
@@ -6363,6 +7386,142 @@ export const FIXTURES: readonly RuleFixture[] = [
     "expect": [
       {
         "fingerprint": "CF-022:pages_project:shop",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-022",
+    "name": "undecided-unknown-previews",
+    "description": "The previews of both projects bind the production database. The evaluator could not decide the preview wildcard of blog, which would qualify if it were public, so its row is undecided. It could not decide / on the preview wildcard of docs either, but /public is public, which decides docs.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "blog",
+        "name": "blog",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "blog.pages.dev",
+          "preview_deployments": "all"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.blog.pages.dev",
+        "name": "*.blog.pages.dev",
+        "props": {
+          "project": "blog"
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "docs",
+        "name": "docs",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "docs.pages.dev",
+          "preview_deployments": "custom"
+        }
+      },
+      {
+        "type": "pages_preview",
+        "id": "*.docs.pages.dev",
+        "name": "*.docs.pages.dev",
+        "props": {
+          "project": "docs"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "db-prod",
+        "name": "prod"
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.blog.pages.dev",
+        "dst": "pages_project:blog",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_preview:*.docs.pages.dev",
+        "dst": "pages_project:docs",
+        "props": {
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:blog",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:blog",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "d1_database:db-prod",
+        "key": "production:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "production"
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "pages_project:docs",
+        "dst": "d1_database:db-prod",
+        "key": "preview:DB",
+        "props": {
+          "binding_type": "d1",
+          "environment": "preview"
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "pages_preview:*.blog.pages.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "pages_preview:*.docs.pages.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "pages_preview:*.docs.pages.dev",
+        "path": "/public",
+        "decision": "public",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-022:pages_project:blog",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-022:pages_project:docs",
         "severity": "medium"
       }
     ]

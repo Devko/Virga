@@ -27,7 +27,10 @@ export interface CompiledRule extends RuleMeta {
   paramOrder: string[];
 }
 
-/** One row a rule returns. Columns besides these are evidence. */
+/**
+ * One row a rule returns. Columns besides these and the optional `decided`
+ * (0 or 1, see `evaluateRules`) are evidence.
+ */
 export interface RuleHit {
   rule_id: string;
   fingerprint: string;
@@ -37,7 +40,16 @@ export interface RuleHit {
 
 export type VulnSeverity = "none" | "low" | "medium" | "high" | "critical";
 
-/** A self-contained graph scenario with the hits a rule must return for it. */
+/** An expected rule row: a hit, or with `decided: false` an undecided row. */
+export interface FixtureExpectation {
+  fingerprint: string;
+  /** Compared when set; an undecided row's severity is never compared. */
+  severity?: RuleSeverity;
+  /** `false` expects `decided = 0`; absent means a hit. */
+  decided?: false;
+}
+
+/** A self-contained graph scenario with the rows a rule must return for it. */
 export interface RuleFixture {
   rule: string;
   name: string;
@@ -71,5 +83,5 @@ export interface RuleFixture {
     status?: "open" | "fixed" | "ignored";
   }[];
   signals?: { node: string; name: string; value: number | string }[];
-  expect: { fingerprint: string; severity?: RuleSeverity }[];
+  expect: FixtureExpectation[];
 }
