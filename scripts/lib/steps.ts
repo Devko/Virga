@@ -379,8 +379,11 @@ export async function withSecretsFile(
   }
 }
 
-/** Runs the app's build script, if it has one, before Wrangler bundles it. */
-export async function build(ctx: Context, worker: WorkerConfig) {
+/**
+ * Runs the app's build script, if it has one. The deploy runs every build
+ * before it reads any config (R6-01).
+ */
+export async function build(ctx: Context, worker: Pick<WorkerConfig, "name" | "dir">) {
   const pkgPath = join(worker.dir, "package.json");
   if (!existsSync(pkgPath)) return;
   const pkg: unknown = JSON.parse(readFileSync(pkgPath, "utf8"));

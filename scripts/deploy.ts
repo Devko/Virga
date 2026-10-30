@@ -1,12 +1,14 @@
 // Usage: node scripts/deploy.ts [--dry-run]
 //
-// Sets up and deploys a Virga instance into the tool account: checks the
-// Wrangler configs against each other, creates missing D1 databases and
-// applies their migrations, checks the master key (D-15), then deploys
-// virga-broker, virga-core and virga-web in that order. Safe to run again.
-// Wrangler always gets the checked config as --config, never a named
-// environment, loads no .env file, and gets only allowlisted variables of
-// the operator's environment.
+// Sets up and deploys a Virga instance into the tool account: runs the apps'
+// builds, checks the Wrangler configs against each other, creates missing D1
+// databases and applies their migrations, checks the master key (D-15), then
+// deploys virga-broker, virga-core and virga-web in that order. Safe to run
+// again. Wrangler always gets the checked config as --config, and only while
+// it holds the bytes that were checked; it never gets a named environment,
+// loads no .env file, gets only allowlisted variables of the operator's
+// environment, and runs only while its files are those recorded before the
+// builds (R6-01).
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
@@ -45,7 +47,12 @@ import {
   withSecretsFile,
 } from "./lib/steps.ts";
 import { checkTopology, WORKERS } from "./lib/topology.ts";
-import { recordWranglers, WranglerError } from "./lib/wrangler.ts";
+import {
+  describeChanges,
+  recordWranglers,
+  WranglerError,
+  wranglerChanges,
+} from "./lib/wrangler.ts";
 
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 
@@ -117,19 +124,43 @@ async function main(): Promise<number> {
     );
   }
 
-  const present = WORKERS.filter(({ app }) => checkAppDir(root, app) !== null);
-  const wranglers = recordWranglers(present.map(({ app }) => join(root, "apps", app)));
+  // Before the builds: what needs no parsed config, and the Wrangler each app runs.
+  const present = WORKERS.filter(({ app, optional }) => {
+    if (checkAppDir(root, app) !== null) return true;
+    if (optional) console.log(`apps/${app}: no Wrangler config, skipped`);
+    return false;
+  });
+  const dirOf = (app: string) => join(root, "apps", app);
+  const wranglers = recordWranglers(present.map(({ app }) => dirOf(app)));
+  for (const install of new Map([...wranglers.values()].map((w) => [w.bin, w])).values()) {
+    console.log(
+      `Wrangler ${install.version}: ${install.bin}, ${install.files.size} files recorded before the builds`,
+    );
+  }
   const ctx: Context = {
     run: processRunner({ credentials, secrets: () => secrets, wranglers }),
     log: (line) => console.log(line),
     todo: [],
   };
 
+  // Every build runs before any config is read, so that the checks below see
+  // what the builds left. Builds get no credentials (R3-05), but their code
+  // can write anywhere the operator can (R6-01).
+  for (const { app, name } of present) await build(ctx, { name, dir: dirOf(app) });
+
+  const cache = new Map<string, Map<string, string>>();
+  for (const [dir, install] of wranglers) {
+    const changed = describeChanges(dir, wranglerChanges(install, cache));
+    if (changed !== null) throw new WranglerError(changed);
+  }
   const workers: WorkerConfig[] = [];
-  for (const { app, optional } of WORKERS) {
+  for (const { app } of present) {
+    checkAppDir(root, app);
     const config = readWorkerConfig(root, app);
-    if (config) workers.push(config);
-    else if (optional) ctx.log(`apps/${app}: no Wrangler config, skipped`);
+    if (config === null) {
+      throw new ConfigError(`apps/${app}: its Wrangler config was removed during the builds`);
+    }
+    workers.push(config);
   }
 
   const issues = checkTopology(workers, loadExports);
@@ -161,7 +192,6 @@ async function main(): Promise<number> {
   }
 
   for (const worker of workers) {
-    await build(ctx, worker);
     const upload = worker === web && webPlan && !dryRun ? webPlan.upload : {};
     await withSecretsFile(upload, (secretsFile) => deploy(ctx, worker, { dryRun, secretsFile }));
   }
