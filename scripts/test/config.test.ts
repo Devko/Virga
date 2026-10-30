@@ -50,11 +50,13 @@ describe("readWorkerConfig on the repository", () => {
 describe("readWorkerConfig", () => {
   let root = "";
   afterEach(() => rmSync(root, { recursive: true, force: true }));
-  const app = (files: Record<string, string>) => {
+  /** A checkout with files in apps/web, and optionally elsewhere (paths relative to the root). */
+  const app = (files: Record<string, string>, elsewhere: Record<string, string> = {}) => {
     root = mkdtempSync(join(tmpdir(), "virga-config-"));
     mkdirSync(join(root, "apps", "web"), { recursive: true });
     for (const [name, text] of Object.entries(files))
       writeFileSync(join(root, "apps", "web", name), text);
+    for (const [path, text] of Object.entries(elsewhere)) writeFileSync(join(root, path), text);
   };
 
   it("returns null for an app without a config", () => {
@@ -63,9 +65,30 @@ describe("readWorkerConfig", () => {
     expect(readWorkerConfig(root, "missing")).toBeNull();
   });
 
-  it("prefers wrangler.jsonc and reads wrangler.json", () => {
+  it("reads wrangler.json as well", () => {
     app({ "wrangler.json": `{ "name": "virga-web" }` });
     expect(readWorkerConfig(root, "web")?.name).toBe("virga-web");
+  });
+
+  it("R3-03: refuses a second config next to the app's config", () => {
+    app({
+      "wrangler.jsonc": `{ "name": "virga-web" }`,
+      "wrangler.json": `{ "name": "virga-web" }`,
+    });
+    expect(() => readWorkerConfig(root, "web")).toThrow(
+      /apps\/web\/wrangler.json and .*apps\/web\/wrangler.jsonc: an app has one Wrangler config/,
+    );
+  });
+
+  it("R3-03: refuses a Wrangler config above the app, which Wrangler would find first", () => {
+    const stray = `{ "name": "virga-web", "services": [{ "binding": "API", "service": "virga-broker", "entrypoint": "ApiCaller" }] }`;
+    app({ "wrangler.jsonc": `{ "name": "virga-web" }` }, { "wrangler.json": stray });
+    expect(() => readWorkerConfig(root, "web")).toThrow(
+      "apps/web/wrangler.jsonc: wrangler.json is a Wrangler config above the app",
+    );
+    rmSync(join(root, "wrangler.json"));
+    writeFileSync(join(root, "apps", "wrangler.toml"), `name = "virga-web"`);
+    expect(() => readWorkerConfig(root, "web")).toThrow(/apps\/wrangler.toml is a Wrangler config/);
   });
 
   it("refuses wrangler.toml", () => {
