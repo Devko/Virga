@@ -1,0 +1,29 @@
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# (env_vars of type secret_text are not returned with a value and never enter the graph)
+# Graph shape: docs/architecture/graph-contract.md, pages_project.plain_text_vars
+description: >
+  Pages projects whose plain-text variables the collector inspected and did
+  not flag in either environment, and a project without plain-text
+  variables: its keys are secret env vars.
+nodes:
+  - type: pages_project
+    id: shop
+    name: shop
+    props:
+      production_branch: main
+      subdomain: shop.pages.dev
+      preview_deployments: all
+      plain_text_vars:
+        - { name: NODE_VERSION, environment: preview, kind: plain_text, looks_secret: false, secret_pattern: null }
+        - { name: NODE_VERSION, environment: production, kind: plain_text, looks_secret: false, secret_pattern: null }
+        - { name: SITE_URL, environment: production, kind: plain_text, looks_secret: false, secret_pattern: null }
+  - type: pages_project
+    id: vault-ui
+    name: vault-ui
+    props:
+      production_branch: main
+      subdomain: vault-ui.pages.dev
+      preview_deployments: none
+      plain_text_vars: []
+edges: []
+expect: []

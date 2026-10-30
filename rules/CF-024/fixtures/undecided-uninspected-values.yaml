@@ -1,0 +1,56 @@
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, plain_text_vars (looks_secret is null
+# when the API returned no value to inspect)
+description: >
+  The API returned no value for some plain-text variables, so the collector
+  could not inspect them. A Pages project and a Worker with only such
+  variables are undecided. A project with one uninspected variable and one
+  that looks like a secret is decided. A project whose other variables were
+  inspected and are clean, plus one uninspected, stays undecided.
+nodes:
+  - type: pages_project
+    id: shop
+    name: shop
+    props:
+      production_branch: main
+      subdomain: shop.pages.dev
+      preview_deployments: all
+      plain_text_vars:
+        - { name: PAYMENT_KEY, environment: production, kind: plain_text, looks_secret: null, secret_pattern: null }
+  - type: pages_project
+    id: admin
+    name: admin
+    props:
+      production_branch: main
+      subdomain: admin.pages.dev
+      preview_deployments: none
+      plain_text_vars:
+        - { name: CF_API_TOKEN, environment: production, kind: plain_text, looks_secret: true, secret_pattern: cfat_ }
+        - { name: SESSION_SECRET, environment: production, kind: plain_text, looks_secret: null, secret_pattern: null }
+  - type: pages_project
+    id: blog
+    name: blog
+    props:
+      production_branch: main
+      subdomain: blog.pages.dev
+      preview_deployments: all
+      plain_text_vars:
+        - { name: LOG_LEVEL, environment: preview, kind: plain_text, looks_secret: false, secret_pattern: null }
+        - { name: COMMENTS_KEY, environment: preview, kind: plain_text, looks_secret: null, secret_pattern: null }
+  - { type: worker_script, id: api, name: api }
+  - type: worker_version
+    id: 7d9f1b3a-5c7e-4a9b-8d1f-3a5c7e9b1d3f
+    props:
+      script_node_id: "worker_script:api"
+      plain_text_vars:
+        - { name: UPSTREAM_KEY, kind: plain_text, looks_secret: null, secret_pattern: null }
+        - { name: LOG_LEVEL, kind: plain_text, looks_secret: false, secret_pattern: null }
+      secret_names: []
+edges:
+  - { type: DEPLOYS, src: "worker_script:api", dst: "worker_version:7d9f1b3a-5c7e-4a9b-8d1f-3a5c7e9b1d3f", props: { percentage: 100 } }
+expect:
+  - { fingerprint: "CF-024:pages_project:admin", severity: medium }
+  - { fingerprint: "CF-024:pages_project:shop", decided: false }
+  - { fingerprint: "CF-024:pages_project:blog", decided: false }
+  - { fingerprint: "CF-024:worker_script:api", decided: false }

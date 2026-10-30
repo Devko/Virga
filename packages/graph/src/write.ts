@@ -243,6 +243,10 @@ export interface SweepResult {
  * Tombstones rows of a resource class that the scan did not see, plus edges
  * that point to nodes tombstoned now. Does nothing unless the class has
  * coverage `complete` in this scan.
+ *
+ * A sweep never moves `current_scan`; only beginScan does. The history
+ * trigger attributes delete rows to `current_scan`, so the sweep of any
+ * other scan is refused: it would also tombstone what the current scan saw.
  */
 export function sweep(
   db: SqlRunner,
@@ -251,6 +255,10 @@ export function sweep(
   at = Date.now(),
 ): SweepResult {
   return db.transaction(() => {
+    const current = db.query<{ value: string }>(
+      "SELECT value FROM meta WHERE key = 'current_scan'",
+    )[0]?.value;
+    if (current !== scanId) throw new Error(`sweep: scan ${scanId} is not the current scan`);
     const status = db.query<{ status: string }>(
       "SELECT status FROM coverage WHERE scan_id = ? AND resource_class = ?",
       scanId,
@@ -258,11 +266,6 @@ export function sweep(
     )[0]?.status;
     if (status !== "complete") return { swept: false, nodes: 0, edges: 0 };
 
-    db.run(
-      `INSERT INTO meta (key, value) VALUES ('current_scan', ?)
-       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-      scanId,
-    );
     const count = (sql: string, ...params: (string | number)[]) =>
       db.query<{ n: number }>(sql, ...params)[0]?.n ?? 0;
 

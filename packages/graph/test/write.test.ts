@@ -33,6 +33,9 @@ const batch = (scanId: string, x: number, withB = true): Batch => ({
 });
 
 const write = async (b: Batch, at: number) => applyBatch(db, await prepareBatch(b, at));
+const currentScan = () =>
+  db.query<{ value: string }>("SELECT value FROM meta WHERE key = 'current_scan'")[0]?.value;
+const count = (sql: string) => db.query<{ n: number }>(sql)[0]?.n;
 
 describe("migrate", () => {
   it("is idempotent", () => {
@@ -110,6 +113,7 @@ describe("sweep", () => {
     await write(batch("s2", 1, false), 2000);
     recordCoverage(db, { scanId: "s2", resourceClass: "workers", status: "complete" });
     expect(sweep(db, "s2", "workers", 2500)).toEqual({ swept: true, nodes: 1, edges: 1 });
+    expect(currentScan()).toBe("s2");
 
     const deleted = db.query(
       "SELECT object_id, scan_id FROM changes WHERE op = 'delete' ORDER BY object_id",
@@ -122,11 +126,41 @@ describe("sweep", () => {
     beginScan(db, { id: "s3", kind: "full" });
     const back = await write(batch("s3", 1), 3000);
     expect(back.changed).toBe(2);
-    expect(db.query("SELECT count(*) AS n FROM nodes WHERE deleted_at IS NOT NULL")[0]?.n).toBe(0);
+    expect(count("SELECT count(*) AS n FROM nodes WHERE deleted_at IS NOT NULL")).toBe(0);
     expect(db.query("SELECT op FROM changes ORDER BY seq DESC LIMIT 2").map((r) => r.op)).toEqual([
       "restore",
       "restore",
     ]);
+  });
+
+  it("never moves current_scan: a sweep of a scan that is not current is refused", async () => {
+    beginScan(db, { id: "s1", kind: "full" });
+    await write(batch("s1", 1), 1000);
+    recordCoverage(db, { scanId: "s1", resourceClass: "workers", status: "complete" });
+    beginScan(db, { id: "s2", kind: "full" });
+    await write(batch("s2", 1, false), 2000);
+    const changes = count("SELECT count(*) AS n FROM changes");
+
+    // s1's sweep arrives late, for example from a retried step. It would
+    // tombstone what s2 saw and attribute the deletes to s1.
+    expect(() => sweep(db, "s1", "workers", 2500)).toThrow(/scan s1 is not the current scan/);
+    expect(currentScan()).toBe("s2");
+    expect(count("SELECT count(*) AS n FROM nodes WHERE deleted_at IS NOT NULL")).toBe(0);
+    expect(count("SELECT count(*) AS n FROM changes")).toBe(changes);
+
+    // s2's own sweep still attributes its deletes to s2.
+    recordCoverage(db, { scanId: "s2", resourceClass: "workers", status: "complete" });
+    expect(sweep(db, "s2", "workers", 3000)).toEqual({ swept: true, nodes: 1, edges: 1 });
+    expect(db.query("SELECT DISTINCT scan_id FROM changes WHERE op = 'delete'")).toEqual([
+      { scan_id: "s2" },
+    ]);
+    expect(currentScan()).toBe("s2");
+  });
+
+  it("refuses a sweep before any scan began", () => {
+    recordCoverage(db, { scanId: "s1", resourceClass: "workers", status: "complete" });
+    expect(() => sweep(db, "s1", "workers", 1000)).toThrow(/scan s1 is not the current scan/);
+    expect(currentScan()).toBeUndefined();
   });
 });
 

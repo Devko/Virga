@@ -436,22 +436,64 @@ describe("evaluateRules: undecided rows", () => {
     expect(finding()).toEqual(before);
   });
 
-  it("keeps a suppression as it is, even past its end, until the rule decides again", async () => {
+  it("keeps a suppression that lasts as it is, whatever the undecided row says", async () => {
     await scan(db, "s1", 1000, [{ name: "a" }]);
     evaluateRules(db, [RULE], "s1", 1000);
-    suppress(1500);
+    suppress(10_000);
+    const before = finding();
     await scan(db, "s2", 2000, [{ name: "a", unknown: true, severity: "critical" }]);
     evaluateRules(db, [RULE], "s2", 2000);
-    expect(finding()).toMatchObject({
+    expect(finding()).toEqual(before);
+    expect(before).toMatchObject({
       status: "suppressed",
       severity: "high",
-      suppressed_until: 1500,
       suppressed_by: "alice",
     });
+  });
 
-    await scan(db, "s3", 3000, [{ name: "a" }]);
-    evaluateRules(db, [RULE], "s3", 3000);
-    expect(finding()).toMatchObject({ status: "open", suppressed_until: null, last_seen: 3000 });
+  it("R3-07: ends an expired suppression on an undecided row, keeping the finding's state", async () => {
+    await scan(db, "s1", 1000, [{ name: "a", store: "kv_namespace:k1", note: "first" }]);
+    evaluateRules(db, [RULE], "s1", 1000);
+    // "Adding Access this week": then exposure turns unknown and stays so.
+    suppress(3000);
+    const before = finding();
+    const undecidedScan = async (id: string, at: number) => {
+      await scan(db, id, at, [{ name: "a", unknown: true, severity: "critical", note: "x" }]);
+      return evaluateRules(db, [RULE], id, at)[0];
+    };
+
+    await undecidedScan("s2", 2000);
+    expect(finding()).toEqual(before);
+
+    // Due at 3000 even though no decided row comes.
+    expect(await undecidedScan("s3", 3000)).toMatchObject({
+      status: "evaluated",
+      hits: 0,
+      undecided: 1,
+      opened: 0,
+      resolved: 0,
+    });
+    const reopened = {
+      ...before,
+      status: "open",
+      suppressed_until: null,
+      suppressed_by: null,
+      suppress_reason: null,
+    };
+    expect(finding()).toEqual(reopened);
+    expect(reopened).toMatchObject({ severity: "high", last_seen: 1000 });
+    expect(JSON.parse(reopened.evidence).note).toBe("first");
+    expect(links()).toEqual([
+      { node_id: "kv_namespace:k1", role: "stores" },
+      { node_id: "worker_script:a", role: "subject" },
+    ]);
+
+    await undecidedScan("s4", 5_000_000);
+    expect(finding()).toEqual(reopened);
+
+    await scan(db, "s5", 6_000_000, [{ name: "a" }]);
+    expect(evaluateRules(db, [RULE], "s5", 6_000_000)[0]).toMatchObject({ hits: 1, opened: 0 });
+    expect(finding()).toMatchObject({ status: "open", last_seen: 6_000_000 });
   });
 
   it("resolves the finding once the rule decides the fingerprint is gone", async () => {
@@ -695,6 +737,21 @@ describe("evaluateRules: evidence", () => {
     expect(evidence.long_text).toHaveLength(2048);
     expect(evidence.long_items[0]).toHaveLength(2048);
     expect(links()).toHaveLength(101);
+  });
+
+  it("caps strings inside list items that are objects or lists", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    const sql = `SELECT 'CF-900' AS rule_id, 'CF-900:' || s.id AS fingerprint, 'low' AS severity,
+        s.id AS subject_id,
+        json_array(json_object('environment', 'production', 'name', hex(zeroblob(1500)),
+                               'tags', json_array(hex(zeroblob(1500)), 7))) AS variables
+      FROM nodes s WHERE s.type = 'worker_script'`;
+    evaluateRules(db, [ruleWith("CF-900", sql)], "s1", 1000);
+    const [variable] = JSON.parse(finding().evidence).variables;
+    expect(variable.environment).toBe("production");
+    expect(variable.name).toHaveLength(2048);
+    expect(variable.tags[0]).toHaveLength(2048);
+    expect(variable.tags[1]).toBe(7);
   });
 
   it("links the insight a rule enriches through the finding's nodes", async () => {
