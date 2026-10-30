@@ -154,19 +154,23 @@ export const blogConfig = {
   version: 3,
 };
 
-/** Access validation for every rule that does not set its own `access`. */
+/**
+ * Access validation at the top of the configuration only. cloudflared builds
+ * the validator from a rule's own `originRequest.access`, so it checks no
+ * request here (review R3-01).
+ */
 export const legacyConfig = {
   account_id: "023e105f4ecef8ad9ca31a8372d0c353",
   config: {
     ingress: [
       { hostname: "legacy.example.com", service: "http://localhost:80" },
-      // Inherits the top-level access setting: the rule sets other parameters only.
+      // Sets other origin parameters only.
       {
         hostname: "wiki.example.com",
         service: "http://localhost:81",
         originRequest: { connectTimeout: 5 },
       },
-      // Its own access object replaces the top-level one.
+      // An access object of its own that does not require a token.
       { hostname: "open.example.com", service: "http://localhost:82", originRequest },
       // The blog tunnel serves the same hostname; the tunnel ID keeps the two apart.
       { hostname: "ssh.example.com", service: "ssh://localhost:2222" },

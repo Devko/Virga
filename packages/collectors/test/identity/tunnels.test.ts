@@ -157,30 +157,53 @@ describe("tunnels collector", () => {
     );
   });
 
-  it("reads originRequest.access.required per rule, falling back to the top-level setting", async () => {
+  it("R3-01: reads originRequest.access.required from the rule's own block only", async () => {
     const { output } = await run(tunnelsCollector, routes);
     const required = (id: string) => node(output, id).props?.access_required;
     expect(required(blogHost("admin.example.com"))).toBe(true);
     expect(required(blogHost("app.example.com"))).toBe(false);
-    expect(required(legacyHost("legacy.example.com"))).toBe(true);
-    expect(required(legacyHost("wiki.example.com"))).toBe(true);
+    // The legacy tunnel sets access only at the top of its configuration.
+    expect(required(legacyHost("legacy.example.com"))).toBe(false);
+    expect(required(legacyHost("wiki.example.com"))).toBe(false);
     expect(required(legacyHost("open.example.com"))).toBe(false);
 
     const access = (required: unknown) => ({ access: { required, teamName: "t", audTag: ["a"] } });
-    const cases: [Record<string, unknown>, unknown, boolean][] = [
-      [{}, undefined, false],
-      [{ originRequest: access(true) }, undefined, true],
-      [{ originRequest: access(false) }, access(true), false],
-      // Without required in its own access object, the rule does not inherit it.
-      [{ originRequest: { access: { teamName: "t" } } }, access(true), false],
-      [{ originRequest: { connectTimeout: 5 } }, access(true), true],
-      [{}, access(true), true],
-      [{ originRequest: access("true") }, undefined, false],
-      [{ originRequest: "access" }, access(true), true],
+    const cases: [Record<string, unknown>, boolean][] = [
+      [{}, false],
+      [{ originRequest: access(true) }, true],
+      [{ originRequest: access(false) }, false],
+      [{ originRequest: { access: { teamName: "t" } } }, false],
+      [{ originRequest: { connectTimeout: 5 } }, false],
+      [{ originRequest: access("true") }, false],
+      [{ originRequest: "access" }, false],
+      [{ originRequest: { access: "required" } }, false],
     ];
-    for (const [rule, defaults, expected] of cases) {
-      expect(accessRequired(rule, defaults), JSON.stringify([rule, defaults])).toBe(expected);
+    for (const [rule, expected] of cases) {
+      expect(accessRequired(rule), JSON.stringify(rule)).toBe(expected);
     }
+  });
+
+  it("R3-01: a top-level access block does not make a rule require an Access token", async () => {
+    // The review's scenario: cloudflared builds the JWT validator from the
+    // rule's own originRequest.access only, so this SSH origin is open.
+    const config = {
+      ...blogConfig,
+      config: {
+        originRequest: { access: { required: true, teamName: "acme", audTag: ["aud1"] } },
+        ingress: [
+          { hostname: "ssh.example.com", service: "ssh://localhost:22" },
+          { service: "http_status:404" },
+        ],
+      },
+    };
+    const { output } = await run(tunnelsCollector, {
+      ...routes,
+      [`${BASE}/cfd_tunnel/${BLOG}/configurations`]: envelope(config),
+    });
+    expect(node(output, blogHost("ssh.example.com")).props).toMatchObject({
+      service: "ssh://localhost:22",
+      access_required: false,
+    });
   });
 
   it("parses the origin scheme of every service type", async () => {

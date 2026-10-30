@@ -191,11 +191,11 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("every scan", () => {
-  it("seeds one case and a clean counterpart for every phase 1 rule but CF-001", () => {
+  it("seeds cases and clean counterparts for every phase 1 rule but CF-001", () => {
     const phase1 = RULES.map((r) => r.id)
       .filter((id) => id !== "CF-001")
       .sort();
-    expect(SEEDED.map((c) => c.rule).sort()).toEqual(phase1);
+    expect([...new Set(SEEDED.map((c) => c.rule))].sort()).toEqual(phase1);
     expect([...new Set(CLEAN.map((c) => c.rule))].sort()).toEqual(phase1);
   });
 
@@ -254,7 +254,12 @@ describe("first scan of the seeded account", () => {
               props ->> '$.tunnel_id' AS tunnel
        FROM nodes WHERE type = 'tunnel_hostname' AND deleted_at IS NULL ORDER BY id`,
     );
-    expect(rows.map((r) => r.hostname).sort()).toEqual(["app.example.com", "ssh.example.com"]);
+    expect(rows.map((r) => r.hostname).sort()).toEqual([
+      "app.example.com",
+      "git.example.com",
+      "ssh.example.com",
+      "wiki.example.com",
+    ]);
     for (const r of rows) {
       // Round 1 is `<hostname><path>`; round 2 adds the tunnel ID in front.
       expect([
@@ -271,7 +276,9 @@ describe("first scan of the seeded account", () => {
         const rows = first.exposure
           .filter((r) => r.entry_id === resolve(e.entry))
           .map(({ entry_id, reason, ...rest }) => rest);
-        expect(rows).toEqual(e.rows);
+        expect(rows).toEqual(
+          e.rows.map((r) => ({ ...r, reason_id: r.reason_id && resolve(r.reason_id) })),
+        );
       });
     }
 

@@ -116,6 +116,7 @@ const POLICY_HEALTH = "faa1737b-b574-4278-9075-43af1fa13beb";
 const GROUP_STAFF = "a30a625c-bfd9-453e-aed1-f299024f1314";
 
 const TUNNEL_EDGE = "958098ee-467d-4161-a056-47df6b3dd0d6";
+const TUNNEL_TEAM = "4c7d2b1e-8a3f-4e6d-9b5c-2f1a0e9d8c7b";
 
 /** What tests may change between scans. */
 export interface AccountState {
@@ -494,23 +495,63 @@ const groupStaff = {
 
 // Tunnels ---------------------------------------------------------------------
 
-const TUNNELS = [{ ...tunnelExample, id: TUNNEL_EDGE, name: "edge" }];
-
-const tunnelConfig = (accountId: string) => ({
-  account_id: accountId,
-  config: {
-    ingress: [
-      // CF-004 seeded: SSH to the origin, no Access app on the hostname.
-      { hostname: "ssh.example.com", service: "ssh://localhost:22" },
-      // CF-004 clean: behind the "Internal app" Access app.
-      { hostname: "app.example.com", service: "http://localhost:8080" },
-      { service: "http_status:404" },
-    ],
-    "warp-routing": { enabled: false },
+/** cloudflared checks the Access token of every request this block applies to. */
+const originAccess = {
+  access: {
+    required: true,
+    teamName: "acme",
+    audTag: ["737646a56ab1df6ec9bddc7e5ca84eaf3b0768850f3ffb5d74f1534911fe3893"],
   },
+};
+
+/** Remotely managed configurations by tunnel. */
+const TUNNEL_CONFIGS: Record<string, { name: string; config: object }> = {
+  [TUNNEL_EDGE]: {
+    name: "edge",
+    config: {
+      ingress: [
+        // CF-004 seeded: SSH to the origin, no Access app on the hostname.
+        { hostname: "ssh.example.com", service: "ssh://localhost:22" },
+        // CF-004 clean: behind the "Internal app" Access app.
+        { hostname: "app.example.com", service: "http://localhost:8080" },
+        { service: "http_status:404" },
+      ],
+      "warp-routing": { enabled: false },
+    },
+  },
+  // R3-01: an access block at the top of the configuration. cloudflared
+  // builds the token check from a rule's own block only.
+  [TUNNEL_TEAM]: {
+    name: "team",
+    config: {
+      originRequest: originAccess,
+      ingress: [
+        // CF-004 seeded: no Access app, and no check of its own.
+        { hostname: "git.example.com", service: "ssh://localhost:2222" },
+        // CF-004 clean: the rule's own block requires the token.
+        {
+          hostname: "wiki.example.com",
+          service: "http://localhost:8090",
+          originRequest: originAccess,
+        },
+        { service: "http_status:404" },
+      ],
+    },
+  },
+};
+
+const TUNNELS = Object.entries(TUNNEL_CONFIGS).map(([id, { name }]) => ({
+  ...tunnelExample,
+  id,
+  name,
+}));
+
+const tunnelConfig = (accountId: string, tunnelId: string, config: object) => ({
+  account_id: accountId,
+  config,
   created_at: "2025-06-01T10:00:00Z",
   source: "cloudflare",
-  tunnel_id: TUNNEL_EDGE,
+  tunnel_id: tunnelId,
   version: 4,
 });
 
@@ -684,7 +725,6 @@ export function fakeAccount(
     [`${base}/access/identity_providers`]: envelope([idpOtp, idpOkta], listInfo(2)),
 
     [`${base}/tunnels`]: tunnelsRoute(TUNNELS),
-    [`${base}/cfd_tunnel/${TUNNEL_EDGE}/configurations`]: envelope(tunnelConfig(accountId)),
     [`${base}/tokens`]: tokensRoute(TOKENS.map((t) => accountToken(accountId, t))),
     [`${base}/members`]: membersRoute([memberExample]),
     [`${base}/security-center/insights`]: insightsRoute([exampleIssue]),
@@ -704,6 +744,11 @@ export function fakeAccount(
   for (const { app, policies } of APPS) {
     const ranked = policies.map((p, i) => ({ ...p, precedence: i + 1 }));
     routes[`${base}/access/apps/${app.id}/policies`] = envelope(ranked, listInfo(ranked.length));
+  }
+  for (const [id, { config }] of Object.entries(TUNNEL_CONFIGS)) {
+    routes[`${base}/cfd_tunnel/${id}/configurations`] = envelope(
+      tunnelConfig(accountId, id, config),
+    );
   }
   return { routes, graphql: trafficGraphql(trafficRows).handler };
 }
@@ -750,6 +795,12 @@ export const SEEDED: SeededCase[] = [
     rule: "CF-004",
     case: "public tunnel hostname with an SSH origin",
     fingerprint: `CF-004:${tunnelHostname("ssh.example.com")}`,
+    severity: "critical",
+  },
+  {
+    rule: "CF-004",
+    case: "R3-01: SSH origin under a top-level access block that cloudflared does not enforce",
+    fingerprint: `CF-004:${tunnelHostname("git.example.com")}`,
     severity: "critical",
   },
   {
@@ -817,6 +868,11 @@ export const CLEAN: CleanCase[] = [
     subject: tunnelHostname("app.example.com"),
   },
   {
+    rule: "CF-004",
+    case: "R3-01: tunnel hostname whose own rule requires an Access token",
+    subject: tunnelHostname("wiki.example.com"),
+  },
+  {
     rule: "CF-007",
     case: "unproxied record with an address of its own",
     subject: `dns_record:${REC_MAIL}`,
@@ -870,12 +926,19 @@ const row = (
   decision: string,
   reasonId: string | null,
   pathPrefix = "/",
+  confidence = 2,
 ): ExposureExpectation["rows"][number] => ({
   path_prefix: pathPrefix,
   decision,
-  confidence: 2,
+  confidence,
   reason_id: reasonId,
 });
+
+/**
+ * cloudflared requires an Access token (`access_required`) and no Access app
+ * decides: the tunnel hostname is the reason, with medium confidence.
+ */
+const originRow = (entry: string, pathPrefix = "/") => row("access", entry, pathPrefix, 1);
 
 /** Exposure of the entry points the seeded and clean cases depend on. */
 export const EXPOSURE: ExposureExpectation[] = [
@@ -931,6 +994,16 @@ export const EXPOSURE: ExposureExpectation[] = [
     case: "tunnel hostname behind Access",
     entry: tunnelHostname("app.example.com"),
     rows: [row("access", `access_app:${APP_TUNNEL}`)],
+  },
+  {
+    case: "R3-01: a top-level access block leaves the tunnel hostname public",
+    entry: tunnelHostname("git.example.com"),
+    rows: [row("public", null)],
+  },
+  {
+    case: "R3-01: the rule's own access block requires the token",
+    entry: tunnelHostname("wiki.example.com"),
+    rows: [originRow(tunnelHostname("wiki.example.com"))],
   },
   {
     case: "enabled r2.dev domain",

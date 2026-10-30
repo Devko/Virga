@@ -28,7 +28,7 @@ interface CfTunnel {
 
 /** developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get */
 interface CfTunnelConfig {
-  config?: { ingress?: unknown; originRequest?: unknown };
+  config?: { ingress?: unknown };
 }
 
 const TUNNEL_TYPES = ["cfd_tunnel", "warp_connector"];
@@ -77,16 +77,19 @@ export function originScheme(service: string): string {
 
 /**
  * Whether cloudflared validates an Access JWT before it proxies a request
- * (`originRequest.access.required`). Settings at the top of the configuration
- * apply to every rule that does not set its own. A rule's own `access` object
- * is read without merging in the top-level one, and anything but `true` reads
- * as not required: both err toward reporting exposure.
+ * that this rule takes. cloudflared builds the validator from the rule's own
+ * `originRequest.access` only; an access block at the top of the
+ * configuration enforces nothing (review R3-01). Anything but `true` reads as
+ * not required, which errs toward reporting exposure.
  * developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
  */
-export function accessRequired(rule: Record<string, unknown>, defaults: unknown): boolean {
-  const access = (originRequest: unknown) =>
-    isObject(originRequest) && isObject(originRequest.access) ? originRequest.access : null;
-  return (access(rule.originRequest) ?? access(defaults))?.required === true;
+export function accessRequired(rule: Record<string, unknown>): boolean {
+  const originRequest = rule.originRequest;
+  return (
+    isObject(originRequest) &&
+    isObject(originRequest.access) &&
+    originRequest.access.required === true
+  );
 }
 
 const URL_START = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -177,7 +180,7 @@ async function collectIngress(
       service: withoutCredentials(service),
       origin_scheme: originScheme(service),
       tunnel_id: id,
-      access_required: accessRequired(rule, config.originRequest),
+      access_required: accessRequired(rule),
     });
     g.edge("ROUTES_TO", hostId, tunnelNode);
   }
