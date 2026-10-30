@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkerConfig } from "./config.ts";
 import {
@@ -8,7 +9,7 @@ import {
   parseSecretTable,
   type StoreSecret,
 } from "./master-key.ts";
-import { parseJsonOutput, type Runner } from "./run.ts";
+import { parseJsonOutput, type Runner, type WranglerCommand } from "./run.ts";
 
 export class DeployError extends Error {}
 
@@ -30,8 +31,17 @@ function json(stdout: string, command: string): unknown {
   }
 }
 
+/** A Wrangler call on the config the script checked, never one Wrangler finds itself. */
+const wrangler = (worker: WorkerConfig, args: string[], capture = false): WranglerCommand => ({
+  bin: "wrangler",
+  cwd: worker.dir,
+  config: worker.configPath,
+  args,
+  capture,
+});
+
 async function must(ctx: Context, worker: WorkerConfig, args: string[], what: string) {
-  const result = await ctx.run({ bin: "wrangler", cwd: worker.dir, args });
+  const result = await ctx.run(wrangler(worker, args));
   if (result.code !== 0)
     throw new DeployError(`${what} failed (wrangler exited with ${result.code})`);
 }
@@ -70,30 +80,62 @@ export function describeDatabases(ctx: Context, workers: readonly WorkerConfig[]
 }
 
 /**
- * Creates every D1 database that does not exist yet, by name, and applies
- * its migrations. Both steps are no-ops when nothing is missing.
+ * Checks the D1 bindings against the account's databases. Wrangler binds and
+ * migrates by database_id, so a database_id must name the database of its
+ * database_name, and each database, by UUID, belongs to one Worker (D-08,
+ * R3-06). Otherwise a binding named after the index could reach the vault.
  */
-export async function ensureDatabases(ctx: Context, workers: readonly WorkerConfig[]) {
-  const first = workers[0];
-  if (!first || workers.every((w) => w.d1.length === 0)) return;
-  const listed = await ctx.run({
-    bin: "wrangler",
-    cwd: first.dir,
-    args: ["d1", "list", "--json"],
-    capture: true,
-  });
-  if (listed.code !== 0) throw new DeployError("wrangler d1 list failed");
-  const existing = parseD1List(listed.stdout);
-
+export function checkDatabaseIds(
+  workers: readonly WorkerConfig[],
+  existing: readonly D1Database[],
+) {
+  const owners = new Map<string, string>();
   for (const worker of workers) {
     for (const db of worker.d1) {
+      let found: D1Database | undefined;
       if (db.databaseId !== null) {
-        if (!existing.some((e) => e.uuid === db.databaseId)) {
+        found = existing.find((e) => e.uuid === db.databaseId);
+        if (!found) {
           throw new DeployError(
             `${worker.displayPath}: D1 database_id ${db.databaseId} does not exist in this account`,
           );
         }
-      } else if (db.databaseName !== null) {
+        if (found.name !== db.databaseName) {
+          throw new DeployError(
+            `${worker.displayPath}: D1 binding ${db.binding} has database_id ${db.databaseId}, which is ${found.name}, not ${db.databaseName ?? "(no database_name)"}`,
+          );
+        }
+      } else {
+        found = existing.find((e) => e.name === db.databaseName);
+      }
+      if (!found) continue;
+      const owner = owners.get(found.uuid);
+      if (owner !== undefined && owner !== worker.name) {
+        throw new DeployError(
+          `${worker.displayPath}: D1 database ${found.uuid} (${found.name}) is also bound by ${owner}; each database belongs to one Worker (D-08)`,
+        );
+      }
+      owners.set(found.uuid, worker.name);
+    }
+  }
+}
+
+/**
+ * Creates every D1 database that does not exist yet, by name, and applies
+ * its migrations. Both steps are no-ops when nothing is missing. Nothing is
+ * created or migrated unless every binding passes checkDatabaseIds.
+ */
+export async function ensureDatabases(ctx: Context, workers: readonly WorkerConfig[]) {
+  const first = workers[0];
+  if (!first || workers.every((w) => w.d1.length === 0)) return;
+  const listed = await ctx.run(wrangler(first, ["d1", "list", "--json"], true));
+  if (listed.code !== 0) throw new DeployError("wrangler d1 list failed");
+  const existing = parseD1List(listed.stdout);
+  checkDatabaseIds(workers, existing);
+
+  for (const worker of workers) {
+    for (const db of worker.d1) {
+      if (db.databaseId === null && db.databaseName !== null) {
         if (existing.some((e) => e.name === db.databaseName)) {
           ctx.log(`D1 ${db.databaseName} exists`);
         } else {
@@ -121,12 +163,7 @@ export async function ensureDatabases(ctx: Context, workers: readonly WorkerConf
 
 /** Secret names of a deployed Worker, or null when the Worker does not exist yet. */
 export async function workerSecrets(ctx: Context, worker: WorkerConfig): Promise<string[] | null> {
-  const result = await ctx.run({
-    bin: "wrangler",
-    cwd: worker.dir,
-    args: ["secret", "list", "--format", "json"],
-    capture: true,
-  });
+  const result = await ctx.run(wrangler(worker, ["secret", "list", "--format", "json"], true));
   if (result.code !== 0) {
     if (/not found/i.test(result.stderr + result.stdout)) return null;
     throw new DeployError(`listing the secrets of ${worker.name} failed`);
@@ -142,22 +179,23 @@ const MAX_PAGES = 20;
 async function storeSecrets(ctx: Context, broker: WorkerConfig, storeId: string) {
   const all: StoreSecret[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const result = await ctx.run({
-      bin: "wrangler",
-      cwd: broker.dir,
-      args: [
-        "secrets-store",
-        "secret",
-        "list",
-        storeId,
-        "--remote",
-        "--per-page",
-        String(PER_PAGE),
-        "--page",
-        String(page),
-      ],
-      capture: true,
-    });
+    const result = await ctx.run(
+      wrangler(
+        broker,
+        [
+          "secrets-store",
+          "secret",
+          "list",
+          storeId,
+          "--remote",
+          "--per-page",
+          String(PER_PAGE),
+          "--page",
+          String(page),
+        ],
+        true,
+      ),
+    );
     // Wrangler exits non-zero on an empty page ("List request returned no secrets").
     if (result.code !== 0) {
       if (/no secrets/i.test(result.stderr + result.stdout)) break;
@@ -233,11 +271,16 @@ export async function checkMasterKey(ctx: Context, broker: WorkerConfig, setup: 
   }
 }
 
-/** Settings the web Worker reads (operator guide, Access for the UI). */
+/**
+ * Settings the web Worker reads (operator guide, Access for the UI). The only
+ * values the deploy takes from its environment and uploads (R3-04).
+ */
 export const WEB_SETTINGS = ["ACCESS_TEAM_DOMAIN", "ACCESS_AUD", "ADMIN_EMAILS"] as const;
 
+const isWebSetting = (name: string) => (WEB_SETTINGS as readonly string[]).includes(name);
+
 export interface SettingsPlan {
-  /** Values from the environment, uploaded as secrets with the deploy. */
+  /** Web settings from the environment, uploaded as secrets with the deploy. */
   upload: Record<string, string>;
   /** Names that must already be secrets on the Worker. */
   expected: string[];
@@ -247,7 +290,10 @@ export interface SettingsPlan {
 
 /**
  * Decides where each web setting comes from: a var in the config, a value in
- * the deploy environment (uploaded as a secret), or an existing secret.
+ * the deploy environment (uploaded as a secret), or an existing secret. Other
+ * names in secrets.required are never read from the environment, so a name
+ * added there cannot copy the deploy token or any other variable into the
+ * internet-facing Worker; they must already be secrets.
  */
 export function planWebSettings(
   web: WorkerConfig,
@@ -262,7 +308,7 @@ export function planWebSettings(
       }
       continue;
     }
-    const value = env[name];
+    const value = isWebSetting(name) ? env[name] : undefined;
     if (value !== undefined && value.trim() !== "") plan.upload[name] = value.trim();
     else plan.expected.push(name);
   }
@@ -272,6 +318,13 @@ export function planWebSettings(
 const putHint = (names: readonly string[]) =>
   names.map((n) => `npx wrangler secret put ${n}   (in apps/web)`).join("\n  ");
 
+function missingHint(names: readonly string[]) {
+  const settings = names.filter(isWebSetting);
+  return settings.length > 0
+    ? `Set ${settings.join(", ")} as environment variables of the deploy, or create the secrets:\n  ${putHint(names)}`
+    : `Create the secrets, then run the deploy again:\n  ${putHint(names)}`;
+}
+
 /** Before the web deploy: fail early where Wrangler would refuse the deploy anyway. */
 export async function checkWebSettings(ctx: Context, web: WorkerConfig, plan: SettingsPlan) {
   const mandatory = plan.expected.filter((n) => web.requiredSecrets.includes(n));
@@ -280,9 +333,7 @@ export async function checkWebSettings(ctx: Context, web: WorkerConfig, plan: Se
   const missing = mandatory.filter((n) => !existing?.includes(n));
   if (missing.length === 0) return;
   throw new DeployError(
-    existing === null
-      ? `${web.name} does not exist yet and requires the secrets ${missing.join(", ")}. Set them as environment variables for the first deploy`
-      : `${web.name} requires the secrets ${missing.join(", ")}. Set them as environment variables, or:\n  ${putHint(missing)}`,
+    `${web.name} ${existing === null ? "does not exist yet and " : ""}requires the secrets ${missing.join(", ")}. ${missingHint(missing)}`,
   );
 }
 
@@ -295,6 +346,32 @@ export async function reportWebSettings(ctx: Context, web: WorkerConfig, plan: S
     ctx.todo.push(
       `${web.name} still needs ${missing.join(", ")} (operator guide, "Access for the UI"):\n  ${putHint(missing)}`,
     );
+  }
+}
+
+/**
+ * Writes the values to a private temporary file for `wrangler deploy
+ * --secrets-file` and removes it afterwards. No file without values, and
+ * nothing but web settings in it.
+ */
+export async function withSecretsFile(
+  values: Record<string, string>,
+  fn: (path: string | undefined) => Promise<void>,
+) {
+  const other = Object.keys(values).filter((name) => !isWebSetting(name));
+  if (other.length > 0) {
+    throw new DeployError(
+      `refusing to upload ${other.join(", ")}; the deploy uploads only ${WEB_SETTINGS.join(", ")}`,
+    );
+  }
+  if (Object.keys(values).length === 0) return fn(undefined);
+  const dir = mkdtempSync(join(tmpdir(), "virga-deploy-"));
+  try {
+    const path = join(dir, "secrets.json");
+    writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
+    await fn(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 
 export interface ServiceBinding {
@@ -57,7 +57,8 @@ export interface WorkerConfig {
 
 export class ConfigError extends Error {}
 
-const CONFIG_FILES = ["wrangler.jsonc", "wrangler.json"];
+/** The files Wrangler looks for without --config, in its order. */
+const WRANGLER_FILES = ["wrangler.json", "wrangler.jsonc", "wrangler.toml"];
 
 type Json = Record<string, unknown>;
 
@@ -66,16 +67,35 @@ const isRecord = (value: unknown): value is Json =>
 
 /** Path of the app's Wrangler configuration, or null when the app has none. */
 export function findConfigFile(dir: string): string | null {
-  for (const file of CONFIG_FILES) {
-    const path = join(dir, file);
-    if (existsSync(path)) return path;
-  }
-  if (existsSync(join(dir, "wrangler.toml"))) {
+  const found = WRANGLER_FILES.map((file) => join(dir, file)).filter((path) => existsSync(path));
+  if (found.length > 1) {
     throw new ConfigError(
-      `${join(dir, "wrangler.toml")}: only wrangler.jsonc and wrangler.json are supported`,
+      `${found.join(" and ")}: an app has one Wrangler config; remove all but one`,
     );
   }
-  return null;
+  const path = found[0];
+  if (path === undefined) return null;
+  if (path.endsWith(".toml")) {
+    throw new ConfigError(`${path}: only wrangler.jsonc and wrangler.json are supported`);
+  }
+  return path;
+}
+
+/**
+ * Wrangler configs in the directories above `dir`, up to the filesystem root.
+ * Wrangler run there without --config takes the first wrangler.json above
+ * before the app's own wrangler.jsonc (R3-03).
+ */
+export function configsAbove(dir: string): string[] {
+  const found: string[] = [];
+  let current = dir;
+  while (dirname(current) !== current) {
+    current = dirname(current);
+    for (const file of WRANGLER_FILES) {
+      if (existsSync(join(current, file))) found.push(join(current, file));
+    }
+  }
+  return found;
 }
 
 /** Reads apps/<app>/wrangler.jsonc. Returns null when the app or its config does not exist. */
@@ -84,6 +104,21 @@ export function readWorkerConfig(root: string, app: string): WorkerConfig | null
   const configPath = findConfigFile(dir);
   if (configPath === null) return null;
   const where = relative(root, configPath);
+  const show = (path: string) => {
+    const inside = relative(root, path);
+    return inside.startsWith("..") ? path : inside;
+  };
+  const above = configsAbove(dir);
+  if (above.length > 0) {
+    throw new ConfigError(
+      above
+        .map(
+          (path) =>
+            `${where}: ${show(path)} is a Wrangler config above the app; Wrangler run in apps/${app} without --config would use it. Remove it`,
+        )
+        .join("\n"),
+    );
+  }
   let raw: unknown;
   try {
     raw = parseJsonc(readFileSync(configPath, "utf8"));

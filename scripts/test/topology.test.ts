@@ -248,6 +248,22 @@ describe("checkTopology", () => {
     ]);
   });
 
+  it("R3-06: keeps one owner per database_id, whatever the name says", () => {
+    const vault = {
+      binding: "VAULT",
+      databaseName: "virga-vault",
+      databaseId: "6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11",
+      migrationsDir: "migrations",
+    };
+    const issues = check(
+      broker({ d1: [vault] }),
+      core({ d1: [{ ...vault, binding: "INDEX", databaseName: "virga-index" }] }),
+    );
+    expect(errors(issues)).toEqual([
+      "apps/core/wrangler.jsonc: D1 database_id 6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11 is also bound by virga-broker; each database belongs to one Worker (D-08)",
+    ]);
+  });
+
   it("needs a database_name to create and migrate a database", () => {
     const issues = check(
       broker({
@@ -274,9 +290,25 @@ describe("checkTopology", () => {
     ]);
   });
 
-  it("warns that named environments are not deployed", () => {
-    expect(warnings(check(broker({ hasEnvironments: true }), core()))).toEqual([
-      expect.stringContaining("named environments are ignored"),
+  it("R3-04: refuses Cloudflare credentials in secrets.required", () => {
+    const issues = check(
+      broker(),
+      core(),
+      web({ requiredSecrets: ["CLOUDFLARE_API_TOKEN", "CF_API_KEY", "ACCESS_AUD"] }),
+    );
+    expect(errors(issues)).toEqual([
+      expect.stringContaining("secrets.required names CLOUDFLARE_API_TOKEN"),
+      expect.stringContaining("secrets.required names CF_API_KEY"),
     ]);
+  });
+
+  it("R3-03: refuses named environments, which the deploy never checks", () => {
+    const issues = check(broker({ hasEnvironments: true }), core());
+    expect(errors(issues)).toEqual([
+      expect.stringContaining(
+        "apps/broker/wrangler.jsonc: named environments (env) are not supported",
+      ),
+    ]);
+    expect(warnings(issues)).toEqual([]);
   });
 });

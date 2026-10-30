@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,6 +23,7 @@ import {
   ensureDatabases,
   planWebSettings,
   reportWebSettings,
+  withSecretsFile,
 } from "../lib/steps.ts";
 import { worker } from "./helpers.ts";
 
@@ -24,16 +33,18 @@ const fail = (stderr: string): Result => ({ code: 1, stdout: "", stderr });
 /** A runner that answers from a table keyed by the joined arguments and records every call. */
 function fakeContext(answers: Record<string, Result>) {
   const calls: string[] = [];
+  const commands: Command[] = [];
   const ctx: Context = {
     run: async (command: Command) => {
       const key = command.args.join(" ");
       calls.push(`${command.cwd.split("/").pop()}: ${key}`);
+      commands.push(command);
       return answers[key] ?? ok();
     },
     log: () => {},
     todo: [],
   };
-  return { ctx, calls };
+  return { ctx, calls, commands };
 }
 
 let root = "";
@@ -97,6 +108,53 @@ describe("ensureDatabases", () => {
       "d1 create virga-vault --update-config=false": fail("Authentication error"),
     });
     await expect(ensureDatabases(ctx, [broker])).rejects.toThrow(DeployError);
+  });
+
+  const VAULT_ID = "6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11";
+  const INDEX_ID = "a9e2d4b0-7c31-4e5f-8a26-0f4b9c1d3e72";
+  const LIST = ok(
+    JSON.stringify([
+      { uuid: VAULT_ID, name: "virga-vault" },
+      { uuid: INDEX_ID, name: "virga-index" },
+    ]),
+  );
+
+  it("R3-06: refuses a database_id of another database before creating or migrating anything", async () => {
+    const broker = app("broker", [{ binding: "VAULT", databaseName: "virga-vault" }]);
+    // Names the index, points at the vault: Wrangler binds and migrates by database_id.
+    const core = app("core", [
+      { binding: "INDEX", databaseName: "virga-index", databaseId: VAULT_ID },
+    ]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": LIST });
+    await expect(ensureDatabases(ctx, [broker, core])).rejects.toThrow(
+      `apps/core/wrangler.jsonc: D1 binding INDEX has database_id ${VAULT_ID}, which is virga-vault, not virga-index`,
+    );
+    expect(calls).toEqual(["broker: d1 list --json"]);
+  });
+
+  it("R3-06: refuses a database that two Workers bind, by UUID", async () => {
+    const broker = app("broker", [{ binding: "VAULT", databaseName: "virga-vault" }]);
+    const core = app("core", [
+      { binding: "INDEX", databaseName: "virga-index", databaseId: INDEX_ID },
+      { binding: "COPY", databaseName: "virga-vault", databaseId: VAULT_ID },
+    ]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": LIST });
+    await expect(ensureDatabases(ctx, [broker, core])).rejects.toThrow(
+      `apps/core/wrangler.jsonc: D1 database ${VAULT_ID} (virga-vault) is also bound by virga-broker`,
+    );
+    expect(calls).toEqual(["broker: d1 list --json"]);
+  });
+
+  it("R3-06: accepts a database_id that matches its database_name", async () => {
+    const core = app("core", [
+      { binding: "INDEX", databaseName: "virga-index", databaseId: INDEX_ID },
+    ]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": LIST });
+    await ensureDatabases(ctx, [core]);
+    expect(calls).toEqual([
+      "core: d1 list --json",
+      "core: d1 migrations apply virga-index --remote",
+    ]);
   });
 });
 
@@ -204,6 +262,39 @@ describe("web settings", () => {
     });
   });
 
+  it("R3-04: never uploads the deploy token, even when secrets.required names it", () => {
+    const plan = planWebSettings(web({ requiredSecrets: ["CLOUDFLARE_API_TOKEN"] }), {
+      CLOUDFLARE_API_TOKEN: "cfat_0123456789abcdefghij",
+      ACCESS_AUD: "aud-tag",
+    });
+    expect(plan.upload).toEqual({ ACCESS_AUD: "aud-tag" });
+  });
+
+  it("R3-04: uploads only the web settings; other required secrets must already exist", async () => {
+    const config = web({ requiredSecrets: ["EXTRA"] });
+    const plan = planWebSettings(config, { EXTRA: "from-the-shell" });
+    expect(plan.upload).toEqual({});
+    expect(plan.expected).toContain("EXTRA");
+    const { ctx } = fakeContext({ "secret list --format json": ok("[]") });
+    await expect(checkWebSettings(ctx, config, plan)).rejects.toThrow(
+      /requires the secrets EXTRA. Create the secrets, then run the deploy again:\n {2}npx wrangler secret put EXTRA/,
+    );
+  });
+
+  it("R3-04: writes only web settings into a private secrets file and removes it", async () => {
+    let path = "";
+    await withSecretsFile({ ACCESS_AUD: "aud-tag" }, async (p) => {
+      path = p ?? "";
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ ACCESS_AUD: "aud-tag" });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+    expect(existsSync(path)).toBe(false);
+    await withSecretsFile({}, async (p) => expect(p).toBeUndefined());
+    await expect(
+      withSecretsFile({ CLOUDFLARE_API_TOKEN: "cfat_0123456789abcdefghij" }, async () => {}),
+    ).rejects.toThrow(/refusing to upload CLOUDFLARE_API_TOKEN/);
+  });
+
   it("flags placeholder vars", () => {
     const plan = planWebSettings(web({ vars: { ACCESS_AUD: "<AUD>", ADMIN_EMAILS: "" } }), {});
     expect(plan.placeholders).toEqual(["ACCESS_AUD", "ADMIN_EMAILS"]);
@@ -231,6 +322,35 @@ describe("web settings", () => {
     expect(ctx.todo).toEqual([
       expect.stringContaining("still needs ACCESS_TEAM_DOMAIN, ADMIN_EMAILS"),
     ]);
+  });
+});
+
+describe("Wrangler config", () => {
+  it("R3-03: names the checked config in every Wrangler call", async () => {
+    const broker = {
+      ...app("broker", [{ binding: "VAULT", databaseName: "virga-vault" }]),
+      secretsStore: storeBroker().secretsStore,
+    };
+    const core = app("core", [{ binding: "INDEX", databaseName: "virga-index" }]);
+    const web = worker("web", { requiredSecrets: ["ACCESS_AUD"] });
+    const { ctx, commands } = fakeContext({
+      "d1 list --json": ok(JSON.stringify([{ uuid: "1", name: "virga-index" }])),
+      [LIST_STORE]: ok(TABLE(["│ virga-master-key │ id │ │ workers │ active │ x │ x │"])),
+      "secret list --format json": ok('[{ "name": "ACCESS_AUD", "type": "secret_text" }]'),
+    });
+    await ensureDatabases(ctx, [broker, core]);
+    await checkMasterKey(ctx, broker, masterKeySetup(broker));
+    const plan = planWebSettings(web, {});
+    await checkWebSettings(ctx, web, plan);
+    await reportWebSettings(ctx, web, plan);
+    for (const w of [broker, core, web]) await deploy(ctx, w, { dryRun: false });
+
+    const configOf = new Map([broker, core, web].map((w) => [w.dir, w.configPath]));
+    expect(commands.length).toBeGreaterThan(8);
+    for (const command of commands) {
+      expect(command.bin).toBe("wrangler");
+      expect(command.bin === "wrangler" && command.config).toBe(configOf.get(command.cwd));
+    }
   });
 });
 

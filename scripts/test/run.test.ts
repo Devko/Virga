@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { parseJsonOutput, processRunner, redact } from "../lib/run.ts";
+import { configOverrides, parseJsonOutput, processRunner, redact } from "../lib/run.ts";
 
 describe("redact", () => {
   it("removes known secrets and Cloudflare credential shapes", () => {
@@ -28,6 +28,18 @@ describe("parseJsonOutput", () => {
   });
 });
 
+const CONFIG = "/repo/apps/web/wrangler.jsonc";
+
+describe("configOverrides", () => {
+  it("R3-03: names the variables that make Wrangler deploy something else", () => {
+    expect(configOverrides({ CLOUDFLARE_ENV: "prod", WRANGLER_CI_OVERRIDE_NAME: "x" })).toEqual([
+      "CLOUDFLARE_ENV",
+      "WRANGLER_CI_OVERRIDE_NAME",
+    ]);
+    expect(configOverrides({ CLOUDFLARE_ENV: "", PATH: "/bin" })).toEqual([]);
+  });
+});
+
 describe("processRunner", () => {
   let dir = "";
   beforeAll(() => {
@@ -42,18 +54,50 @@ describe("processRunner", () => {
         'echo "args=$*"',
         // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
         'echo "token=${CLOUDFLARE_API_TOKEN:-unset} key=${CLOUDFLARE_API_KEY:-unset} metrics=$WRANGLER_SEND_METRICS"',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
+        'echo "env=${CLOUDFLARE_ENV-unset} name=${WRANGLER_CI_OVERRIDE_NAME-unset}"',
         'echo "warning cfat_0123456789abcdefghij" >&2',
         "exit 3",
       ].join("\n"),
     );
     chmodSync(bin, 0o755);
+    // A stand-in for pnpm, found through PATH, that lists the Cloudflare variables it sees.
+    mkdirSync(join(dir, "path"));
+    const pnpm = join(dir, "path", "pnpm");
+    writeFileSync(
+      pnpm,
+      [
+        "#!/bin/sh",
+        'echo "args=$*"',
+        "echo \"vars=$(env | grep -E '^(CLOUDFLARE|CF)_' | cut -d= -f1 | sort | tr '\\n' ' ')\"",
+      ].join("\n"),
+    );
+    chmodSync(pnpm, 0o755);
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
     vi.unstubAllEnvs();
   });
 
-  it("passes no credentials in a dry run", async () => {
+  it("R3-05: runs builds without the deploy token or any other CLOUDFLARE_ variable", async () => {
+    vi.stubEnv("PATH", `${join(dir, "path")}:${process.env.PATH ?? ""}`);
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef");
+    vi.stubEnv("CF_API_TOKEN", "another-token-value");
+    const run = processRunner({ credentials: "token", secrets: () => [], print: () => {} });
+    const build = await run({ bin: "pnpm", cwd: dir, args: ["run", "build"], capture: true });
+    expect(build.stdout).toBe("args=run build\nvars=\n");
+    const wrangler = await run({
+      bin: "wrangler",
+      cwd: dir,
+      config: CONFIG,
+      args: [],
+      capture: true,
+    });
+    expect(wrangler.stdout).toContain("token=the-deploy-token-value");
+  });
+
+  it("R3-03: passes the checked config, and no credentials in a dry run", async () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_API_KEY", "a-global-api-key");
     const printed: string[] = [];
@@ -65,11 +109,14 @@ describe("processRunner", () => {
     const result = await run({
       bin: "wrangler",
       cwd: dir,
+      config: CONFIG,
       args: ["deploy", "--dry-run"],
       capture: true,
     });
     expect(result.code).toBe(3);
-    expect(result.stdout).toBe("args=deploy --dry-run\ntoken=unset key=unset metrics=false\n");
+    expect(result.stdout).toBe(
+      `args=deploy --dry-run --config ${CONFIG}\ntoken=unset key=unset metrics=false\nenv=unset name=unset\n`,
+    );
     // Captured stdout is not printed; stderr is, redacted.
     expect(printed).toEqual(["stderr:warning [redacted]"]);
   });
@@ -83,15 +130,47 @@ describe("processRunner", () => {
       secrets: () => ["the-deploy-token-value"],
       print: (_stream, line) => printed.push(line),
     });
-    const result = await run({ bin: "wrangler", cwd: dir, args: [] });
+    const result = await run({ bin: "wrangler", cwd: dir, config: CONFIG, args: [] });
     expect(result.stdout).toContain("token=[redacted] key=unset metrics=false");
     expect(printed.join("\n")).not.toContain("the-deploy-token-value");
   });
 
+  it("R3-03: refuses arguments that choose another config or environment", async () => {
+    const run = processRunner({ credentials: "none", secrets: () => [] });
+    for (const extra of [
+      ["--env", "prod"],
+      ["-e", "prod"],
+      ["--env=prod"],
+      ["--config", "x"],
+      ["-c", "x"],
+    ]) {
+      await expect(
+        run({ bin: "wrangler", cwd: dir, config: CONFIG, args: ["deploy", ...extra] }),
+      ).rejects.toThrow(/chooses the config or environment/);
+    }
+    await expect(
+      run({ bin: "wrangler", cwd: dir, config: "wrangler.jsonc", args: ["deploy"] }),
+    ).rejects.toThrow(/absolute/);
+  });
+
+  it("R3-03: never passes a named environment or another Worker name to Wrangler", async () => {
+    vi.stubEnv("CLOUDFLARE_ENV", "prod");
+    vi.stubEnv("WRANGLER_CI_OVERRIDE_NAME", "");
+    const run = processRunner({ credentials: "token", secrets: () => [] });
+    const result = await run({
+      bin: "wrangler",
+      cwd: dir,
+      config: CONFIG,
+      args: [],
+      capture: true,
+    });
+    expect(result.stdout).toContain("env=unset name=unset");
+  });
+
   it("asks for pnpm install when the app has no Wrangler", async () => {
     const run = processRunner({ credentials: "none", secrets: () => [] });
-    await expect(run({ bin: "wrangler", cwd: join(dir, "nothing"), args: [] })).rejects.toThrow(
-      /pnpm install/,
-    );
+    await expect(
+      run({ bin: "wrangler", cwd: join(dir, "nothing"), config: CONFIG, args: [] }),
+    ).rejects.toThrow(/pnpm install/);
   });
 });

@@ -1,16 +1,32 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
-export interface Command {
-  /** `wrangler` runs the app's own pinned Wrangler; `pnpm` runs a package script. */
-  bin: "wrangler" | "pnpm";
-  /** The Worker's directory; Wrangler finds its config there. */
+interface BaseCommand {
+  /** The Worker's directory. */
   cwd: string;
   args: string[];
   /** Keep stdout for parsing instead of printing it. stderr is always printed. */
   capture?: boolean;
 }
+
+/** Runs the app's own pinned Wrangler. */
+export interface WranglerCommand extends BaseCommand {
+  bin: "wrangler";
+  /**
+   * Absolute path of the config the script checked. Wrangler gets it as
+   * --config; without it, Wrangler would take the first wrangler.json in any
+   * directory above `cwd` before the app's own wrangler.jsonc (R3-03).
+   */
+  config: string;
+}
+
+/** Runs a package script. */
+export interface PnpmCommand extends BaseCommand {
+  bin: "pnpm";
+}
+
+export type Command = WranglerCommand | PnpmCommand;
 
 export interface Result {
   code: number;
@@ -30,7 +46,27 @@ export const CREDENTIAL_VARS = [
   "CF_EMAIL",
 ];
 
+/**
+ * Names of the deploy's own Cloudflare settings and credentials. They never
+ * become Worker secrets, and builds never see them.
+ */
+export const isCloudflareVar = (name: string) => /^(?:CLOUDFLARE|CF)_/i.test(name);
+
 const TOKEN_PATTERN = /\b(?:cfat|cfut|cfk|cfoat)_[A-Za-z0-9_-]{8,}/g;
+
+/** Wrangler flags that pick another config or a named environment; only the runner sets --config. */
+const CHOOSERS = /^(?:--config|-c|--env|-e)(?:=|$)/;
+
+/**
+ * Variables with which Wrangler deploys something other than the checked
+ * config: a named environment, or another Worker name (meant for Workers Builds).
+ */
+export const OVERRIDE_VARS = ["CLOUDFLARE_ENV", "WRANGLER_CI_OVERRIDE_NAME"];
+
+/** The override variables set in `env`. The deploy refuses to run while one is set. */
+export function configOverrides(env: Readonly<Record<string, string | undefined>>): string[] {
+  return OVERRIDE_VARS.filter((name) => (env[name] ?? "") !== "");
+}
 
 /** Replaces known secret values and anything shaped like a Cloudflare credential. */
 export function redact(text: string, secrets: readonly string[]): string {
@@ -43,14 +79,34 @@ export function redact(text: string, secrets: readonly string[]): string {
 
 export interface RunnerOptions {
   /**
-   * `none` strips every credential from the environment of child processes
+   * What Wrangler gets: `none` strips every credential from its environment
    * (dry run); `token` keeps only CLOUDFLARE_API_TOKEN, so Wrangler cannot
-   * fall back to a Global API Key.
+   * fall back to a Global API Key. Builds never get credentials.
    */
   credentials: "none" | "token";
   /** Values that must never be printed, such as the API token. */
   secrets: () => readonly string[];
   print?: (stream: "stdout" | "stderr", line: string) => void;
+}
+
+/**
+ * The environment of a child process. A build (`pnpm`) runs the app's whole
+ * build-time dependency tree and never reaches the API, so it gets no
+ * CLOUDFLARE_ or CF_ variable at all (R3-05).
+ */
+function childEnv(command: Command, credentials: RunnerOptions["credentials"]): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, WRANGLER_SEND_METRICS: "false" };
+  for (const name of OVERRIDE_VARS) delete env[name];
+  if (command.bin === "pnpm") {
+    for (const name of Object.keys(env)) {
+      if (isCloudflareVar(name)) delete env[name];
+    }
+    return env;
+  }
+  for (const name of CREDENTIAL_VARS) {
+    if (credentials === "none" || name !== "CLOUDFLARE_API_TOKEN") delete env[name];
+  }
+  return env;
 }
 
 /**
@@ -63,19 +119,28 @@ export function processRunner(options: RunnerOptions): Runner {
     ((stream, line) => (stream === "stdout" ? process.stdout : process.stderr).write(`${line}\n`));
   return (command) =>
     new Promise((resolve, reject) => {
-      const file =
-        command.bin === "wrangler" ? join(command.cwd, "node_modules", ".bin", "wrangler") : "pnpm";
-      if (command.bin === "wrangler" && !existsSync(file)) {
-        reject(new Error(`${file} not found; run pnpm install first`));
-        return;
+      let file = "pnpm";
+      let args = command.args;
+      if (command.bin === "wrangler") {
+        file = join(command.cwd, "node_modules", ".bin", "wrangler");
+        const chooser = command.args.find((arg) => CHOOSERS.test(arg));
+        if (chooser !== undefined) {
+          reject(new Error(`wrangler argument ${chooser} chooses the config or environment`));
+          return;
+        }
+        if (!isAbsolute(command.config)) {
+          reject(new Error(`wrangler --config needs an absolute path, not ${command.config}`));
+          return;
+        }
+        if (!existsSync(file)) {
+          reject(new Error(`${file} not found; run pnpm install first`));
+          return;
+        }
+        args = [...command.args, "--config", command.config];
       }
-      const env: NodeJS.ProcessEnv = { ...process.env, WRANGLER_SEND_METRICS: "false" };
-      for (const name of CREDENTIAL_VARS) {
-        if (options.credentials === "none" || name !== "CLOUDFLARE_API_TOKEN") delete env[name];
-      }
-      const child = spawn(file, command.args, {
+      const child = spawn(file, args, {
         cwd: command.cwd,
-        env,
+        env: childEnv(command, options.credentials),
         stdio: ["ignore", "pipe", "pipe"],
       });
       const out = { stdout: "", stderr: "" };

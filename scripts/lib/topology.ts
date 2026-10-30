@@ -1,5 +1,6 @@
 import type { WorkerConfig } from "./config.ts";
 import type { ModuleExports } from "./exports.ts";
+import { isCloudflareVar } from "./run.ts";
 
 export interface Issue {
   level: "error" | "warning";
@@ -125,28 +126,43 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
       if (worker.previewUrls !== false) error(`${at}: preview_urls must be false`);
       if (worker.hasRoutes) error(`${at}: ${worker.name} must have no routes`);
     }
+    for (const name of worker.requiredSecrets) {
+      if (isCloudflareVar(name)) {
+        error(
+          `${at}: secrets.required names ${name}; Cloudflare credentials are never Worker secrets`,
+        );
+      }
+    }
     if (worker.hasEnvironments) {
-      warning(`${at}: named environments are ignored; the top-level configuration is deployed`);
+      error(
+        `${at}: named environments (env) are not supported; the deploy checks only the top-level configuration, and Wrangler would deploy an environment chosen with --env or CLOUDFLARE_ENV unchecked`,
+      );
     }
   }
 
+  // By name and by ID: Wrangler binds by database_id, whatever database_name says (R3-06).
   const databases = new Map<string, string>();
   for (const worker of byName.values()) {
     for (const db of worker.d1) {
-      const key = db.databaseName ?? db.databaseId;
       if (db.databaseName === null) {
         error(
           `${where(worker)}: D1 binding ${db.binding} needs database_name, so that the deploy script can create and migrate it`,
         );
       }
-      if (key === null) continue;
-      const owner = databases.get(key);
-      if (owner !== undefined && owner !== worker.name) {
-        error(
-          `${where(worker)}: D1 database ${key} is also bound by ${owner}; each database belongs to one Worker (D-08)`,
-        );
+      const keys = [
+        db.databaseName === null ? null : `D1 database ${db.databaseName}`,
+        db.databaseId === null ? null : `D1 database_id ${db.databaseId}`,
+      ];
+      for (const key of keys) {
+        if (key === null) continue;
+        const owner = databases.get(key);
+        if (owner !== undefined && owner !== worker.name) {
+          error(
+            `${where(worker)}: ${key} is also bound by ${owner}; each database belongs to one Worker (D-08)`,
+          );
+        }
+        databases.set(key, worker.name);
       }
-      databases.set(key, worker.name);
     }
   }
   return issues;

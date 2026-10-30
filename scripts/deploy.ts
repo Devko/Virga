@@ -4,19 +4,18 @@
 // Wrangler configs against each other, creates missing D1 databases and
 // applies their migrations, checks the master key (D-15), then deploys
 // virga-broker, virga-core and virga-web in that order. Safe to run again.
+// Wrangler always gets the checked config as --config and never a named
+// environment.
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
 // passes no credentials to Wrangler and changes nothing.
 // See docs/operator/guide.md.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
-import { processRunner, redact } from "./lib/run.ts";
+import { configOverrides, processRunner, redact } from "./lib/run.ts";
 import {
   build,
   type Context,
@@ -30,6 +29,7 @@ import {
   planWebSettings,
   reportWebSettings,
   WEB_SETTINGS,
+  withSecretsFile,
 } from "./lib/steps.ts";
 import { checkTopology, WORKERS } from "./lib/topology.ts";
 
@@ -56,6 +56,14 @@ async function main(): Promise<number> {
   }
   const dryRun = values["dry-run"] === true;
   const root = fileURLToPath(new URL("..", import.meta.url));
+
+  const overrides = configOverrides(process.env);
+  if (overrides.length > 0) {
+    console.error(
+      `error: unset ${overrides.join(" and ")}; the deploy checks and deploys only the top-level configuration of each Worker`,
+    );
+    return 1;
+  }
 
   const token = process.env.CLOUDFLARE_API_TOKEN ?? "";
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
@@ -128,25 +136,6 @@ async function main(): Promise<number> {
   ctx.log(dryRun ? "Dry run complete." : "Deploy complete.");
   for (const item of ctx.todo) console.log(`ACTION: ${item}`);
   return 0;
-}
-
-/**
- * Writes the values to a private temporary file for `wrangler deploy
- * --secrets-file` and removes it afterwards. No file without values.
- */
-async function withSecretsFile(
-  values: Record<string, string>,
-  fn: (path: string | undefined) => Promise<void>,
-) {
-  if (Object.keys(values).length === 0) return fn(undefined);
-  const dir = mkdtempSync(join(tmpdir(), "virga-deploy-"));
-  try {
-    const path = join(dir, "secrets.json");
-    writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
-    await fn(path);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 try {
