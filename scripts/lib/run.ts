@@ -363,8 +363,9 @@ function childEnv(command: Command, credentials: RunnerOptions["credentials"]): 
  */
 function wranglerProblem(command: WranglerCommand, options: RunnerOptions): string | null {
   const chooser = command.args.find((arg) => CHOOSERS.test(arg));
-  if (chooser !== undefined)
+  if (chooser !== undefined) {
     return `wrangler argument ${chooser} chooses the config or environment`;
+  }
   if (!isAbsolute(command.config)) {
     return `wrangler --config needs an absolute path, not ${command.config}`;
   }
