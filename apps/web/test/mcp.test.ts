@@ -8,6 +8,8 @@ import {
   INJECTION,
   MARKUP,
   neighborhood,
+  REMOVING_ACCOUNT,
+  removingSummary,
   summary,
   UNKNOWN_ACCOUNT,
 } from "./fixtures.ts";
@@ -110,6 +112,24 @@ describe("MCP server", () => {
     const result = await tool("list_accounts");
     expect(untrusted(result)).toEqual(accounts);
     expect(result.content[1]?.text).not.toContain(MARKUP);
+  });
+
+  it("describes the status `removing` and starts no scan (R5-08)", async () => {
+    const list = (await parse(await post("tools/list"))) as {
+      result: { tools: { name: string; description: string }[] };
+    };
+    const described = (name: string) => list.result.tools.find((t) => t.name === name)?.description;
+    expect(described("list_accounts")).toMatch(/status.*`removing`/s);
+    expect(described("list_accounts")).toMatch(/removal began and did not finish/);
+    expect(described("list_accounts")).toMatch(/no scan of it begins/i);
+    expect(described("get_scan_summary")).toMatch(/`removing`.*graph may already be deleted/s);
+
+    const listed = untrusted(await tool("list_accounts")) as typeof accounts;
+    expect(listed.find((a) => a.id === REMOVING_ACCOUNT)?.status).toBe("removing");
+    const data = untrusted(await tool("get_scan_summary", { account_id: REMOVING_ACCOUNT }));
+    expect(data).toEqual(removingSummary);
+    // No tool starts a scan, so none has a refusal reason to report.
+    expect(calls.map((c) => c.method)).toEqual(["listAccounts", "getScanSummary"]);
   });
 
   it("get_scan_summary reports hits, undecided rows and errors per rule as untrusted data", async () => {
