@@ -132,6 +132,18 @@ export async function dueAccounts(
   return results.map((r) => r.id);
 }
 
+/** Accounts one list returns at most. */
+export const MAX_ACCOUNTS = 1000;
+
+/** Every account in the index, by name, then ID; at most MAX_ACCOUNTS. */
+export async function listAccounts(db: D1Database): Promise<AccountRow[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM accounts ORDER BY name, id LIMIT ?")
+    .bind(MAX_ACCOUNTS)
+    .all<AccountRecord>();
+  return results.map(accountRow);
+}
+
 export async function getAccount(db: D1Database, id: string): Promise<AccountRow | null> {
   const row = await db
     .prepare("SELECT * FROM accounts WHERE id = ?")

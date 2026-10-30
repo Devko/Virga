@@ -2,6 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { fromDurableObjectStorage, replaceExposure } from "@virga/graph";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { AdminRpc, GraphReaderRpc } from "../../web/src/rpc.ts";
 import type { AccountGraph } from "../src/account-graph.ts";
 import { Admin } from "../src/admin.ts";
 import { GraphReader } from "../src/graph-reader.ts";
@@ -143,11 +144,17 @@ beforeAll(async () => {
   await d1ScanIndex(env.INDEX).beginRun({ id: SCAN, accountId, startedAt: AT });
 });
 
+// The web Worker calls these entrypoints through mirrored types, because its
+// service bindings are typed only as `Service`. This fails to compile when
+// core's signatures drift from the mirror.
+const WEB_MIRROR: [GraphReaderRpc, AdminRpc] = [reader, exports.Admin];
+
 // RPC types turn a result that is not serializable for them into `never`,
 // which callers would not notice. These fail to compile if that happens.
 type Typed<T> = [T] extends [never] ? false : true;
 type Stub = ReturnType<typeof graphOf>;
 const RPC_TYPES: true[] = [
+  true as Typed<Awaited<ReturnType<typeof reader.listAccounts>>>,
   true as Typed<Awaited<ReturnType<typeof reader.getScanSummary>>>,
   true as Typed<Awaited<ReturnType<typeof reader.listFindings>>>,
   true as Typed<Awaited<ReturnType<typeof reader.getFinding>>>,
@@ -165,6 +172,7 @@ const RPC_TYPES: true[] = [
 describe("GraphReader", () => {
   it("has typed RPC results", () => {
     expect(RPC_TYPES.every(Boolean)).toBe(true);
+    expect(WEB_MIRROR).toHaveLength(2);
   });
 
   it("exposes only its read methods over RPC", () => {
@@ -174,6 +182,7 @@ describe("GraphReader", () => {
       "getFinding",
       "getNeighborhood",
       "getScanSummary",
+      "listAccounts",
       "listFindings",
     ]);
     expect(Object.getOwnPropertyNames(Admin.prototype).sort()).toEqual([
@@ -181,6 +190,19 @@ describe("GraphReader", () => {
       "constructor",
       "triggerScan",
     ]);
+  });
+
+  it("lists the accounts in the index in the shape the web Worker reads", async () => {
+    const accounts = await reader.listAccounts();
+    expect(accounts.find((a) => a.id === accountId)).toEqual({
+      id: accountId,
+      name: "Example Account Name",
+      status: "active",
+      cadenceHours: 24,
+      profile: "inventory",
+      createdAt: 1,
+      lastScanAt: null,
+    });
   });
 
   it("answers null for accounts that are not in the index, without creating a graph", async () => {

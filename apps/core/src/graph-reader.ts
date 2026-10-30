@@ -6,7 +6,13 @@ import type {
   GraphSummary,
   Neighborhood,
 } from "./graph/views.ts";
-import { type AccountRow, getAccount, latestRun, type ScanRunRow } from "./index-db.ts";
+import {
+  type AccountRow,
+  getAccount,
+  latestRun,
+  listAccounts,
+  type ScanRunRow,
+} from "./index-db.ts";
 import { assertAccountId } from "./scan/ids.ts";
 
 export interface ScanSummaryView {
@@ -37,12 +43,17 @@ const graphOf = (env: Env, account: AccountRow) =>
   env.ACCOUNT_GRAPH.get(env.ACCOUNT_GRAPH.idFromName(account.id));
 
 /**
- * Read-only RPC for the web Worker. Every method takes the account ID and
- * returns null for an account that is not in the index, so a caller cannot
- * create graph objects for arbitrary IDs. Values typed `Untrusted` come from
- * the scanned account.
+ * Read-only RPC for the web Worker. Every method but `listAccounts` takes the
+ * account ID and returns null for an account that is not in the index, so a
+ * caller cannot create graph objects for arbitrary IDs. Values typed
+ * `Untrusted` come from the scanned account or from onboarding input.
  */
 export class GraphReader extends WorkerEntrypoint<Env> {
+  /** Every account in the index, by name, then ID; at most 1,000. Reads only the index. */
+  async listAccounts(): Promise<AccountRow[]> {
+    return listAccounts(this.env.INDEX);
+  }
+
   async getScanSummary(accountId: string): Promise<ScanSummaryView | null> {
     const account = await knownAccount(this.env, accountId);
     if (!account) return null;
