@@ -1,7 +1,7 @@
 /**
  * The RPC surface this Worker calls, mirrored from its sources because the
  * service bindings are typed only as `Service`:
- * - `GraphReader` and `Admin`: apps/core/src (graph-reader.ts, admin.ts, graph/views.ts, index-db.ts)
+ * - `GraphReader` and `Admin`: apps/core/src (graph-reader.ts, admin.ts, audit.ts, graph/views.ts, index-db.ts)
  * - `TokenIntake`: apps/broker/src/token-intake.ts
  * Pure types plus three casts, so the SPA can import the view types too.
  */
@@ -143,6 +143,8 @@ export interface FindingView {
   severity: FindingSeverity;
   status: FindingStatus;
   title: string;
+  /** The node the finding is about (`finding_nodes` role `subject`); null without one. */
+  subject: Untrusted<string> | null;
   evidence: Untrusted<JsonRecord>;
   insightId: Untrusted<string> | null;
   firstSeen: number;
@@ -218,6 +220,33 @@ export interface RemoveResult {
   removed: boolean;
 }
 
+export const CHANNELS = ["ui", "api", "mcp"] as const;
+export type Channel = (typeof CHANNELS)[number];
+
+/** One row of the tool audit trail (core `tool_audit`, migration 0003). */
+export interface ToolCall {
+  /** A lowercase email, or a service token's client ID; at most 320 characters. */
+  identity: string;
+  identityType: "email" | "service_token";
+  channel: Channel;
+  /** A route template (`GET /api/accounts/{id}`) or an MCP tool name, never a raw URL. */
+  action: string;
+  accountId: string | null;
+  /** The HTTP status, or `ok`, `not_found`, `error` or `refused` for a tool call. */
+  outcome: string;
+}
+
+export interface ToolCallRow extends ToolCall {
+  id: number;
+  at: number;
+}
+
+export interface ToolCallPage {
+  /** Newest first. */
+  entries: ToolCallRow[];
+  cursor: string | null;
+}
+
 export interface AdminRpc {
   addAccount(input: NewAccount): Promise<AccountRow>;
   triggerScan(accountId: string): Promise<TriggerResult>;
@@ -226,6 +255,10 @@ export interface AdminRpc {
    * Idempotent; after a failure the account stays listed as `removing`.
    */
   removeAccount(accountId: string): Promise<RemoveResult>;
+  /** Adds a row to the tool audit trail; throws a TypeError for a field that does not fit. */
+  recordToolCall(entry: ToolCall): Promise<void>;
+  /** The tool audit trail, newest first; `limit` 1 to 200 (default 50). */
+  listToolCalls(query?: { limit?: number; cursor?: string }): Promise<ToolCallPage>;
 }
 
 export interface TokenIntakeRpc {

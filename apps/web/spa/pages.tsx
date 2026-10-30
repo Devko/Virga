@@ -11,7 +11,16 @@ import {
   type ScanSummaryView,
   type TriggerResult,
 } from "../src/rpc.ts";
-import { ApiError, api, type IntakeView, type Me, type RemovalView } from "./api.ts";
+import {
+  ApiError,
+  api,
+  type ExportFormat,
+  exportPart,
+  exportPath,
+  type IntakeView,
+  type Me,
+  type RemovalView,
+} from "./api.ts";
 import { type Loaded, Pending, Problem, useLoad } from "./load.tsx";
 import { Link, paths } from "./router.tsx";
 import { Text } from "./text.tsx";
@@ -65,6 +74,107 @@ function ScanButton({ accountId, onStarted }: { accountId: string; onStarted: ()
         {state.busy ? "Starting…" : "Start scan"}
       </button>
       {state.result && <span role="status">{scanMessage(state.result)}</span>}
+      {state.error && <Problem error={state.error} />}
+    </div>
+  );
+}
+
+/** Saves a blob as a file: a temporary link with `download`, clicked, then revoked. */
+function saveFile(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** The file name of one part; the account ID is 32 hex characters, so the name is plain. */
+export function exportFileName(accountId: string, format: ExportFormat, part: number): string {
+  return `virga-findings-${accountId}${part > 1 ? `-part-${part}` : ""}.ocsf.${format}`;
+}
+
+export function exportMessage(part: number, saved: number, more: boolean): string {
+  const findings = `${saved} ${saved === 1 ? "finding" : "findings"}`;
+  if (!more) return part === 1 ? `Saved ${findings}.` : `Saved part ${part}; ${findings} in all.`;
+  return `Saved part ${part}; ${findings} so far. More findings match: save the next part.`;
+}
+
+interface ExportState {
+  busy: boolean;
+  /** Parts saved so far, and the findings in them. */
+  part: number;
+  saved: number;
+  next: string | null;
+  error?: Error;
+}
+
+const NO_EXPORT: ExportState = { busy: false, part: 0, saved: 0, next: null };
+
+/**
+ * Saves the findings that match the filters as OCSF Detection Findings. One
+ * response holds up to 1,000 findings and about 4 MiB; the rest follows in
+ * further parts.
+ */
+export function ExportControl({
+  accountId,
+  status,
+  severity,
+}: {
+  accountId: string;
+  status: FindingStatus[];
+  severity: FindingSeverity[];
+}) {
+  const [format, setFormat] = useState<ExportFormat>("json");
+  const [state, setState] = useState<ExportState>(NO_EXPORT);
+  // Other filters or another format start a new export.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the reset runs when these change.
+  useEffect(() => setState(NO_EXPORT), [accountId, status, severity, format]);
+
+  const save = async (path: string, part: number, saved: number) => {
+    setState((s) => ({ ...s, busy: true, error: undefined }));
+    try {
+      const result = await exportPart(path);
+      saveFile(result.blob, exportFileName(accountId, format, part));
+      setState({ busy: false, part, saved: saved + result.count, next: result.next });
+    } catch (error) {
+      setState((s) => ({
+        ...s,
+        busy: false,
+        error: error instanceof Error ? error : new Error("failed"),
+      }));
+    }
+  };
+
+  const next = state.next;
+  return (
+    <div className="actions export">
+      <label className="inline">
+        OCSF export
+        <select value={format} onChange={(e) => setFormat(e.target.value as ExportFormat)}>
+          <option value="json">JSON</option>
+          <option value="ndjson">NDJSON</option>
+        </select>
+      </label>
+      <button
+        type="button"
+        disabled={state.busy}
+        onClick={() => save(exportPath(accountId, { status, severity }, format), 1, 0)}
+      >
+        {state.busy && state.part === 0 ? "Exporting…" : "Export findings"}
+      </button>
+      {state.part > 0 && (
+        <span role="status">{exportMessage(state.part, state.saved, next !== null)}</span>
+      )}
+      {next !== null && (
+        <button
+          type="button"
+          disabled={state.busy}
+          onClick={() => save(next, state.part + 1, state.saved)}
+        >
+          {state.busy ? "Exporting…" : `Save part ${state.part + 1}`}
+        </button>
+      )}
       {state.error && <Problem error={state.error} />}
     </div>
   );
@@ -142,6 +252,7 @@ function FindingsSection({ accountId }: { accountId: string }) {
           </label>
         ))}
       </fieldset>
+      <ExportControl accountId={accountId} status={status} severity={severity} />
       {list.loading && list.findings.length === 0 ? (
         <p className="muted">Loading…</p>
       ) : (

@@ -1,4 +1,12 @@
 import type { Identity } from "./auth.ts";
+import {
+  EXPORT_MAX,
+  type ExportFormat,
+  type ExportRequest,
+  exportFindings,
+  FORMATS,
+  refuseCrossSiteRead,
+} from "./export.ts";
 import { error, json, logFailure, readJson, refuseCrossSite } from "./http.ts";
 import {
   coreAdmin,
@@ -57,7 +65,8 @@ function text(url: URL, name: string, required: boolean): string | undefined {
   return value;
 }
 
-export function findingFilters(url: URL): FindingFilters {
+/** Status, severity and cursor of a findings query; the caller adds the limit. */
+function findingSelection(url: URL): FindingFilters {
   const filters: FindingFilters = {};
   const status = oneOf<FindingStatus>(
     url.searchParams.getAll("status"),
@@ -71,11 +80,29 @@ export function findingFilters(url: URL): FindingFilters {
   );
   if (status.length > 0) filters.status = status;
   if (severity.length > 0) filters.severity = severity;
-  const limit = integer(url, "limit", 1, FINDINGS_MAX);
-  if (limit !== undefined) filters.limit = limit;
   const cursor = text(url, "cursor", false);
   if (cursor !== undefined) filters.cursor = cursor;
   return filters;
+}
+
+export function findingFilters(url: URL): FindingFilters {
+  const filters = findingSelection(url);
+  const limit = integer(url, "limit", 1, FINDINGS_MAX);
+  if (limit !== undefined) filters.limit = limit;
+  return filters;
+}
+
+export function exportRequest(url: URL, accountId: string): ExportRequest {
+  const format = url.searchParams.get("format") ?? "json";
+  if (!(FORMATS as readonly string[]).includes(format)) throw new BadRequest("invalid_format");
+  const request: ExportRequest = {
+    accountId,
+    format: format as ExportFormat,
+    filters: findingSelection(url),
+  };
+  const limit = integer(url, "limit", 1, EXPORT_MAX);
+  if (limit !== undefined) request.limit = limit;
+  return request;
 }
 
 // Control characters, including line breaks, have no place in a display name (as in core).
@@ -247,6 +274,7 @@ function methodNotAllowed(allow: string): Response {
 
 type Route =
   | { kind: "read"; run: () => Promise<unknown> }
+  | { kind: "download"; run: () => Promise<Response> }
   | { kind: "admin"; run: () => Promise<Response> };
 
 function route(
@@ -266,7 +294,14 @@ function route(
     if (method === "POST") return { kind: "admin", run: () => onboard(request, env) };
     return methodNotAllowed("GET, POST");
   }
-  if (collection !== "accounts" || !isAccountId(accountId) || rest.length > 0) {
+  if (collection !== "accounts" || !isAccountId(accountId)) return error(404, "not_found");
+  if (rest.length > 0) {
+    if (view === "findings" && rest.length === 1 && rest[0] === "export") {
+      return only("GET", {
+        kind: "download",
+        run: () => exportFindings(reader, exportRequest(url, accountId)),
+      });
+    }
     return error(404, "not_found");
   }
   switch (view) {
@@ -322,6 +357,7 @@ export async function handleApi(request: Request, env: Env, identity: Identity):
       if (!identity.admin) return error(403, "admin_required");
       return await matched.run();
     }
+    if (matched.kind === "download") return refuseCrossSiteRead(request) ?? (await matched.run());
     return found(await matched.run());
   } catch (cause) {
     if (cause instanceof BadRequest) return error(400, cause.message);

@@ -280,6 +280,16 @@ label {
   gap: 0.25rem;
 }
 
+label.inline {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.export {
+  margin-bottom: 1rem;
+}
+
 .filters label {
   display: inline-flex;
   gap: 0.3rem;
