@@ -19,7 +19,7 @@ locals {
 }
 
 resource "cloudflare_dns_record" "cf007_seeded_proxied" {
-  zone_id = var.zone_id
+  zone_id = local.zone_id
   name    = "${local.p}-cf007-seeded-www.${var.zone_name}"
   type    = "A"
   content = local.cf007_seeded_address
@@ -29,7 +29,7 @@ resource "cloudflare_dns_record" "cf007_seeded_proxied" {
 }
 
 resource "cloudflare_dns_record" "cf007_seeded_origin" {
-  zone_id = var.zone_id
+  zone_id = local.zone_id
   name    = "${local.p}-cf007-seeded-origin.${var.zone_name}"
   type    = "A"
   content = local.cf007_seeded_address
@@ -39,7 +39,7 @@ resource "cloudflare_dns_record" "cf007_seeded_origin" {
 }
 
 resource "cloudflare_dns_record" "cf007_clean_proxied" {
-  zone_id = var.zone_id
+  zone_id = local.zone_id
   name    = "${local.p}-cf007-clean-www.${var.zone_name}"
   type    = "A"
   content = local.cf007_clean_address
@@ -49,7 +49,7 @@ resource "cloudflare_dns_record" "cf007_clean_proxied" {
 }
 
 resource "cloudflare_dns_record" "cf007_clean_origin" {
-  zone_id = var.zone_id
+  zone_id = local.zone_id
   name    = "${local.p}-cf007-clean-origin.${var.zone_name}"
   type    = "A"
   content = local.cf007_clean_address

@@ -23,12 +23,12 @@ locals {
 # Seeded ---------------------------------------------------------------------
 
 resource "cloudflare_workers_kv_namespace" "cf011_seeded" {
-  account_id = var.account_id
+  account_id = local.account_id
   title      = "${local.p}-cf011-seeded"
 }
 
 resource "cloudflare_workers_script" "cf011_seeded" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf011_seeded_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -41,21 +41,21 @@ resource "cloudflare_workers_script" "cf011_seeded" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf011_seeded" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf011_seeded.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_zero_trust_access_policy" "cf011_seeded" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf011-seeded-bypass-everyone"
   decision   = "bypass" # the misconfiguration, on the whole host
   include    = [{ everyone = {} }]
 }
 
 resource "cloudflare_zero_trust_access_application" "cf011_seeded" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf011_seeded_host
   type         = "self_hosted"
   domain       = local.cf011_seeded_host
@@ -64,8 +64,8 @@ resource "cloudflare_zero_trust_access_application" "cf011_seeded" {
 }
 
 resource "cloudflare_workers_custom_domain" "cf011_seeded" {
-  account_id = var.account_id
-  zone_id    = var.zone_id
+  account_id = local.account_id
+  zone_id    = local.zone_id
   hostname   = local.cf011_seeded_host
   service    = cloudflare_workers_script.cf011_seeded.script_name
 
@@ -75,12 +75,12 @@ resource "cloudflare_workers_custom_domain" "cf011_seeded" {
 # Clean ----------------------------------------------------------------------
 
 resource "cloudflare_workers_kv_namespace" "cf011_clean" {
-  account_id = var.account_id
+  account_id = local.account_id
   title      = "${local.p}-cf011-clean"
 }
 
 resource "cloudflare_workers_script" "cf011_clean" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf011_clean_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -93,14 +93,14 @@ resource "cloudflare_workers_script" "cf011_clean" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf011_clean" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf011_clean.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_zero_trust_access_application" "cf011_clean" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf011_clean_host
   type         = "self_hosted"
   domain       = local.cf011_clean_host
@@ -109,14 +109,14 @@ resource "cloudflare_zero_trust_access_application" "cf011_clean" {
 }
 
 resource "cloudflare_zero_trust_access_policy" "cf011_clean_assets" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf011-clean-assets-bypass"
   decision   = "bypass"
   include    = [{ everyone = {} }]
 }
 
 resource "cloudflare_zero_trust_access_application" "cf011_clean_assets" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = "${local.cf011_clean_host}/assets"
   type         = "self_hosted"
   domain       = "${local.cf011_clean_host}/assets"
@@ -125,8 +125,8 @@ resource "cloudflare_zero_trust_access_application" "cf011_clean_assets" {
 }
 
 resource "cloudflare_workers_custom_domain" "cf011_clean" {
-  account_id = var.account_id
-  zone_id    = var.zone_id
+  account_id = local.account_id
+  zone_id    = local.zone_id
   hostname   = local.cf011_clean_host
   service    = cloudflare_workers_script.cf011_clean.script_name
 

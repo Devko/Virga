@@ -26,7 +26,7 @@
 # by rule fixtures only: in the range it would be a working credential.
 
 data "cloudflare_account_api_token_permission_groups_list" "all" {
-  account_id = var.account_id
+  account_id = local.account_id
 }
 
 locals {
@@ -42,7 +42,7 @@ locals {
     effect            = "allow"
     permission_groups = [{ id = try(local.cf003_permission_ids[0], "") }]
     # One zone, not all zones: an all-zones grant would make the hit critical.
-    resources = jsonencode({ "com.cloudflare.api.account.zone.${var.zone_id}" = "*" })
+    resources = jsonencode({ "com.cloudflare.api.account.zone.${local.zone_id}" = "*" })
   }]
 
   # Never routed on the internet; see above.
@@ -51,7 +51,7 @@ locals {
 }
 
 resource "cloudflare_account_token" "cf003_seeded" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf003-seeded"
   policies   = local.cf003_policies
 
@@ -69,7 +69,7 @@ resource "cloudflare_account_token" "cf003_seeded" {
 }
 
 resource "cloudflare_account_token" "cf003_clean" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf003-clean"
   policies   = local.cf003_policies
 

@@ -4,7 +4,7 @@ Terraform for the seeded test account ("test range" in the [implementation plan]
 
 **Not validated yet.** The files have not been run through `terraform validate`, planned or applied: no Terraform binary was available when they were written. Every resource and attribute was checked by hand against the docs of the pinned provider, `cloudflare/cloudflare` 5.28.0. Expect small fixes on the first `terraform validate` and the first apply, and record them here. Known risks:
 
-- The API may refuse 240.0.0.0/4 in a token's IP condition, or proxied records to 203.0.113.0/24. Replace them with another range that is never routed on the internet and keeps the case's meaning: for CF-003 an entry wider than /8 (IPv4) or /32 (IPv6), such as `fc00::/7`; for CF-007 an address outside the ranges the rule leaves out.
+- The API may refuse 240.0.0.0/4 in a token's IP condition, or proxied records to 203.0.113.0/24. Replace them with another range that no request to the API can come from and that keeps the case's meaning: for CF-003 an entry wider than /8 (IPv4) or /32 (IPv6), such as the multicast ranges 224.0.0.0/4 or `ff00::/8`, which are never a source address; for CF-007 an address outside the ranges the rule leaves out. Do not use `fc00::/7`: unique local addresses are used in private networks, and whether a request from one can reach the API, for example from inside Cloudflare, is not known (round 9 lead).
 - The Pages API does not return secret values, so plans may show a change on the `secret_text` variables every time.
 - The permission group names and the token permissions below come from the docs, not from a run.
 
@@ -16,7 +16,9 @@ Apply the range only in a Cloudflare account that exists for it:
 - never in an account the Virga operator uses for anything else: not the tool account, and not an account Virga scans for real;
 - with a zone that serves nothing else, ideally a domain bought for the range.
 
-The range creates public entry points, Access policies that admit everyone or bypass Access, a public R2 bucket and account tokens with a write permission. Each of them is harmless only because the Worker code is a dummy, the stores are empty, the origins do not exist and the tokens cannot be used ([Safety](#safety)). Next to real resources the same settings would be real findings. `dedicated_test_account = true` is required as a reminder.
+The range creates public entry points, Access policies that admit everyone or bypass Access, a public R2 bucket and account tokens with a write permission. Each of them is harmless only because the Worker code is a dummy, the stores are empty, the origins do not exist and the tokens cannot be used ([Safety](#safety)). Next to real resources the same settings would be real findings.
+
+The plan stops unless `dedicated_test_account = true`, and unless the zone `zone_id` belongs to `account_id` and is named `zone_name`. Every resource takes its account and zone ID from the `cloudflare_zone` data source in [`main.tf`](main.tf), whose conditions check this, so nothing is planned without them, also with `-target`. The flag stays your confirmation: Terraform cannot tell a dedicated account from any other.
 
 ## Prerequisites
 
@@ -59,9 +61,11 @@ terraform plan
 terraform apply
 ```
 
+`CLOUDFLARE_API_TOKEN` is also the variable the Virga deploy (`node scripts/deploy.ts`) takes its deploy token from. Run Terraform in a shell of its own, and never in the shell that deploys Virga, so that neither gets the other's token.
+
 After the first `terraform init`, commit `.terraform.lock.hcl` with the hashes of the platforms in use (`terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=windows_amd64`).
 
-The state holds the CF-003 token values and the synthetic CF-024 values. Both are unusable, but keep the state local and private like any Terraform state, and never commit it (`*.tfstate` is git-ignored).
+The state holds the CF-003 token values and the synthetic CF-024 values. Both are unusable, but keep the state local and private like any Terraform state, and never commit it. A saved plan (`terraform plan -out=tfplan`) holds the prior state too; delete it after the apply. `.gitignore` covers the state, saved plans (`tfplan`, `*.tfplan`) and variable files (`*.tfvars`, `*.tfvars.json`, `*.auto.tfvars`, `*.auto.tfvars.json`), but not `terraform.tfvars.example`.
 
 ## Check gate 3
 
@@ -86,7 +90,7 @@ Then:
 2. Delete the state files.
 3. Remove the account from the Virga instance and delete its inventory token.
 
-Destroy fails if someone changed the range by hand: a tunnel with an active connector, an R2 bucket with objects, or a Pages project with deployments. Stop the connector, empty the bucket or delete the deployments, and run `terraform destroy` again.
+Destroy reads the zone first, like a plan, so keep the zone until the range is gone. Destroy fails if someone changed the range by hand: a tunnel with an active connector, an R2 bucket with objects, or a Pages project with deployments. Stop the connector, empty the bucket or delete the deployments, and run `terraform destroy` again.
 
 ## Safety
 
@@ -101,6 +105,7 @@ Destroy fails if someone changed the range by hand: a tunnel with an active conn
 | CF-021 `r2.dev` | Public bucket | The bucket is empty; nothing writes objects |
 | CF-022 and CF-024 Pages projects | Public preview and production URLs | Nothing is deployed; the D1 databases are empty |
 | CF-004 tunnel hostnames | Published, the seeded one without Access | No connector runs, and the origins point to `no-origin.invalid`, which never resolves |
+| CF-004 tunnel token | The secret a connector runs with | Not harmless: whoever can fetch it (in the dashboard, or with `GET /accounts/{account_id}/cfd_tunnel/{tunnel_id}/token`, which needs Cloudflare Tunnel Edit) can run a connector for the tunnel and serve their own content on the seeded hostname, which has no Access, in the range's zone. Give Tunnel Edit in the test account only to the Terraform token and the account's admins, and destroy the range once gate 3 has run |
 | CF-007 records | An unproxied record publishes an "origin" | The addresses are from 203.0.113.0/24 (RFC 5737), never routed; there is no origin |
 | Protected entry points | Allow policy for one address | `nobody@example.com` by default: example.com receives no mail, so nobody can sign in |
 
@@ -126,7 +131,7 @@ Cases left to the rule fixtures, because the range cannot hold them safely or th
 | --- | --- |
 | `versions.tf` | Terraform and provider pins, provider block |
 | `variables.tf` | Account, zone, prefix, the one allowed address |
-| `main.tf` | Shared locals and the Allow policy for one address |
+| `main.tf` | The zone data source that checks account and zone, shared locals, and the Allow policy for one address |
 | `cf001.tf` to `cf024.tf` | One file per rule: seeded case, clean counterpart, why it is safe |
 | `outputs.tf` | `subjects`: graph node ID per case |
 | `cases.yaml` | Expected result per rule and case, for gate 3 |

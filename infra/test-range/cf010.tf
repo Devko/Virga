@@ -22,12 +22,12 @@ locals {
 # Seeded ---------------------------------------------------------------------
 
 resource "cloudflare_workers_kv_namespace" "cf010_seeded" {
-  account_id = var.account_id
+  account_id = local.account_id
   title      = "${local.p}-cf010-seeded"
 }
 
 resource "cloudflare_workers_script" "cf010_seeded" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf010_seeded_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -40,21 +40,21 @@ resource "cloudflare_workers_script" "cf010_seeded" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf010_seeded" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf010_seeded.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_zero_trust_access_policy" "cf010_seeded" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf010-seeded-allow-everyone"
   decision   = "allow"
   include    = [{ everyone = {} }] # the misconfiguration
 }
 
 resource "cloudflare_zero_trust_access_application" "cf010_seeded" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf010_seeded_host
   type         = "self_hosted"
   domain       = local.cf010_seeded_host
@@ -63,8 +63,8 @@ resource "cloudflare_zero_trust_access_application" "cf010_seeded" {
 }
 
 resource "cloudflare_workers_custom_domain" "cf010_seeded" {
-  account_id = var.account_id
-  zone_id    = var.zone_id
+  account_id = local.account_id
+  zone_id    = local.zone_id
   hostname   = local.cf010_seeded_host
   service    = cloudflare_workers_script.cf010_seeded.script_name
 
@@ -74,12 +74,12 @@ resource "cloudflare_workers_custom_domain" "cf010_seeded" {
 # Clean ----------------------------------------------------------------------
 
 resource "cloudflare_workers_kv_namespace" "cf010_clean" {
-  account_id = var.account_id
+  account_id = local.account_id
   title      = "${local.p}-cf010-clean"
 }
 
 resource "cloudflare_workers_script" "cf010_clean" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf010_clean_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -92,21 +92,21 @@ resource "cloudflare_workers_script" "cf010_clean" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf010_clean" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf010_clean.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_zero_trust_access_policy" "cf010_clean" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf010-clean-allow-named-email"
   decision   = "allow"
   include    = [{ email = { email = var.access_allowed_email } }]
 }
 
 resource "cloudflare_zero_trust_access_application" "cf010_clean" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf010_clean_host
   type         = "self_hosted"
   domain       = local.cf010_clean_host
@@ -115,8 +115,8 @@ resource "cloudflare_zero_trust_access_application" "cf010_clean" {
 }
 
 resource "cloudflare_workers_custom_domain" "cf010_clean" {
-  account_id = var.account_id
-  zone_id    = var.zone_id
+  account_id = local.account_id
+  zone_id    = local.zone_id
   hostname   = local.cf010_clean_host
   service    = cloudflare_workers_script.cf010_clean.script_name
 

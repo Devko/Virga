@@ -11,11 +11,17 @@ coverage/
 .env
 .env.*
 
-# Terraform (test range)
+# Terraform (test range). A saved plan holds the prior state, token values
+# included; variable files hold account and zone IDs.
 .terraform/
 *.tfstate
 *.tfstate.*
+tfplan
+*.tfplan
 *.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
 !*.tfvars.example
 
 # Editors and OS

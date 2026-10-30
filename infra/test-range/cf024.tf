@@ -37,7 +37,7 @@ locals {
 # Workers --------------------------------------------------------------------
 
 resource "cloudflare_workers_script" "cf024_worker_seeded" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = "${local.p}-cf024-worker-seeded"
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -50,14 +50,14 @@ resource "cloudflare_workers_script" "cf024_worker_seeded" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf024_worker_seeded" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf024_worker_seeded.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_workers_script" "cf024_worker_clean" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = "${local.p}-cf024-worker-clean"
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -69,7 +69,7 @@ resource "cloudflare_workers_script" "cf024_worker_clean" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf024_worker_clean" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf024_worker_clean.script_name
   enabled          = false
   previews_enabled = false
@@ -78,7 +78,7 @@ resource "cloudflare_workers_script_subdomain" "cf024_worker_clean" {
 # Pages ----------------------------------------------------------------------
 
 resource "cloudflare_pages_project" "cf024_pages_seeded" {
-  account_id        = var.account_id
+  account_id        = local.account_id
   name              = "${local.p}-cf024-pages-seeded"
   production_branch = "main"
 
@@ -97,7 +97,7 @@ resource "cloudflare_pages_project" "cf024_pages_seeded" {
 }
 
 resource "cloudflare_pages_project" "cf024_pages_clean" {
-  account_id        = var.account_id
+  account_id        = local.account_id
   name              = "${local.p}-cf024-pages-clean"
   production_branch = "main"
 
