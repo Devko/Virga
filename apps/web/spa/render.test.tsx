@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { TriggerResult } from "../src/rpc.ts";
+import type { ScanSummaryView, TriggerResult } from "../src/rpc.ts";
 import {
   ACCOUNT,
   accounts,
@@ -9,10 +9,14 @@ import {
   INJECTION,
   MARKUP,
   neighborhood,
+  REMOVING_ACCOUNT,
+  removingSummary,
   summary,
 } from "../test/fixtures.ts";
-import type { IntakeView } from "./api.ts";
+import type { IntakeView, Me } from "./api.ts";
 import { graphElements } from "./graph.tsx";
+import type { Loaded } from "./load.tsx";
+import { AccountView } from "./pages.tsx";
 import { JsonView, shown } from "./text.tsx";
 import {
   AccountsTable,
@@ -183,6 +187,69 @@ describe("SPA views render account strings as text", () => {
     const missing = elements.find((e) => e.data.ref === "d1_database:db1");
     expect(missing?.classes).toContain("missing");
     for (const e of elements) expect(String(e.data.label ?? "").length).toBeLessThanOrEqual(80);
+  });
+});
+
+describe("SPA with an account being removed (R5-08)", () => {
+  const admin: Me = { email: "admin@example.com", serviceToken: null, admin: true };
+  const viewer: Me = { email: "viewer@example.com", serviceToken: null, admin: false };
+  const loaded = (data: ScanSummaryView): Loaded<ScanSummaryView> => ({
+    data,
+    error: undefined,
+    loading: false,
+    reload: () => {},
+  });
+  const page = (data: ScanSummaryView, me: Me) =>
+    renderToStaticMarkup(
+      <AccountView
+        accountId={data.account.id}
+        me={me}
+        summary={loaded(data)}
+        onRemoved={() => {}}
+      />,
+    );
+
+  it("the accounts list shows the status, and that a removal is pending", () => {
+    const html = renderToStaticMarkup(<AccountsTable accounts={accounts} />);
+    expectInert(html);
+    const row = (id: string) => html.match(new RegExp(`<tr>(?:(?!</tr>).)*${id}.*?</tr>`))?.[0];
+    expect(row(ACCOUNT)).toContain("<td>active</td>");
+    expect(row(ACCOUNT)).not.toContain("removal pending");
+    expect(row(REMOVING_ACCOUNT)).toContain('<td class="problem">removing');
+    expect(row(REMOVING_ACCOUNT)).toContain("removal pending");
+  });
+
+  it("the summary says that the removal is pending and how to finish it", () => {
+    const html = renderToStaticMarkup(<SummaryView summary={removingSummary} />);
+    expectInert(html);
+    expect(html).toContain("Removal pending");
+    expect(html).toContain("did not finish");
+    expect(html).toContain("Virga starts no scan of it");
+    expect(html).toContain("Remove account again");
+    expect(html).toContain("repeating it is safe");
+    expect(html).toMatch(/<dt>Status<\/dt><dd class="problem">removing<\/dd>/);
+
+    const active = renderToStaticMarkup(<SummaryView summary={summary} />);
+    expect(active).not.toContain("Removal pending");
+    expect(active).toContain("<dt>Status</dt><dd>active</dd>");
+  });
+
+  it("the account page offers Remove account again and no Start scan", () => {
+    const removing = page(removingSummary, admin);
+    expect(removing).toContain("Removal pending");
+    expect(removing).not.toContain("Start scan");
+    expect(removing).toContain("Remove account again…");
+
+    const active = page(summary, admin);
+    expect(active).not.toContain("Removal pending");
+    expect(active).toContain("Start scan");
+    expect(active).toContain("Remove account…");
+
+    const viewing = page(removingSummary, viewer);
+    expect(viewing).toContain("Removal pending");
+    expect(viewing).not.toContain("Start scan");
+    expect(viewing).not.toContain("Remove account…");
+    expect(viewing).not.toContain("Remove account again…");
   });
 });
 

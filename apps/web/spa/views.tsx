@@ -44,7 +44,14 @@ export function AccountsTable({ accounts }: { accounts: AccountRow[] }) {
             </td>
             <td className="mono">{a.id}</td>
             <td>{a.profile}</td>
-            <td>{a.status}</td>
+            {a.status === "removing" ? (
+              <td className="problem">
+                removing
+                <div className="muted">removal pending</div>
+              </td>
+            ) : (
+              <td>{a.status}</td>
+            )}
             <td>{a.cadenceHours} h</td>
             <td>{time(a.lastScanAt)}</td>
           </tr>
@@ -56,16 +63,37 @@ export function AccountsTable({ accounts }: { accounts: AccountRow[] }) {
 
 const SEVERITIES: FindingSeverity[] = ["critical", "high", "medium", "low", "info"];
 
+/** A removal that began and did not finish (R5-08); the account page offers to repeat it. */
+function RemovalPending() {
+  return (
+    <div className="problem" role="status">
+      <h2>Removal pending</h2>
+      <p>
+        A removal of this account began and did not finish. Virga starts no scan of it, and its
+        graph may already be deleted, so this page can show less than the last scan found. To finish
+        the removal, an administrator chooses Remove account again at the bottom of this page;
+        repeating it is safe.
+      </p>
+    </div>
+  );
+}
+
 export function SummaryView({ summary }: { summary: ScanSummaryView }) {
   const { account, lastRun, graph } = summary;
   const open = graph.findings.open ?? {};
+  const removing = account.status === "removing";
   return (
     <section>
       <h1>
         <Text value={account.name} max={120} />
       </h1>
       <p className="muted mono">{account.id}</p>
+      {removing && <RemovalPending />}
       <dl className="facts">
+        <div>
+          <dt>Status</dt>
+          <dd className={removing ? "problem" : undefined}>{account.status}</dd>
+        </div>
         <div>
           <dt>Profile</dt>
           <dd>{account.profile}</dd>
