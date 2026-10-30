@@ -14,7 +14,14 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PROXY_VARS, UNSAFE_VARS } from "../lib/run.ts";
-import { deployCheckout, type FakeWrangler, fakeWrangler, put, REPO_ROOT } from "./helpers.ts";
+import {
+  deployCheckout,
+  type FakeWrangler,
+  fakeWrangler,
+  put,
+  REPO_ROOT,
+  workspaceLink,
+} from "./helpers.ts";
 
 /**
  * Runs scripts/deploy.ts from a copy of scripts/ in a checkout without
@@ -202,7 +209,7 @@ describe("deploy.ts", () => {
  * or the generated rules from the broker's call, as a process left running by
  * a build could.
  */
-const LOGGING_BIN = String.raw`const { appendFileSync, existsSync } = require("node:fs");
+const LOGGING_BIN = String.raw`const { appendFileSync, existsSync, rmSync, symlinkSync } = require("node:fs");
 const { basename, join, resolve } = require("node:path");
 const root = resolve(__dirname, "../../../../../..");
 const app = basename(process.cwd());
@@ -213,6 +220,11 @@ if (app === "broker" && existsSync(join(root, "rewrite-later"))) {
 }
 if (app === "broker" && existsSync(join(root, "rewrite-rules-later"))) {
   appendFileSync(join(root, "packages", "rules", "src", "rules.gen.ts"), "\n");
+}
+if (app === "broker" && existsSync(join(root, "retarget-later"))) {
+  const link = join(root, "apps", "core", "node_modules", "@virga", "rules");
+  rmSync(link);
+  symlinkSync(join(root, "packages", "graph"), link);
 }
 `;
 
@@ -253,6 +265,8 @@ describe("deploy.ts and the builds (R6-01)", () => {
     put(join(app("web"), "package.json"), '{ "scripts": { "build": "node build.mjs" } }');
     put(join(app("web"), "build.mjs"), BUILD);
     fake = fakeWrangler(root, ["broker", "core", "web"].map(app), LOGGING_BIN);
+    // virga-core bundles the generated rules through this link (L-2).
+    workspaceLink(root, app("core"), "rules");
     // A stand-in for pnpm that logs each call and runs build.mjs for `pnpm --dir <app> run build`.
     put(
       join(root, "path", "pnpm"),
@@ -410,6 +424,55 @@ appendFileSync("../../packages/rules/src/rules.gen.ts", "// planted\\n");
         .split("\n")
         .map((line) => line.split(" ")[0]),
     ).toEqual(["broker", ""]);
+  });
+
+  const coreRules = () => join(app("core"), "node_modules", "@virga", "rules");
+
+  it("L-2: a build that retargets the link through which virga-core bundles the rules stops the deploy before any Wrangler call", () => {
+    // A copy of packages/rules whose rules.gen.ts no compiler made.
+    build(`import { appendFileSync, cpSync, rmSync, symlinkSync } from "node:fs";
+cpSync("../../packages/rules", "../../planted/rules", { recursive: true });
+appendFileSync("../../planted/rules/src/rules.gen.ts", "// planted\\n");
+rmSync("../core/node_modules/@virga/rules");
+symlinkSync("../../../../planted/rules", "../core/node_modules/@virga/rules");
+`);
+    for (const args of [[], ["--dry-run"]]) {
+      const result = deploy(args, REAL);
+      expect(result.stdout).toContain("Building virga-web");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `error: apps/core/node_modules/@virga/rules leads to ${join(root, "planted", "rules")}, not to packages/rules, the workspace package @virga/rules`,
+      );
+      expect(calls()).toBe("");
+      expect(result.stdout + result.stderr).not.toContain(TOKEN);
+      rmSync(coreRules());
+      rmSync(join(root, "planted"), { recursive: true });
+      workspaceLink(root, app("core"), "rules");
+    }
+  });
+
+  it("L-2: refuses a workspace link retargeted after the checks, before the Wrangler call that bundles through it", () => {
+    writeFileSync(join(root, "retarget-later"), "");
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `error: apps/core/node_modules/@virga/rules leads to ${join(root, "packages", "graph")}, not to packages/rules`,
+    );
+    expect(
+      calls()
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(["broker", ""]);
+  });
+
+  it("L-2: checks the generated rules that virga-core bundles, and refuses a core without that link", () => {
+    rmSync(coreRules());
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/core/node_modules/@virga/rules is missing; virga-core bundles the generated rules through it. Run pnpm install first",
+    );
+    expect(calls()).toBe("");
   });
 
   const UNSAFE = `{ "bindings": [{ "name": "API", "type": "service", "service": "virga-broker", "entrypoint": "ApiCaller" }] }`;

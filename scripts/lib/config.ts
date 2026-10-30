@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 import { dotEnvFiles, dotEnvProblem, sha256 } from "./run.ts";
+import { recordWorkspace, type Sources, walkSources } from "./workspace.ts";
 
 export interface ServiceBinding {
   binding: string;
@@ -141,25 +142,6 @@ function checkSurroundings(root: string, app: string, configPath: string) {
 }
 
 /**
- * Symlinks under `dir`, the directory itself included, but not in its own
- * node_modules: pnpm links every dependency there, as the lockfile says.
- */
-function appLinks(dir: string): string[] {
-  if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) return [dir];
-  const links: string[] = [];
-  const pending = [dir];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const path = join(current, entry.name);
-      if (current === dir && entry.name === "node_modules") continue;
-      if (entry.isSymbolicLink()) links.push(path);
-      else if (entry.isDirectory()) pending.push(path);
-    }
-  }
-  return links.sort();
-}
-
-/**
  * Why corepack, the guide's pnpm, would run a pnpm the release-age check has
  * not dated for a command in apps/<app>, or an empty list. It takes the pnpm
  * version from the nearest package.json that names a package manager, and
@@ -216,34 +198,48 @@ function npmrcProblem(app: string, dir: string): string | null {
 
 /**
  * The checks of apps/<app> that need no parsed config: one Wrangler config,
- * none above the app, no .env file, no symlink outside node_modules, and no
- * package manager or pnpm settings of its own. Wrangler bundles, migrates and uploads what a
- * link points to, and Vite copies it, from wherever that is. The deploy runs
- * these before the builds and again after them (R6-01). Returns the config's
- * path, or null when the app has none.
+ * none above the app, no .env file, no symlink and no other node_modules
+ * directory outside its own node_modules, no package manager or pnpm
+ * settings of its own, and workspace links that lead to the workspace
+ * packages, which hold no symlink either (L-2). Wrangler bundles, migrates
+ * and uploads what a link points to, and Vite copies it, from wherever that
+ * is. The deploy runs these before the builds and again after them (R6-01).
+ * Returns the config's path, or null when the app has none. Throws a
+ * ConfigError, or a WorkspaceError for the workspace links.
  */
 export function checkAppDir(root: string, app: string): string | null {
   const dir = join(root, "apps", app);
   const configPath = findConfigFile(dir);
   if (configPath === null) return null;
   checkSurroundings(root, app, configPath);
-  let links: string[];
+  let found: Sources;
   try {
-    links = appLinks(dir);
+    found = walkSources(dir);
   } catch (error) {
     throw new ConfigError(
       `apps/${app} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  if (links.length > 0) {
-    const list = links.slice(0, SHOWN_LINKS).map((path) => shown(root, path));
-    const more = links.length > SHOWN_LINKS ? ` and ${links.length - SHOWN_LINKS} more` : "";
+  const list = (paths: readonly string[]) => {
+    const more = paths.length > SHOWN_LINKS ? ` and ${paths.length - SHOWN_LINKS} more` : "";
+    return `${paths
+      .slice(0, SHOWN_LINKS)
+      .map((path) => shown(root, path))
+      .join(", ")}${more}`;
+  };
+  if (found.links.length > 0) {
     throw new ConfigError(
-      `apps/${app} holds symlinks outside node_modules: ${list.join(", ")}${more}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
+      `apps/${app} holds symlinks outside node_modules: ${list(found.links)}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
+    );
+  }
+  if (found.modules.length > 0) {
+    throw new ConfigError(
+      `apps/${app} holds node_modules directories other than its own: ${list(found.modules)}. Wrangler and Vite take a package from the nearest node_modules directory, so one there would replace the package pnpm installed. Remove them`,
     );
   }
   const pnpm = [...corepackProblems(app, dir), npmrcProblem(app, dir) ?? []].flat();
   if (pnpm.length > 0) throw new ConfigError(pnpm.join("\n"));
+  recordWorkspace(root, app);
   return configPath;
 }
 

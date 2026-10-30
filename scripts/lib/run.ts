@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { devNull } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { type WorkspaceRecord, workspaceChanges } from "./workspace.ts";
 import { describeChanges, type WranglerInstall, wranglerChanges } from "./wrangler.ts";
 
 interface BaseCommand {
@@ -367,6 +368,12 @@ export interface RunnerOptions {
    * modules, which virga-core bundles (R8-05). Empty until they are checked.
    */
   checked?: () => ReadonlyMap<string, string>;
+  /**
+   * The workspace links of each app directory, recorded before the builds:
+   * Wrangler runs in an app only while its links still lead to the workspace
+   * packages, and those hold no symlink (L-2).
+   */
+  workspaces?: ReadonlyMap<string, WorkspaceRecord>;
   print?: (stream: "stdout" | "stderr", line: string) => void;
 }
 
@@ -404,7 +411,8 @@ function childEnv(command: Command, credentials: RunnerOptions["credentials"]): 
  * while the file holds the bytes the script checked, and runs only while
  * every file recorded before the builds is unchanged: a build, or a process
  * a build left running, may have rewritten either (R6-01). The same holds
- * for the other checked files, the generated rules (R8-05).
+ * for the other checked files, the generated rules (R8-05), and for the
+ * links through which the app bundles the workspace packages (L-2).
  */
 function wranglerProblem(command: WranglerCommand, options: RunnerOptions): string | null {
   const chooser = command.args.find((arg) => CHOOSERS.test(arg));
@@ -436,6 +444,11 @@ function wranglerProblem(command: WranglerCommand, options: RunnerOptions): stri
     if (sha256(bytes) !== checked) {
       return `${path} changed after the deploy checked it; refusing to run Wrangler. Find what changed it, then run the deploy again`;
     }
+  }
+  const workspace = options.workspaces?.get(command.cwd);
+  if (workspace !== undefined) {
+    const changed = workspaceChanges(workspace);
+    if (changed !== null) return changed;
   }
   const dotEnv = dotEnvFiles(command.cwd);
   if (dotEnv.length > 0) return dotEnv.map(dotEnvProblem).join("\n");
