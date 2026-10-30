@@ -32,7 +32,7 @@ Values of plain-text variables, secret bindings, tokens, keys and certificates a
 
 Edges belong to the class of the collector that emits them, even when they point to nodes of another class. For example, the `workers` collector emits `BINDS` edges to `d1_database` nodes. If the target class has no coverage, the edge points to a missing node, and rules that need it are `not evaluated` because they list that class in `requires`.
 
-Derived inputs: `exposure` (exposure evaluator), and from phase 2 `packages` and `vulns`. The scan records them in `coverage` like resource classes once they are complete. `packages` and `vulns` are described in [packages and vulnerabilities](#packages-and-vulnerabilities-phase-2).
+Derived inputs: `exposure` (exposure evaluator), `vulns` (the scan's vulns step, recorded in every scan) and, from phase 2, `packages`. The scan records them in `coverage` like resource classes. `packages` and `vulns` are described in [packages and vulnerabilities](#packages-and-vulnerabilities-phase-2).
 
 ## Nodes
 
@@ -477,6 +477,8 @@ What the scan records, and what rules and the evaluator may rely on:
 - **Sweep** runs only for `complete` classes. A sweep never moves the current scan. The write path refuses the sweep of a scan that is not current.
 - **Only the current scan writes.** Writes from a scan marked failed as stale, from one that ended, or from one a newer scan took over are refused (`StaleScanError`). That scan stops and ends `failed`, with the reason in `summary.detail`.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
+- **Vulns:** after the exposure step and before the rules, the `vulns` step matches the live `package` nodes against the advisory source (`rematch`, with `packagesComplete` from this scan's `packages` coverage and `feedComplete` from the source) and writes the result with `applyVulnRematch`, which records coverage `vulns`: `complete`, `partial` with a detail of counts and fixed words, or `error` when the source or the rematch failed. Until the advisory mirror exists ([decision 0009](../decisions/0009-advisory-mirror-egress.md)) the source reports `no advisory feed configured`, so `vulns` is `partial` in every scan and CF-001 is `not_evaluated`. The step result holds counts only.
+- **Scan status:** `complete` when every class and exposure are complete, the vulns step did not end `error` and no rule ended `error`; otherwise `partial` if rules ran, with `summary.detail` `rules ended error (<count>): <IDs>` (at most 20) when rules ended `error` (TM-11); `failed` when rules did not run. `vulns` coverage `partial` does not make a scan partial.
 - **Inputs a rule reads** (reviews R4-04, R4-05). The rule compiler derives them from the tables the rule's program reads (`EXPLAIN`, root pages mapped through `sqlite_schema`):
   - reading `exposure` needs `exposure` and `access` in `requires`, `vulns` needs `vulns`, and `insights` needs `insights`; a rule that lacks one fails the build;
   - a rule's statement may not write: `OpenWrite`, `Clear`, schema or virtual table changes and write transactions are refused.
@@ -487,7 +489,7 @@ What the scan records, and what rules and the evaluator may rely on:
   - Node SQLite runs only the first statement, so there the read also refuses a statement tail by SQLite's own statement boundary;
   - the guard does not see a table without rows dropped and created again with the same statement, which loses nothing. A single statement cannot drop and create, so the tail refusal keeps that out too ([round 8 verification](../reviews/2026-10-30-verification-round-8.md), hardening, closed in round 9);
   - the compiler refuses every placeholder but `:name`, which it rewrites to `?`: `?`, `@name`, `$name`, `#name` and any other `:`, with an error naming the rule. So a compiled rule binds exactly its declared parameters, and the tail refusal finds no variable sign in it.
-- **A removed account is not scanned** (R4-03). A scan whose begin step runs after `Admin.removeAccount` is `skipped` and writes nothing. The emptied graph refuses to begin a scan until the account is added again.
+- **A removed account is not scanned** (R4-03). A scan whose begin step runs after `Admin.removeAccount` is `skipped` and writes nothing. The emptied graph refuses to begin a scan until the account is added again. `Admin.addAccount` and `Admin.removeAccount` of one account run one at a time in the account's graph object, so the last call decides the end state (TM-09).
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
 - **Undecided.** Where the exposure that decides a rule is `unknown`, or a value it needs could not be read (for example `plain_text_vars` entries with `looks_secret` `null` in CF-024), the rule returns an undecided row (`decided = 0`). An undecided row is not a hit and changes no finding, except that a suppression past its end returns to open (R3-07).
 - **`rule_runs`** records hits (decided rows), undecided rows, and for a failed run its error message (at most 500 characters).

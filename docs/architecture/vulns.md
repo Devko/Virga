@@ -1,6 +1,6 @@
 # Vulnerability matching
 
-Status: implemented in [`packages/vulns`](../../packages/vulns) and in the vulns functions of [`packages/graph/src/write.ts`](../../packages/graph/src/write.ts) (`applyVulnRematch`, `listVulns`). It is phase 2 work started early under [decision 0007](../decisions/0007-later-phases-before-the-phase-1-gate.md). Nothing calls it yet: no collector emits package nodes, there is no advisory mirror, and no scan or schedule runs a rematch. The OSV and KEV fixtures are hand-written from the published schemas; no real advisory data has gone through the code.
+Status: implemented in [`packages/vulns`](../../packages/vulns) and in the vulns functions of [`packages/graph/src/write.ts`](../../packages/graph/src/write.ts) (`applyVulnRematch`, `listVulns`). It is phase 2 work started early under [decision 0007](../decisions/0007-later-phases-before-the-phase-1-gate.md). Nothing calls it yet: no collector emits package nodes, there is no advisory mirror, and only the scan runs a rematch (its `vulns` step, without a feed until the mirror exists). Core reads advisories through `AdvisorySource.read(packageIds)`, which returns `{ configured: true, feed, complete, kev }` or `{ configured: false, reason }`. The OSV and KEV fixtures are hand-written from the published schemas; no real advisory data has gone through the code.
 
 The goal is the `vulns` input of CF-001 (and later CF-005): which package nodes have an open vulnerability, how severe, and whether it is known to be exploited. "Unknown is a result" holds here too: a match that cannot be decided or ranked is never written as harmless, and it keeps CF-001 `not_evaluated`.
 
@@ -118,7 +118,7 @@ The lists `unknown` and `unparsed` hold package IDs from the scanned account. A 
 
 - **Packages.** No collector emits `package` nodes or `CONTAINS` edges, and nothing records `packages` coverage; the [graph contract](graph-contract.md#packages-and-vulnerabilities-phase-2) says what a writer must emit. Extraction from Worker versions waits for [S-04](../spikes/S-04-worker-dependencies.md): `package_dependencies` came back `null` in a temporary account, and source maps were not returned.
 - **Advisory mirror and its sync.** [Decision 0009](../decisions/0009-advisory-mirror-egress.md) settles the sources (OSV's bulk npm data and the CISA catalog, fetched in bulk by a mirror Worker into R2) and when the feed is incomplete. The mirror Worker, the R2 layout, the sync schedule and the download format are not built yet. The sync decides `feedComplete`.
-- **Scheduling.** Neither the scan nor a daily schedule runs the rematch.
+- **Scheduling.** The scan runs the rematch in its `vulns` step (`apps/core`). A daily rematch without a scan does not exist yet.
 - **CVSS v4.** Advisories with only a v4 vector and no database severity are unknown. GitHub advisories carry a database severity, so this mostly concerns other sources.
 - **Aliases.** Two records that alias each other, for example a GitHub malware advisory and its `MAL-` record, give two matches. Matches are not merged by alias.
 - **Real data.** The limits come from the schema and estimates; check them against a copy of the real mirror before relying on them. A record over a limit is rejected and makes the result incomplete.

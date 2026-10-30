@@ -18,7 +18,7 @@ Status: implemented in [`packages/graph`](../../packages/graph). The schema is [
 
 | Table | Purpose |
 | --- | --- |
-| `meta` | Key-value pairs: `schema_version`, `current_scan`, and `removed` after offboarding (set by `AccountGraph.deleteAll`, cleared by `Admin.addAccount`; `beginScan` refuses while it is set, R4-03) |
+| `meta` | Key-value pairs: `schema_version`, `current_scan`, and `removed` after offboarding (set by `Admin.removeAccount`, cleared by `Admin.addAccount`, both run one at a time by the account's graph object; `beginScan` refuses while it is set, R4-03) |
 | `scans` | One row per scan (Workflow instance), with kind and status |
 | `coverage` | Status per resource class and scan: `complete`, `partial`, `no_permission`, `error`, `skipped`. Decides tombstones and "not evaluated" |
 | `nodes`, `edges` | The graph. Resource class, content hash, `first_seen`, `changed_at`, `seen_scan`, tombstone `deleted_at` |
@@ -246,6 +246,6 @@ The tool audit trail ([design spec](../concept/design-spec.md), "Audit trail") i
 
 No column holds a request body, a token, a header value or a string from a scanned account: `Admin.recordToolCall` checks every field against the shapes above and refuses the row otherwise, and `CHECK` constraints repeat the bounds.
 
-The rows hold personal data (the emails of the people who used the tool). Removing an account does not delete its rows: the trail records the removal too, and its rows expire like all others. Retention is 90 days. The hourly `DispatchWorkflow` runs a step `audit:purge` after it has started the due scans: it deletes rows older than 90 days before the dispatch time, oldest first, in batches of 5,000 and at most 20 batches per run, so a backlog clears over the following hours. A purge that still fails after the step's retries is logged and leaves the dispatch result intact (`auditPurged: null`).
+The rows hold personal data (the emails of the people who used the tool). Removing an account does not delete its rows: the trail records the removal too, and its rows expire like all others. Retention is 90 days. The hourly `DispatchWorkflow` runs steps `audit:purge:<n>` after it has started the due scans: each deletes rows older than 90 days before the dispatch time, oldest first, in batches of 5,000 and at most 20 batches, and another step follows while the last one deleted a full 100,000 rows, up to 50 steps. So the purge deletes up to 5,000,000 rows an hour; a burst above that is deleted at that rate in the hours after it expires. A purge step that still fails after its retries is logged and ends the purge with `auditPurged: null`; the dispatch result stays intact.
 
 `Admin.listToolCalls({ limit, cursor })` returns `{ entries, cursor }`, newest first, `limit` 1 to 200 (default 50); `cursor` is the `id` of the last row of the previous page. The web Worker serves it to admins only (`GET /api/audit`).
