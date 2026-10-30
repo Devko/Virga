@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   type AccountRow,
+  checkNewAccount,
   deleteAccount,
   getAccount,
   markRemoving,
@@ -47,9 +48,14 @@ async function remove(env: Env, accountId: string): Promise<boolean> {
 export class Admin extends WorkerEntrypoint<Env> {
   /**
    * Adds the account or updates its name, cadence and profile. An account
-   * that was removed may be scanned again from here on.
+   * that was removed may be scanned again from here on. A removal that did
+   * not finish is finished first, so the account starts from nothing.
    */
   async addAccount(input: NewAccount): Promise<AccountRow> {
+    checkNewAccount(input);
+    if ((await getAccount(this.env.INDEX, input.id))?.status === "removing") {
+      await remove(this.env, input.id);
+    }
     const account = await upsertAccount(this.env.INDEX, input, Date.now());
     await graphOf(this.env, account.id).clearRemoved();
     return account;

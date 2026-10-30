@@ -341,5 +341,26 @@ describe("Admin.removeAccount", () => {
       expect(await state(accountId, stub)).toEqual(gone);
       expect(await sql(stub, "SELECT count(*) AS n FROM scans")).toEqual([{ n: 0 }]);
     });
+
+    it("R5-08: adding an account whose removal did not finish starts it from nothing", async () => {
+      const { accountId, stub } = await scannedAccount();
+      const broken = adminWith({ ACCOUNT_GRAPH: graphsWith(fail("Durable Object reset")) });
+      expect(await rejection(broken.removeAccount(accountId))).toMatch(/Durable Object reset/);
+
+      expect(await admin.addAccount({ id: accountId, name: "Production" })).toMatchObject({
+        id: accountId,
+        status: "active",
+        lastScanAt: null,
+      });
+      expect(await state(accountId, stub)).toEqual({
+        listed: "active",
+        summary: "active",
+        runs: 0,
+        nodes: [],
+      });
+      expect(await stub.beginScan(`scan-${accountId}-new`, "full", LATER)).toEqual({
+        started: true,
+      });
+    });
   });
 });

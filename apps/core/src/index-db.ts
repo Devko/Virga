@@ -212,7 +212,7 @@ const hasControl = (s: string) =>
     return code < 0x20 || (code >= 0x7f && code <= 0x9f);
   });
 
-function checkNewAccount(input: NewAccount): Required<NewAccount> {
+export function checkNewAccount(input: NewAccount): Required<NewAccount> {
   assertAccountId(input?.id);
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (name === "" || name.length > MAX_NAME || hasControl(name)) {
@@ -255,7 +255,8 @@ export async function deleteAccount(db: D1Database, id: string): Promise<boolean
 
 /**
  * Adds an account, or updates name, cadence and profile of an existing one.
- * An account being removed stays `removing`.
+ * An account being removed stays `removing`: Admin.addAccount finishes the
+ * removal first.
  */
 export async function upsertAccount(
   db: D1Database,

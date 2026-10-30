@@ -124,7 +124,7 @@ describe("removal marker", () => {
     await index.beginRun({ id, accountId, startedAt: AT });
     expect(await latestRun(env.INDEX, accountId)).toBeNull();
 
-    // Updating the account does not end the removal.
+    // Adding the account again does not end the removal; Admin.addAccount finishes it first.
     await upsertAccount(env.INDEX, { id: accountId, name: "Example" }, AT);
     expect(await getAccount(env.INDEX, accountId)).toMatchObject({ status: "removing" });
 
