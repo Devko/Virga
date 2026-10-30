@@ -109,19 +109,21 @@ describe("Admin.removeAccount", () => {
     expect(await runs(accountId)).toEqual([]);
     expect(await exports.GraphReader.getScanSummary(accountId)).toBeNull();
     expect((await exports.GraphReader.listAccounts()).map((a) => a.id)).not.toContain(accountId);
-    // The graph object is empty: no scan, node or row of any table is left.
+    // The graph object is empty: no scan, node or row of any table is left,
+    // only the schema version and the marker that refuses new scans.
     const tables = await sql<{ name: string }>(
       stub,
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
     );
     for (const { name } of tables) {
-      const kept = name === "meta" ? "WHERE key != 'schema_version'" : "";
+      const kept = name === "meta" ? "WHERE key NOT IN ('schema_version', 'removed')" : "";
       expect(await sql(stub, `SELECT count(*) AS n FROM "${name}" ${kept}`), name).toEqual([
         { n: 0 },
       ]);
     }
-    expect(await sql(stub, "SELECT value FROM meta WHERE key = 'schema_version'")).toEqual([
-      { value: String(SCHEMA_VERSION) },
+    expect(await sql(stub, "SELECT key, value FROM meta ORDER BY key")).toEqual([
+      { key: "removed", value: expect.stringMatching(/^\d+$/) },
+      { key: "schema_version", value: String(SCHEMA_VERSION) },
     ]);
 
     expect(await getAccount(env.INDEX, other.accountId)).not.toBeNull();
@@ -164,5 +166,26 @@ describe("Admin.removeAccount", () => {
     });
     expect(await runs(accountId)).toEqual([]);
     expect(await sql(stub, "SELECT count(*) AS n FROM nodes")).toEqual([{ n: 0 }]);
+  });
+
+  it("R4-03: the graph refuses to begin a scan after the removal until the account is added again", async () => {
+    const { accountId, stub } = await scannedAccount();
+    await admin.removeAccount(accountId);
+
+    const late = `scan-${accountId}-late`;
+    expect(await stub.beginScan(late, "full", AT + 7_200_000)).toEqual({
+      started: false,
+      removed: true,
+    });
+    expect(await sql(stub, "SELECT count(*) AS n FROM scans")).toEqual([{ n: 0 }]);
+    expect(await sql(stub, "SELECT count(*) AS n FROM meta WHERE key = 'current_scan'")).toEqual([
+      { n: 0 },
+    ]);
+
+    await admin.addAccount({ id: accountId, name: "Production" });
+    expect(await sql(stub, "SELECT count(*) AS n FROM meta WHERE key = 'removed'")).toEqual([
+      { n: 0 },
+    ]);
+    expect(await stub.beginScan(late, "full", AT + 7_200_000)).toEqual({ started: true });
   });
 });

@@ -80,6 +80,25 @@ function edgeView(row: Row): EdgeView {
   };
 }
 
+/**
+ * The findings table as of `at`, which is the first `?` of the statement.
+ * A suppression ends at its date, but the findings lifecycle stores that
+ * only on the rule's next evaluated run (R3-07); while the rule stays
+ * `not_evaluated` or `error`, the row stays `suppressed`. Reads show such a
+ * finding as open and without its suppression, as the lifecycle will store
+ * it. As there, a suppression lasts only while `suppressed_until` is after `at`.
+ */
+const FINDINGS_AT = `(
+  SELECT fingerprint, rule_id, rule_version, severity, title, evidence, insight_id,
+         first_seen, last_seen, resolved_at,
+         CASE WHEN ended THEN 'open' ELSE status END AS status,
+         CASE WHEN ended THEN NULL ELSE suppressed_until END AS suppressed_until,
+         CASE WHEN ended THEN NULL ELSE suppressed_by END AS suppressed_by,
+         CASE WHEN ended THEN NULL ELSE suppress_reason END AS suppress_reason
+  FROM (SELECT *, status = 'suppressed' AND COALESCE(suppressed_until, 0) <= ? AS ended
+        FROM findings)
+)`;
+
 const SEVERITY_RANK_SQL = `CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3
   WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
 const SEVERITY_RANK: Record<FindingSeverity, number> = {
@@ -120,7 +139,7 @@ function ruleRunView(row: Row): RuleRunView {
   };
 }
 
-export function graphSummary(db: SqlRunner): GraphSummary {
+export function graphSummary(db: SqlRunner, at = Date.now()): GraphSummary {
   const scan =
     db.query(
       `SELECT id, kind, status, started_at, finished_at FROM scans
@@ -133,7 +152,8 @@ export function graphSummary(db: SqlRunner): GraphSummary {
 
   const findings: GraphSummary["findings"] = { open: {}, resolved: {}, suppressed: {} };
   for (const row of db.query<{ status: FindingStatus; severity: FindingSeverity; n: number }>(
-    "SELECT status, severity, count(*) AS n FROM findings GROUP BY status, severity",
+    `SELECT status, severity, count(*) AS n FROM ${FINDINGS_AT} GROUP BY status, severity`,
+    at,
   )) {
     findings[row.status][row.severity] = Number(row.n);
   }
@@ -204,8 +224,12 @@ function decodeCursor(cursor: string): { rank: number; fingerprint: string } {
   return { rank: Number(match[1]), fingerprint: match[2] };
 }
 
-/** Findings by severity (critical first), then fingerprint, in keyset pages. */
-export function listFindings(db: SqlRunner, filters: FindingFilters = {}): FindingPage {
+/** Findings as of `at` by severity (critical first), then fingerprint, in keyset pages. */
+export function listFindings(
+  db: SqlRunner,
+  filters: FindingFilters = {},
+  at = Date.now(),
+): FindingPage {
   const statuses = asList(filters.status, FINDING_STATUSES, "status");
   const severities = asList(filters.severity, FINDING_SEVERITIES, "severity");
   const limit = filters.limit ?? FINDINGS_PAGE.default;
@@ -217,13 +241,14 @@ export function listFindings(db: SqlRunner, filters: FindingFilters = {}): Findi
   const severityJson = severities && JSON.stringify(severities);
 
   const rows = db.query(
-    `WITH f AS (SELECT *, ${SEVERITY_RANK_SQL} AS sev_rank FROM findings)
+    `WITH f AS (SELECT *, ${SEVERITY_RANK_SQL} AS sev_rank FROM ${FINDINGS_AT})
      SELECT * FROM f
      WHERE (? IS NULL OR status IN (SELECT value FROM json_each(?)))
        AND (? IS NULL OR severity IN (SELECT value FROM json_each(?)))
        AND (? IS NULL OR sev_rank < ? OR (sev_rank = ? AND fingerprint > ?))
      ORDER BY sev_rank DESC, fingerprint ASC
      LIMIT ?`,
+    at,
     statusJson,
     statusJson,
     severityJson,
@@ -245,8 +270,12 @@ export function listFindings(db: SqlRunner, filters: FindingFilters = {}): Findi
   };
 }
 
-export function getFinding(db: SqlRunner, fingerprint: string): FindingDetail | null {
-  const row = db.query("SELECT * FROM findings WHERE fingerprint = ?", fingerprint)[0];
+export function getFinding(
+  db: SqlRunner,
+  fingerprint: string,
+  at = Date.now(),
+): FindingDetail | null {
+  const row = db.query(`SELECT * FROM ${FINDINGS_AT} WHERE fingerprint = ?`, at, fingerprint)[0];
   if (!row) return null;
   const subjects = db
     .query<{ node_id: string; role: string }>(

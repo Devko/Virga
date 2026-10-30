@@ -4,6 +4,7 @@ import { describe, isStaleScanError } from "../errors.ts";
 import { orderCollectors } from "./order.ts";
 import { API_STEP, type Failure, type ScanStep, STORE_STEP, settle } from "./step.ts";
 import type {
+  BeginResult,
   ChunkCounters,
   ClassSummary,
   ScanGraph,
@@ -105,7 +106,8 @@ function checkPlan(chunks: unknown): unknown[][] {
  *
  * Once the graph refuses a call because the scan is no longer the running
  * scan of the account (marked failed as stale, or taken over by a newer
- * scan), the scan stops and ends `failed` (R2-07).
+ * scan), the scan stops and ends `failed` (R2-07). A scan of an account that
+ * is no longer in the index is `skipped` and writes nothing (R4-03).
  */
 export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanSummary> {
   const { step, index } = deps;
@@ -124,12 +126,20 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
     rules: null,
   };
 
-  const begin = await step.do("begin", STORE_STEP, async () => {
+  // An instance created before Admin.removeAccount, or a begin step retried
+  // after it, must not scan the account again (R4-03). The graph refuses too,
+  // in case the removal lands between the two calls.
+  const begin = await step.do("begin", STORE_STEP, async (): Promise<BeginResult> => {
+    if (!(await index.hasAccount(accountId))) return { started: false, removed: true };
     const result = await graph().beginScan(scanId, "full", now);
     if (result.started) await index.beginRun({ id: scanId, accountId, startedAt: now });
     return result;
   });
-  if (!begin.started) return { ...summary, status: "skipped", running: begin.running };
+  if (!begin.started) {
+    return "running" in begin
+      ? { ...summary, status: "skipped", running: begin.running }
+      : { ...summary, status: "skipped", detail: `account ${accountId} is not in the index` };
+  }
 
   const context = (): CollectorContext => ({
     accountId,

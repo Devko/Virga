@@ -22,9 +22,15 @@ export type RemoveResult = { removed: boolean };
  * removed through the broker's TokenIntake, never here.
  */
 export class Admin extends WorkerEntrypoint<Env> {
-  /** Adds the account or updates its name, cadence and profile. */
+  /**
+   * Adds the account or updates its name, cadence and profile. An account
+   * that was removed may be scanned again from here on.
+   */
   async addAccount(input: NewAccount): Promise<AccountRow> {
-    return upsertAccount(this.env.INDEX, input, Date.now());
+    const account = await upsertAccount(this.env.INDEX, input, Date.now());
+    const graphs = this.env.ACCOUNT_GRAPH;
+    await graphs.get(graphs.idFromName(account.id)).clearRemoved();
+    return account;
   }
 
   /** Starts a scan now unless one is running. */
@@ -47,10 +53,13 @@ export class Admin extends WorkerEntrypoint<Env> {
 
   /**
    * Removes the account: its rows in the index (`accounts`, `scan_runs`),
-   * then its whole graph. The index goes first, so no new scan starts; a
-   * scan that still runs is refused at its next write. Idempotent, so a
-   * retry after a partial failure finishes the job. The token stays in the
-   * broker until TokenIntake.remove deletes it.
+   * then its whole graph. Without the index rows the dispatcher no longer
+   * picks the account, and a scan instance that begins later, for example
+   * one that was queued, stops at its begin step without writing. The
+   * emptied graph refuses to begin a scan until addAccount (R4-03). A scan
+   * that still runs is refused at its next write. Idempotent, so a retry
+   * after a partial failure finishes the job. The token stays in the broker
+   * until TokenIntake.remove deletes it.
    */
   async removeAccount(accountId: string): Promise<RemoveResult> {
     assertAccountId(accountId);

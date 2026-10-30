@@ -1,9 +1,19 @@
 import { introspectWorkflow, introspectWorkflowInstance } from "cloudflare:test";
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { runDispatch } from "../src/scan/dispatch.ts";
 import { scanInstanceId } from "../src/scan/ids.ts";
 import type { ScanSummary } from "../src/scan/types.ts";
-import { lastScanAt, newAccountId, scanRun, setupAccount, sql } from "./helpers.ts";
+import { fakeStep } from "./fake-step.ts";
+import {
+  allDue,
+  type GraphStub,
+  lastScanAt,
+  newAccountId,
+  scanRun,
+  setupAccount,
+  sql,
+} from "./helpers.ts";
 
 // Scans through the Workflow engine of the vitest plugin: the production
 // ScanWorkflow with stub collectors (TestScanWorkflow in test/worker.ts), its
@@ -82,6 +92,28 @@ describe("ScanWorkflow", () => {
     ).toEqual([{ status: "partial", chunks_total: 2, chunks_done: 1 }]);
   });
 
+  it("R4-03: an instance that starts after removeAccount stops at its begin step, without writing", async () => {
+    const accountId = newAccountId();
+    const { stub, evaluators } = await setupAccount(accountId);
+    const id = `scan-${accountId}-wf4`;
+    // As for an instance that was still queued when the account was removed.
+    await exports.Admin.removeAccount(accountId);
+
+    await using instance = await introspectWorkflowInstance(env.TEST_SCAN_WORKFLOW, id);
+    await env.TEST_SCAN_WORKFLOW.create({ id, params: { accountId } });
+    await instance.waitForStatus("complete");
+
+    expect(await instance.waitForStepResult({ name: "begin" })).toEqual({
+      started: false,
+      removed: true,
+    });
+    const output = (await instance.getOutput()) as ScanSummary;
+    expect(output).toMatchObject({ scanId: id, accountId, status: "skipped", classes: {} });
+    expect(output.detail).toMatch(/not in the index/);
+    expect(evaluators.calls).toEqual({ exposure: 0, rules: [] });
+    expect(await removedLeftovers(accountId, stub)).toEqual(NOTHING);
+  });
+
   it("fails fast on an invalid account ID", async () => {
     const id = "scan-invalid-wf3";
     await using instance = await introspectWorkflowInstance(env.TEST_SCAN_WORKFLOW, id);
@@ -91,7 +123,47 @@ describe("ScanWorkflow", () => {
   });
 });
 
+/** What is left of a removed account, in the index and in its graph. */
+async function removedLeftovers(accountId: string, stub: GraphStub) {
+  const runs = await env.INDEX.prepare("SELECT id FROM scan_runs WHERE account_id = ?")
+    .bind(accountId)
+    .all();
+  return {
+    runs: runs.results,
+    scans: await sql(stub, "SELECT id FROM scans"),
+    nodes: await sql(stub, "SELECT id FROM nodes"),
+  };
+}
+const NOTHING = { runs: [], scans: [], nodes: [] };
+
 describe("DispatchWorkflow", () => {
+  it("R4-03: a dispatched scan that begins after removeAccount stops without writing", async () => {
+    const accountId = newAccountId();
+    const { stub } = await setupAccount(accountId);
+    const at = Date.UTC(2026, 9, 30, 9, 17);
+    const id = scanInstanceId(accountId, at);
+    await using instance = await introspectWorkflowInstance(env.TEST_SCAN_WORKFLOW, id);
+
+    // The dispatcher reads the index before the removal and creates the instance after it.
+    const dispatched = await runDispatch(
+      {
+        step: fakeStep().step,
+        dueAccounts: async (time) => {
+          const due = (await allDue(time)).filter((due) => due === accountId);
+          await exports.Admin.removeAccount(accountId);
+          return due;
+        },
+        scans: env.TEST_SCAN_WORKFLOW,
+      },
+      at,
+    );
+    expect(dispatched).toEqual({ due: 1, created: 1, existing: 0, failed: 0 });
+    await instance.waitForStatus("complete");
+
+    expect(await instance.getOutput()).toMatchObject({ scanId: id, status: "skipped" });
+    expect(await removedLeftovers(accountId, stub)).toEqual(NOTHING);
+  });
+
   it("starts one scan per due account with deterministic IDs and skips existing ones", async () => {
     const accounts = [newAccountId(), newAccountId()];
     for (const accountId of accounts) await setupAccount(accountId);

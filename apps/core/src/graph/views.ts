@@ -64,7 +64,7 @@ export interface GraphSummary {
   coverage: CoverageView[];
   /** Live nodes per resource class. */
   nodes: Record<string, number>;
-  /** Findings per status and severity. */
+  /** Findings per status and severity; a suppression past its date counts as open. */
   findings: Record<FindingStatus, Partial<Record<FindingSeverity, number>>>;
   /** Exposure rows per decision. */
   exposure: Record<string, number>;
@@ -91,6 +91,11 @@ export interface FindingView {
   ruleId: string;
   ruleVersion: number;
   severity: FindingSeverity;
+  /**
+   * As of the read. A suppression ends at `suppressedUntil` even while its
+   * rule is not evaluated: the finding is then `open`, without suppression
+   * fields, as the next evaluated run stores it.
+   */
   status: FindingStatus;
   title: string;
   evidence: Untrusted<JsonRecord>;

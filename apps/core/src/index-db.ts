@@ -71,13 +71,20 @@ const scanRunRow = (r: ScanRunRecord): ScanRunRow => ({
 
 export function d1ScanIndex(db: D1Database): ScanIndex {
   return {
+    async hasAccount(accountId: string) {
+      const row = await db.prepare("SELECT 1 FROM accounts WHERE id = ?").bind(accountId).first();
+      return row !== null;
+    },
+
     async beginRun(run: ScanRunStart) {
+      // A scan that began while its account was being removed gets no row (R4-03).
       await db
         .prepare(
-          `INSERT INTO scan_runs (id, account_id, started_at, status) VALUES (?, ?, ?, 'running')
+          `INSERT INTO scan_runs (id, account_id, started_at, status)
+           SELECT ?, ?, ?, 'running' WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?)
            ON CONFLICT (id) DO NOTHING`,
         )
-        .bind(run.id, run.accountId, run.startedAt)
+        .bind(run.id, run.accountId, run.startedAt, run.accountId)
         .run();
     },
 

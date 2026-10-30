@@ -363,6 +363,23 @@ describe("first scan of the seeded account", () => {
       });
     }
 
+    it("CF-024: names the Pages env var, its environment and pattern, never its value", () => {
+      const fingerprint = "CF-024:pages_project:handbook";
+      expect(first.subjects.get(fingerprint)).toBe("pages_project:handbook");
+      expect(JSON.parse(byFingerprint(first, fingerprint)?.evidence ?? "{}")).toEqual({
+        variables: [
+          {
+            environment: "production",
+            name: "CF_API_TOKEN",
+            kind: "plain_text",
+            secret_pattern: "cfat_",
+          },
+        ],
+        patterns: ["cfat_"],
+        versions: null,
+      });
+    });
+
     it("reports nothing beyond the seeded cases", () => {
       const expected = new Set(SEEDED.map((c) => resolve(c.fingerprint)));
       expect(first.findings.map((f) => f.fingerprint).filter((f) => !expected.has(f))).toEqual([]);
@@ -378,6 +395,23 @@ describe("first scan of the seeded account", () => {
         JSON.stringify(ids),
       );
       expect(found.map((r) => r.id).sort()).toEqual([...new Set(ids)].sort());
+    });
+
+    it("CF-024: inspects the plain-text env vars of a clean Pages project and skips its secret env var", async () => {
+      const [row] = await sql<{ vars: string }>(
+        stub,
+        "SELECT props ->> '$.plain_text_vars' AS vars FROM nodes WHERE id = 'pages_project:landing'",
+      );
+      const url = {
+        name: "API_BASE",
+        kind: "plain_text",
+        looks_secret: false,
+        secret_pattern: null,
+      };
+      expect(JSON.parse(row?.vars ?? "null")).toEqual([
+        { ...url, environment: "preview" },
+        { ...url, environment: "production" },
+      ]);
     });
 
     for (const c of CLEAN) {

@@ -5,9 +5,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { AdminRpc, GraphReaderRpc } from "../../web/src/rpc.ts";
 import type { AccountGraph } from "../src/account-graph.ts";
 import { Admin } from "../src/admin.ts";
+import { getFinding, graphSummary, listFindings } from "../src/graph/read.ts";
 import { GraphReader } from "../src/graph-reader.ts";
 import { d1ScanIndex } from "../src/index-db.ts";
-import { type graphOf, newAccountId, rejection, setupAccount } from "./helpers.ts";
+import { type graphOf, newAccountId, rejection, setupAccount, sql } from "./helpers.ts";
 
 const reader = exports.GraphReader;
 const accountId = newAccountId();
@@ -110,8 +111,8 @@ beforeAll(async () => {
     for (const f of rows) {
       db.run(
         `INSERT INTO findings (fingerprint, rule_id, rule_version, severity, status, title, evidence,
-           first_seen, last_seen, resolved_at)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+           first_seen, last_seen, resolved_at, suppressed_until)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
         f.fingerprint,
         f.rule_id ?? "",
         f.severity,
@@ -121,6 +122,8 @@ beforeAll(async () => {
         AT,
         f.last_seen,
         f.status === "resolved" ? AT : null,
+        // A suppression always has an end; this one lasts.
+        f.status === "suppressed" ? Date.UTC(2100, 0, 1) : null,
       );
     }
     for (const [node, role] of [
@@ -385,5 +388,131 @@ describe("GraphReader", () => {
       rejection(reader.getNeighborhood(accountId, "worker_script:api", options));
     expect(await invalid({ depth: 3 })).toMatch(/depth/);
     expect(await invalid({ limit: 10_000 })).toMatch(/limit/);
+  });
+});
+
+describe("GraphReader on suppressions past their date (R3-07, read side)", () => {
+  const account = newAccountId();
+  const scan = `scan-${account}-2026102907`;
+  const LATER = Date.UTC(2100, 0, 1);
+  // A suppression ends at its date. Rules that are not_evaluated or error
+  // change no finding, so the stored row can stay `suppressed` after it.
+  const SSH = "CF-004:tunnel_hostname:t1:ssh.example.com";
+  const PUBLIC = "CF-021:r2_bucket:exports";
+  const ACCEPTED = "CF-010:access_policy:p1";
+  let stub: ReturnType<typeof graphOf>;
+
+  beforeAll(async () => {
+    ({ stub } = await setupAccount(account));
+    await stub.beginScan(scan, "full", AT);
+    await runInDurableObject(stub, (_: AccountGraph, state) => {
+      const db = fromDurableObjectStorage(state.storage);
+      for (const [fingerprint, severity, until] of [
+        [SSH, "critical", AT - 1],
+        [PUBLIC, "high", AT],
+        [ACCEPTED, "high", LATER],
+      ] as const) {
+        db.run(
+          `INSERT INTO findings (fingerprint, rule_id, rule_version, severity, status, title,
+             evidence, first_seen, last_seen, suppressed_until, suppressed_by, suppress_reason)
+           VALUES (?, ?, 1, ?, 'suppressed', 'title', '{}', ?, ?, ?, 'alice@example.com', ?)`,
+          fingerprint,
+          fingerprint.slice(0, 6),
+          severity,
+          AT - 1000,
+          AT - 1000,
+          until,
+          "adding Access this week",
+        );
+      }
+      db.run(
+        `INSERT INTO rule_runs (scan_id, rule_id, status, hits, missing) VALUES
+           (?, 'CF-004', 'not_evaluated', 0, '["access"]'), (?, 'CF-021', 'error', 0, NULL),
+           (?, 'CF-010', 'evaluated', 1, NULL)`,
+        scan,
+        scan,
+        scan,
+      );
+    });
+  });
+
+  it("R3-07: counts a suppression past its date as open in the summary", async () => {
+    const summary = await reader.getScanSummary(account);
+    expect(summary?.graph.findings).toEqual({
+      open: { critical: 1, high: 1 },
+      resolved: {},
+      suppressed: { high: 1 },
+    });
+  });
+
+  it("R3-07: lists a suppression past its date as open, without its suppression", async () => {
+    const list = async (status: "open" | "suppressed") =>
+      (await reader.listFindings(account, { status }))?.findings.map((f) => [
+        f.fingerprint,
+        f.status,
+        f.suppressedUntil,
+      ]);
+    expect(await list("open")).toEqual([
+      [SSH, "open", null],
+      [PUBLIC, "open", null],
+    ]);
+    expect(await list("suppressed")).toEqual([[ACCEPTED, "suppressed", LATER]]);
+    const all = await reader.listFindings(account, { limit: 1 });
+    expect(all?.findings.map((f) => f.status)).toEqual(["open"]);
+    const next = await reader.listFindings(account, { cursor: all?.cursor ?? undefined });
+    expect(next?.findings.map((f) => [f.fingerprint, f.status])).toEqual([
+      [ACCEPTED, "suppressed"],
+      [PUBLIC, "open"],
+    ]);
+  });
+
+  it("R3-07: returns a suppression past its date as an open finding", async () => {
+    expect(await reader.getFinding(account, SSH)).toMatchObject({
+      status: "open",
+      severity: "critical",
+      suppressedUntil: null,
+      suppressedBy: null,
+      suppressReason: null,
+    });
+    expect(await reader.getFinding(account, ACCEPTED)).toMatchObject({
+      status: "suppressed",
+      suppressedUntil: LATER,
+      suppressedBy: "alice@example.com",
+      suppressReason: "adding Access this week",
+    });
+  });
+
+  it("R3-07: ends a suppression at its date, as the findings lifecycle does, and writes nothing", async () => {
+    const reads = await runInDurableObject(stub, (_: AccountGraph, state) => {
+      const db = fromDurableObjectStorage(state.storage);
+      return [AT - 1, AT].map((at) => ({
+        list: listFindings(db, {}, at).findings.map((f) => [f.fingerprint, f.status]),
+        detail: getFinding(db, PUBLIC, at)?.status,
+        suppressed: graphSummary(db, at).findings.suppressed,
+      }));
+    });
+    expect(reads).toEqual([
+      {
+        list: [
+          [SSH, "open"],
+          [ACCEPTED, "suppressed"],
+          [PUBLIC, "suppressed"],
+        ],
+        detail: "suppressed",
+        suppressed: { high: 2 },
+      },
+      {
+        list: [
+          [SSH, "open"],
+          [ACCEPTED, "suppressed"],
+          [PUBLIC, "open"],
+        ],
+        detail: "open",
+        suppressed: { high: 1 },
+      },
+    ]);
+    expect(await sql(stub, "SELECT status, count(*) AS n FROM findings GROUP BY status")).toEqual([
+      { status: "suppressed", n: 3 },
+    ]);
   });
 });
