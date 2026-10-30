@@ -69,7 +69,10 @@ export function virgaMcpServer(env: Env): McpServer {
     "list_accounts",
     {
       title: "List accounts",
-      description: "Cloudflare accounts onboarded in Virga, with scan profile and last scan time.",
+      description:
+        "Cloudflare accounts onboarded in Virga, with status, scan profile and last scan time. " +
+        "Status `removing`: a removal began and did not finish. No scan of it begins, its graph " +
+        "may already be deleted, and an administrator finishes it by repeating the removal.",
       inputSchema: z.object({}),
       annotations: READ_ONLY,
     },
@@ -84,7 +87,8 @@ export function virgaMcpServer(env: Env): McpServer {
         "One account's latest scan: coverage per resource class, counts of nodes, findings and " +
         "exposure, and per rule its status, hits (decided rows), undecided rows and error. " +
         "Unknown is a result: a rule that is not_evaluated, or a row that is undecided, is not " +
-        "a pass.",
+        "a pass. For an account with status `removing` the graph may already be deleted, so " +
+        "empty counts do not mean a clean account.",
       inputSchema: z.object({ account_id: accountId }),
       annotations: READ_ONLY,
     },

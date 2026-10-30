@@ -8,10 +8,11 @@ import {
   type FindingView,
   PROFILES,
   type Profile,
+  type ScanSummaryView,
   type TriggerResult,
 } from "../src/rpc.ts";
 import { ApiError, api, type IntakeView, type Me, type RemovalView } from "./api.ts";
-import { Pending, Problem, useLoad } from "./load.tsx";
+import { type Loaded, Pending, Problem, useLoad } from "./load.tsx";
 import { Link, paths } from "./router.tsx";
 import { Text } from "./text.tsx";
 import {
@@ -22,6 +23,7 @@ import {
   NodeDetails,
   RemovalResult,
   SummaryView,
+  scanMessage,
 } from "./views.tsx";
 
 // Cytoscape is most of the bundle and only this page needs it.
@@ -56,20 +58,12 @@ function ScanButton({ accountId, onStarted }: { accountId: string; onStarted: ()
       else setState({ busy: false, error: error instanceof Error ? error : new Error("failed") });
     }
   };
-  const message = (r: TriggerResult) =>
-    r.started
-      ? "Scan started."
-      : r.reason === "running"
-        ? "A scan is already running."
-        : r.reason === "exists"
-          ? "A scan was started a moment ago."
-          : "The account is not onboarded.";
   return (
     <div className="actions">
       <button type="button" onClick={start} disabled={state.busy}>
         {state.busy ? "Starting…" : "Start scan"}
       </button>
-      {state.result && <span role="status">{message(state.result)}</span>}
+      {state.result && <span role="status">{scanMessage(state.result)}</span>}
       {state.error && <Problem error={state.error} />}
     </div>
   );
@@ -172,9 +166,12 @@ function FindingsSection({ accountId }: { accountId: string }) {
  */
 function RemoveAccount({
   accountId,
+  again,
   onRemoved,
 }: {
   accountId: string;
+  /** A removal began and did not finish; this one finishes it. */
+  again: boolean;
   onRemoved: (result: RemovalView) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -187,7 +184,7 @@ function RemoveAccount({
     return (
       <div className="actions">
         <button type="button" className="danger" onClick={() => setOpen(true)}>
-          Remove account…
+          {again ? "Remove account again…" : "Remove account…"}
         </button>
       </div>
     );
@@ -257,19 +254,39 @@ export function AccountPage({ accountId, me }: { accountId: string; me: Me | und
     );
   }
   return (
+    <AccountView
+      accountId={accountId}
+      me={me}
+      summary={summary}
+      onRemoved={(result) => setRemoved({ accountId, result })}
+    />
+  );
+}
+
+/** The account page around its summary, loaded or not; separate so tests can render it. */
+export function AccountView({
+  accountId,
+  me,
+  summary,
+  onRemoved,
+}: {
+  accountId: string;
+  me: Me | undefined;
+  summary: Loaded<ScanSummaryView>;
+  onRemoved: (result: RemovalView) => void;
+}) {
+  // Core starts no scan of an account being removed; repeating the removal finishes it (R5-08).
+  const admin = me?.admin === true && summary.data !== undefined;
+  const removing = summary.data?.account.status === "removing";
+  return (
     <>
       <p>
         <Link to={paths.accounts()}>← Accounts</Link>
       </p>
       <Pending loaded={summary}>{(data) => <SummaryView summary={data} />}</Pending>
-      {me?.admin && summary.data && <ScanButton accountId={accountId} onStarted={summary.reload} />}
+      {admin && !removing && <ScanButton accountId={accountId} onStarted={summary.reload} />}
       <FindingsSection accountId={accountId} />
-      {me?.admin && summary.data && (
-        <RemoveAccount
-          accountId={accountId}
-          onRemoved={(result) => setRemoved({ accountId, result })}
-        />
-      )}
+      {admin && <RemoveAccount accountId={accountId} again={removing} onRemoved={onRemoved} />}
     </>
   );
 }

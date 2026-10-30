@@ -3,6 +3,7 @@ import { ADMIN, ORIGIN, VIEWER } from "./config.ts";
 import {
   ACCOUNT,
   ACCOUNT_REMOVAL_FAILS,
+  REMOVING_ACCOUNT,
   TOKEN_REMOVAL_FAILS,
   UNKNOWN_ACCOUNT,
 } from "./fixtures.ts";
@@ -58,6 +59,19 @@ describe("account removal", () => {
       account: { removed: false },
     });
     expect(calls.map((c) => c.method)).toEqual(["remove", "removeAccount"]);
+  });
+
+  it("finishes the removal of an account that is `removing` when it is repeated (R5-08)", async () => {
+    const response = await remove(REMOVING_ACCOUNT);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      token: { removed: false },
+      account: { removed: true },
+    });
+    expect(calls).toEqual([
+      { method: "remove", args: [REMOVING_ACCOUNT] },
+      { method: "removeAccount", args: [REMOVING_ACCOUNT] },
+    ]);
   });
 
   it("refuses a non-admin before reading the body", async () => {
