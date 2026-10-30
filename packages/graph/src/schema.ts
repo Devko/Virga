@@ -209,6 +209,16 @@ ${historyTrigger("nodes", "node", "json_object('name', $.name, 'props', json($.p
 ${historyTrigger("edges", "edge", "json_object('key', $.key, 'props', json($.props))")}
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, name: "init", sql: INIT }];
+// `hits` counts decided rows only; `undecided` counts the rows a rule could not
+// decide, and `error` says why a run is `error` (capped by evaluateRules).
+const RULE_RUN_DETAILS = `
+ALTER TABLE rule_runs ADD COLUMN undecided INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE rule_runs ADD COLUMN error TEXT;
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: "init", sql: INIT },
+  { version: 2, name: "rule_runs_undecided_error", sql: RULE_RUN_DETAILS },
+];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
