@@ -965,7 +965,9 @@ function checkNestedManifest(path: string, shown: string): void {
  * pnpm takes the nearest pnpm-workspace.yaml in the same way, and reads the
  * .npmrc of that directory too (R9-02). So only the root package.json may name
  * the package manager, only the root may hold pnpm-workspace.yaml and .npmrc,
- * and no directory may hold .corepack.env. Walks the checkout without
+ * and no directory may hold .corepack.env. pnpm loads .pnpmfile.cjs on every
+ * command and .pnp.cjs into every script it runs, so no directory may hold
+ * either (R10-01). Walks the checkout without
  * node_modules and .git, and refuses symbolic links rather than follow them,
  * since corepack and pnpm would. Names are compared as a case-insensitive file
  * system may open them (L-1), and at the root the files main reads must have
@@ -996,6 +998,18 @@ export function checkCheckout(root: string): void {
       if (name === ".corepack.env") {
         throw new CheckoutError(
           `${shown}: corepack loads .corepack.env files from the directories it walks, and their variables change which pnpm it runs and where it fetches it from; the project uses none`,
+        );
+      }
+      // R10-01: pnpm requires <root>/.pnpmfile.cjs, so Node also opens
+      // .pnpmfile.cjs.js, .json and .node, or a .pnpmfile.cjs directory.
+      if (name.startsWith(".pnpmfile")) {
+        throw new CheckoutError(
+          `${shown}: pnpm loads .pnpmfile.cjs on every command and runs its hooks, whose updateConfig can set lockfile-dir or any other setting the check refuses (R10-01); the project uses no pnpmfile, so the check refuses every name that starts with .pnpmfile`,
+        );
+      }
+      if (name.startsWith(".pnp.")) {
+        throw new CheckoutError(
+          `${shown}: pnpm run and pnpm exec load .pnp.cjs into every script they run (NODE_OPTIONS=--require), from the workspace root or the project, whatever node-linker says; the project does not use Plug'n'Play, so the check refuses every name that starts with .pnp.`,
         );
       }
       if (atRoot && ROOT_FILES.has(name) && entry.name !== name) {

@@ -1886,6 +1886,78 @@ describe("L-1: names a case-insensitive file system opens as the files the check
   });
 });
 
+describe("R10-01: no pnpmfile, which pnpm loads on every command", () => {
+  /** The review's hook: pnpm then installs from other/pnpm-lock.yaml. */
+  const PNPMFILE =
+    "module.exports = { hooks: { updateConfig: (config) => ({ ...config, lockfileDir: 'other' }) } };\n";
+  const PNPMFILE_LOADED = "pnpm loads \\.pnpmfile\\.cjs on every command and runs its hooks";
+
+  it("R10-01: refuses a root .pnpmfile.cjs whose updateConfig hook sets lockfileDir to other", async () => {
+    // The review's case: the root lockfile locks yaml 2.8.0, 400 days old, and
+    // other/pnpm-lock.yaml locks 2.9.1, one day old, which pnpm would install.
+    const root = checkout({
+      "package.json": manifest({ packageManager: "pnpm@10.28.0", dependencies: { yaml: "2.9.1" } }),
+      "pnpm-lock.yaml": lockfile([registryEntry("yaml@2.8.0")]),
+      ".pnpmfile.cjs": PNPMFILE,
+      "other/pnpm-lock.yaml": lockfile([registryEntry("yaml@2.9.1")]),
+    });
+    const { fetch } = mockFetch({ ...PNPM_REGISTRY, yaml: { "2.8.0": ago(400), "2.9.1": ago(1) } });
+    expect(await runMain(root, { fetch })).toEqual({
+      code: 1,
+      out: [],
+      err: [expect.stringMatching(new RegExp(`^error: \\.pnpmfile\\.cjs: ${PNPMFILE_LOADED}`))],
+    });
+  });
+
+  it("R10-01: refuses .pnpmfile.cjs and .pnpmfile.mjs anywhere, however spelled", async () => {
+    for (const path of [
+      ".pnpmfile.mjs",
+      "apps/web/.pnpmfile.cjs",
+      "apps/web/.pnpmfile.mjs",
+      "packages/graph/.pnpmfile.cjs",
+      ".PNPMFILE.CJS",
+      "apps/web/.pnpm​file.cjs",
+      "apps/web/.pnpmfile.ｃjs",
+    ]) {
+      await refusedBy(
+        checkout({ [path]: PNPMFILE }),
+        new RegExp(`^error: ${path.replaceAll(".", "\\.")}: ${PNPMFILE_LOADED}`),
+      );
+    }
+  });
+
+  it("R10-01: refuses the names Node's require tries for .pnpmfile.cjs, and .pnp.cjs", async () => {
+    // pnpm requires <root>/.pnpmfile.cjs, so Node also opens .pnpmfile.cjs.js,
+    // .json and .node, or a .pnpmfile.cjs directory.
+    for (const [path, shown] of [
+      [".pnpmfile.cjs.js", ".pnpmfile.cjs.js"],
+      [".pnpmfile.cjs.json", ".pnpmfile.cjs.json"],
+      [".pnpmfile.cjs.node", ".pnpmfile.cjs.node"],
+      [".pnpmfile.cjs/index.js", ".pnpmfile.cjs"],
+    ]) {
+      await refusedBy(
+        checkout({ [path]: PNPMFILE }),
+        new RegExp(`^error: ${shown.replaceAll(".", "\\.")}: ${PNPMFILE_LOADED}`),
+      );
+    }
+    // pnpm run and pnpm exec require a .pnp.cjs of the workspace root or the
+    // project into every script, whatever node-linker says.
+    for (const [path, shown] of [
+      [".pnp.cjs", ".pnp.cjs"],
+      ["apps/web/.pnp.cjs", "apps/web/.pnp.cjs"],
+      [".pnp.cjs/index.js", ".pnp.cjs"],
+      ["apps/web/.PNP.CJS", "apps/web/.PNP.CJS"],
+    ]) {
+      await refusedBy(
+        checkout({ [path]: "console.log('loaded');\n" }),
+        new RegExp(
+          `^error: ${shown.replaceAll(".", "\\.")}: pnpm run and pnpm exec load \\.pnp\\.cjs into every script they run`,
+        ),
+      );
+    }
+  });
+});
+
 describe("EXCEPTIONS", () => {
   it("names exact versions and says why", () => {
     for (const exception of EXCEPTIONS) {
