@@ -189,6 +189,11 @@ interface ProgramStep {
  * columns, and returns the tables its program reads. A statement that
  * writes is refused: a WITH clause can front INSERT, UPDATE or DELETE with
  * RETURNING, which passes the SELECT/WITH check of the parser (R4-05).
+ *
+ * Node SQLite compiles only the first statement, so the checks below and
+ * the fixtures would see nothing after it, while Durable Object SQL runs
+ * every statement. SQLite's own reading of where the first one ends decides
+ * whether anything follows it, not the parameter scan (R6-02).
  */
 function checkAgainstSchema(rule: CompiledRule): Set<string> {
   const db = openNodeDatabase();
@@ -197,6 +202,11 @@ function checkAgainstSchema(rule: CompiledRule): Set<string> {
     let columns: string[];
     let program: ProgramStep[];
     try {
+      const tail = db.tail(rule.sql);
+      if (tail !== "") {
+        const excerpt = JSON.stringify(tail.slice(0, 40));
+        throw new Error(`text after the first statement (${excerpt}); a rule is one statement`);
+      }
       const params = rule.paramOrder.map((name) => rule.params[name] ?? null);
       program = db.query<ProgramStep & Row>(`EXPLAIN ${rule.sql}`, ...params);
       columns = db.columns(rule.sql);

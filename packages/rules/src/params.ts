@@ -9,8 +9,8 @@ const NAME = /[A-Za-z_][A-Za-z0-9_]*/y;
 /**
  * Replaces `:name` parameters with positional `?` placeholders, because
  * Durable Object SQL only documents positional parameters. Skips string
- * literals, quoted identifiers and comments. Rejects positional placeholders
- * and more than one statement.
+ * literals, quoted identifiers ("", ``, []) and comments. Rejects positional
+ * placeholders and more than one statement.
  */
 export function compileParams(source: string): CompiledSql {
   let out = "";
@@ -26,6 +26,15 @@ export function compileParams(source: string): CompiledSql {
       const end = findQuoteEnd(source, i, c);
       out += source.slice(i, end);
       i = end;
+      continue;
+    }
+    // SQLite ends a [identifier] at the first ], with no escape. A `--` or `;`
+    // inside one is neither a comment nor a separator (R6-02).
+    if (c === "[") {
+      const end = source.indexOf("]", i + 1);
+      if (end === -1) throw new SyntaxError("unterminated [ identifier");
+      out += source.slice(i, end + 1);
+      i = end + 1;
       continue;
     }
     if (c === "-" && next === "-") {
