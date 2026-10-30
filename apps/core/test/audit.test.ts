@@ -188,7 +188,10 @@ describe("tool audit trail", () => {
     await scans.modifyAll(async (m) => {
       await m.mockStepResult({ name: "begin" }, { started: false, running: "test" });
     });
-    await using instance = await introspectWorkflowInstance(env.DISPATCH_WORKFLOW, "dispatch-audit");
+    await using instance = await introspectWorkflowInstance(
+      env.DISPATCH_WORKFLOW,
+      "dispatch-audit",
+    );
     await env.DISPATCH_WORKFLOW.create({ id: "dispatch-audit" });
     await instance.waitForStatus("complete");
     const output = (await instance.getOutput()) as { auditPurged: number | null };

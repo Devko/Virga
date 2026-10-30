@@ -4,6 +4,7 @@ import type { AccountRow, CoverageView, ScanSummaryView, TriggerResult } from ".
 import {
   ACCOUNT,
   accounts,
+  auditPage,
   detail,
   findings,
   INJECTION,
@@ -24,18 +25,22 @@ import {
   type Me,
   nextExportPart,
 } from "./api.ts";
+import { Header } from "./app.tsx";
 import { graphElements } from "./graph.tsx";
 import type { Loaded } from "./load.tsx";
 import {
   AccountView,
+  AuditPage,
   ExportControl,
   exportFileName,
   exportMessage,
   listedAccount,
 } from "./pages.tsx";
+import { match } from "./router.tsx";
 import { JsonView, shown } from "./text.tsx";
 import {
   AccountsTable,
+  AuditTable,
   FindingHeader,
   FindingsTable,
   IntakeResult,
@@ -478,6 +483,65 @@ describe("OCSF export in the findings view", () => {
       ).catch((e: unknown) => e);
       expect(refused).toBeInstanceOf(ApiError);
       expect((refused as ApiError).code).toBe("cross_origin");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("audit trail page", () => {
+  const admin: Me = { email: "admin@example.com", serviceToken: null, admin: true };
+  const viewer: Me = { email: "viewer@example.com", serviceToken: null, admin: false };
+
+  it("lists the entries as text, with links to the accounts", () => {
+    const hostile = {
+      ...(auditPage.entries[0] as (typeof auditPage.entries)[number]),
+      id: 9,
+      identity: MARKUP,
+      action: INJECTION,
+      accountId: "../../etc",
+      outcome: MARKUP,
+    };
+    const html = renderToStaticMarkup(<AuditTable entries={[...auditPage.entries, hostile]} />);
+    expectInert(html);
+    expect(html).toContain("2026-10-30 09:05 UTC");
+    expect(html).toContain("DELETE /api/accounts/{id}");
+    expect(html).toContain(`<a href="/accounts/${ACCOUNT}">${ACCOUNT}</a>`);
+    expect(html).toContain("service token");
+    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    // An account ID that is not one is text, not a link.
+    expect(html).not.toContain('href="/accounts/../../etc"');
+    expect(renderToStaticMarkup(<AuditTable entries={[]} />)).toContain("No calls recorded.");
+  });
+
+  it("is linked and shown for admins only", () => {
+    expect(renderToStaticMarkup(<Header me={admin} />)).toContain(
+      '<a href="/audit">Audit trail</a>',
+    );
+    expect(renderToStaticMarkup(<Header me={viewer} />)).not.toContain("Audit trail");
+    expect(renderToStaticMarkup(<Header me={undefined} />)).not.toContain("Audit trail");
+    expect(renderToStaticMarkup(<AuditPage me={viewer} />)).toContain(
+      "Only administrators can read the audit trail.",
+    );
+    const page = renderToStaticMarkup(<AuditPage me={admin} />);
+    expect(page).toContain("<h1>Audit trail</h1>");
+    expect(page).toContain("kept for 90 days");
+    expect(match(new URL("https://virga.example.com/audit"))).toEqual({ page: "audit" });
+  });
+
+  it("reads the trail page by page", async () => {
+    const requests: string[] = [];
+    const fetch = vi.fn(async (path: string) => {
+      requests.push(path);
+      return new Response(JSON.stringify(auditPage), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      expect(await api.audit()).toEqual(auditPage);
+      await api.audit("2");
+      expect(requests).toEqual(["/api/audit?limit=100", "/api/audit?limit=100&cursor=2"]);
     } finally {
       vi.unstubAllGlobals();
     }

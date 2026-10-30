@@ -1,20 +1,24 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
-import { logFailure } from "./http.ts";
+import { actorOf, recordToolCall, writeToolCall } from "./audit.ts";
+import type { Identity } from "./auth.ts";
+import { logFailure, readLimited } from "./http.ts";
 import {
   ACCOUNT_ID,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   type FindingFilters,
   graphReader,
+  isAccountId,
 } from "./rpc.ts";
 import { UNTRUSTED_NOTICE, untrustedBlock } from "./untrusted.ts";
 
 /**
  * MCP server at /mcp with read-only tools over GraphReader. Stateless: one
  * server per request (createMcpHandler). Access and the Worker's own check
- * run before it; there are no admin tools.
+ * run before it; there are no admin tools. Tool calls land in the tool
+ * audit trail (src/audit.ts).
  */
 
 const INSTRUCTIONS =
@@ -51,19 +55,43 @@ const failure = (text: string): ToolResult => ({
 
 const NOT_FOUND = "Not found: the account is not onboarded, or the item does not exist.";
 
-async function guarded(name: string, run: () => Promise<unknown>): Promise<ToolResult> {
-  try {
-    const data = await run();
-    return data === null ? failure(NOT_FOUND) : result(data);
-  } catch (cause) {
-    logFailure(`mcp: ${name}`, cause);
-    return failure("The graph could not be read. Try again later.");
-  }
+export const TOOL_NAMES = [
+  "list_accounts",
+  "get_scan_summary",
+  "list_findings",
+  "get_finding",
+  "get_neighborhood",
+] as const;
+type ToolName = (typeof TOOL_NAMES)[number];
+
+/** A tool call for the audit trail: `refused` when no tool ran, for example on invalid input. */
+export interface ToolCallOutcome {
+  tool: ToolName | "unknown_tool";
+  accountId: string | null;
+  outcome: "ok" | "not_found" | "error" | "refused";
 }
 
-export function virgaMcpServer(env: Env): McpServer {
+type OnCall = (call: ToolCallOutcome) => void;
+
+export function virgaMcpServer(env: Env, onCall: OnCall = () => {}): McpServer {
   const reader = graphReader(env);
   const server = new McpServer({ name: "virga", version: "0.0.0" }, { instructions: INSTRUCTIONS });
+
+  const guarded = async (
+    name: ToolName,
+    accountId: string | null,
+    run: () => Promise<unknown>,
+  ): Promise<ToolResult> => {
+    try {
+      const data = await run();
+      onCall({ tool: name, accountId, outcome: data === null ? "not_found" : "ok" });
+      return data === null ? failure(NOT_FOUND) : result(data);
+    } catch (cause) {
+      logFailure(`mcp: ${name}`, cause);
+      onCall({ tool: name, accountId, outcome: "error" });
+      return failure("The graph could not be read. Try again later.");
+    }
+  };
 
   server.registerTool(
     "list_accounts",
@@ -76,7 +104,7 @@ export function virgaMcpServer(env: Env): McpServer {
       inputSchema: z.object({}),
       annotations: READ_ONLY,
     },
-    () => guarded("list_accounts", () => reader.listAccounts()),
+    () => guarded("list_accounts", null, () => reader.listAccounts()),
   );
 
   server.registerTool(
@@ -96,7 +124,8 @@ export function virgaMcpServer(env: Env): McpServer {
       inputSchema: z.object({ account_id: accountId }),
       annotations: READ_ONLY,
     },
-    ({ account_id }) => guarded("get_scan_summary", () => reader.getScanSummary(account_id)),
+    ({ account_id }) =>
+      guarded("get_scan_summary", account_id, () => reader.getScanSummary(account_id)),
   );
 
   server.registerTool(
@@ -116,7 +145,7 @@ export function virgaMcpServer(env: Env): McpServer {
       annotations: READ_ONLY,
     },
     ({ account_id, status, severity, limit, cursor }) =>
-      guarded("list_findings", () => {
+      guarded("list_findings", account_id, () => {
         const filters: FindingFilters = { limit: limit ?? MCP_FINDINGS.default };
         if (status?.length) filters.status = status;
         if (severity?.length) filters.severity = severity;
@@ -134,7 +163,7 @@ export function virgaMcpServer(env: Env): McpServer {
       annotations: READ_ONLY,
     },
     ({ account_id, fingerprint }) =>
-      guarded("get_finding", () => reader.getFinding(account_id, fingerprint)),
+      guarded("get_finding", account_id, () => reader.getFinding(account_id, fingerprint)),
   );
 
   server.registerTool(
@@ -153,7 +182,7 @@ export function virgaMcpServer(env: Env): McpServer {
       annotations: READ_ONLY,
     },
     ({ account_id, node_id, depth, limit }) =>
-      guarded("get_neighborhood", () =>
+      guarded("get_neighborhood", account_id, () =>
         reader.getNeighborhood(account_id, node_id, {
           depth: depth ?? 1,
           limit: limit ?? MCP_NEIGHBORHOOD.default,
@@ -164,16 +193,88 @@ export function virgaMcpServer(env: Env): McpServer {
   return server;
 }
 
+// A tool call is far smaller; a larger body is not read twice.
+const MAX_CALL_BODY = 65_536;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The tool call a request body names, if it is one JSON-RPC `tools/call` request. */
+async function toolCallIn(request: Request): Promise<Omit<ToolCallOutcome, "outcome"> | null> {
+  if (request.method !== "POST" || request.body === null) return null;
+  const body = request.clone().body;
+  const bytes = body === null ? null : await readLimited(body, MAX_CALL_BODY);
+  if (bytes === null) return null;
+  let message: unknown;
+  try {
+    message = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+  if (!isRecord(message) || message.method !== "tools/call") return null;
+  const params = isRecord(message.params) ? message.params : {};
+  const name = params.name;
+  const args = isRecord(params.arguments) ? params.arguments : {};
+  return {
+    tool: TOOL_NAMES.includes(name as ToolName) ? (name as ToolName) : "unknown_tool",
+    accountId: isAccountId(args.account_id) ? args.account_id : null,
+  };
+}
+
 /**
  * Serves /mcp. A browser Origin must be the Worker's own host (the default
  * list would admit localhost pages), and no CORS headers are sent. The Host
  * is the Custom Domain that Cloudflare routed the request for.
+ *
+ * Every tool that runs lands in the audit trail with its outcome. A
+ * `tools/call` request that runs no tool (an unknown tool, invalid input, a
+ * refused Origin) lands there as `refused` once its answer has ended.
  */
-export function handleMcp(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const handler = createMcpHandler(() => virgaMcpServer(env), {
-    route: "/mcp",
-    corsOptions: false,
-    allowedOriginHostnames: [new URL(request.url).hostname],
+export async function handleMcp(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  identity: Identity,
+): Promise<Response> {
+  const entry = (call: ToolCallOutcome) => ({
+    ...actorOf(identity),
+    channel: "mcp" as const,
+    action: call.tool,
+    accountId: call.accountId,
+    outcome: call.outcome,
   });
-  return handler(request, env, ctx);
+  const attempted = await toolCallIn(request);
+  let ran = 0;
+  const handler = createMcpHandler(
+    () =>
+      virgaMcpServer(env, (call) => {
+        ran++;
+        recordToolCall(env, ctx, entry(call));
+      }),
+    {
+      route: "/mcp",
+      corsOptions: false,
+      allowedOriginHostnames: [new URL(request.url).hostname],
+    },
+  );
+  const response = await handler(request, env, ctx);
+  if (attempted !== null) {
+    // The answer can stream; once it has ended, a tool that was going to run has run.
+    const ended =
+      response.body === null
+        ? Promise.resolve()
+        : response
+            .clone()
+            .arrayBuffer()
+            .then(
+              () => undefined,
+              () => undefined,
+            );
+    ctx.waitUntil(
+      ended.then(() =>
+        ran === 0 ? writeToolCall(env, entry({ ...attempted, outcome: "refused" })) : undefined,
+      ),
+    );
+  }
+  return response;
 }

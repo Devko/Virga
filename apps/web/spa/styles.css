@@ -42,7 +42,7 @@ button.link {
   color: var(--accent);
 }
 
-header > a {
+header > a:first-child {
   font-weight: 700;
   font-size: 1.1rem;
 }

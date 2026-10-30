@@ -1,3 +1,4 @@
+import { recordApiCall } from "./audit.ts";
 import type { Identity } from "./auth.ts";
 import {
   EXPORT_MAX,
@@ -26,9 +27,10 @@ import {
 
 /**
  * JSON API for the SPA under /api. Reads go to core's GraphReader; the admin
- * actions (onboarding, starting a scan, removing an account) need an email
- * in ADMIN_EMAILS. Values from scanned accounts pass through as JSON data;
- * the SPA renders them as text.
+ * actions (onboarding, starting a scan, removing an account) and the audit
+ * trail need an email in ADMIN_EMAILS. Values from scanned accounts pass
+ * through as JSON data; the SPA renders them as text. Every request lands in
+ * the tool audit trail (src/audit.ts).
  */
 
 // GraphReader's limits (apps/core/src/graph/read.ts).
@@ -272,9 +274,30 @@ function methodNotAllowed(allow: string): Response {
   return response;
 }
 
+// A cursor of the audit trail is a row ID (apps/core/src/audit.ts).
+const AUDIT_CURSOR = /^[1-9][0-9]{0,15}$/;
+const AUDIT_MAX = 200;
+
+function auditQuery(url: URL): { limit?: number; cursor?: string } {
+  const query: { limit?: number; cursor?: string } = {};
+  const limit = integer(url, "limit", 1, AUDIT_MAX);
+  if (limit !== undefined) query.limit = limit;
+  const cursor = url.searchParams.get("cursor");
+  if (cursor !== null) {
+    if (!AUDIT_CURSOR.test(cursor)) throw new BadRequest("invalid_cursor");
+    query.cursor = cursor;
+  }
+  return query;
+}
+
+/**
+ * `read`: any identity; `download`: any identity, not for another site;
+ * `admin_read`: admins only; `admin`: admins only, JSON body from this origin.
+ */
 type Route =
   | { kind: "read"; run: () => Promise<unknown> }
   | { kind: "download"; run: () => Promise<Response> }
+  | { kind: "admin_read"; run: () => Promise<unknown> }
   | { kind: "admin"; run: () => Promise<Response> };
 
 function route(
@@ -289,6 +312,12 @@ function route(
   const only = (expected: string, r: Route) =>
     method === expected ? r : methodNotAllowed(expected);
 
+  if (collection === "audit" && accountId === undefined) {
+    return only("GET", {
+      kind: "admin_read",
+      run: () => coreAdmin(env).listToolCalls(auditQuery(url)),
+    });
+  }
   if (collection === "accounts" && accountId === undefined) {
     if (method === "GET") return { kind: "read", run: () => reader.listAccounts() };
     if (method === "POST") return { kind: "admin", run: () => onboard(request, env) };
@@ -337,9 +366,34 @@ function route(
   }
 }
 
-export async function handleApi(request: Request, env: Env, identity: Identity): Promise<Response> {
+/**
+ * Answers an API request of an identity that passed the Access check, then
+ * records it in the tool audit trail without holding up the answer.
+ */
+export async function handleApi(
+  request: Request,
+  env: Env,
+  identity: Identity,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const parts = new URL(request.url).pathname.split("/").slice(2);
+  let status = 500;
+  try {
+    const response = await answer(request, env, identity, parts);
+    status = response.status;
+    return response;
+  } finally {
+    recordApiCall(env, ctx, identity, request, parts, status);
+  }
+}
+
+async function answer(
+  request: Request,
+  env: Env,
+  identity: Identity,
+  parts: string[],
+): Promise<Response> {
   const url = new URL(request.url);
-  const parts = url.pathname.split("/").slice(2);
   if (parts.length === 1 && parts[0] === "me") {
     if (request.method !== "GET") return methodNotAllowed("GET");
     return json({
@@ -358,6 +412,7 @@ export async function handleApi(request: Request, env: Env, identity: Identity):
       return await matched.run();
     }
     if (matched.kind === "download") return refuseCrossSiteRead(request) ?? (await matched.run());
+    if (matched.kind === "admin_read" && !identity.admin) return error(403, "admin_required");
     return found(await matched.run());
   } catch (cause) {
     if (cause instanceof BadRequest) return error(400, cause.message);

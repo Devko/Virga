@@ -40,6 +40,7 @@ export const paths = {
   finding: (id: string, fingerprint: string) =>
     `/accounts/${encodeURIComponent(id)}/finding?${new URLSearchParams({ fp: fingerprint })}`,
   onboarding: () => "/onboarding",
+  audit: () => "/audit",
 };
 
 export type Route =
@@ -47,6 +48,7 @@ export type Route =
   | { page: "account"; accountId: string }
   | { page: "finding"; accountId: string; fingerprint: string }
   | { page: "onboarding" }
+  | { page: "audit" }
   | { page: "not_found" };
 
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
@@ -55,6 +57,7 @@ export function match(url: URL): Route {
   const parts = url.pathname.split("/").filter((p) => p !== "");
   if (parts.length === 0) return { page: "accounts" };
   if (parts.length === 1 && parts[0] === "onboarding") return { page: "onboarding" };
+  if (parts.length === 1 && parts[0] === "audit") return { page: "audit" };
   if (parts[0] === "accounts" && parts[1] && ACCOUNT_ID.test(parts[1])) {
     const accountId = parts[1];
     if (parts.length === 2) return { page: "account", accountId };

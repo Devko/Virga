@@ -52,6 +52,7 @@ The identity comes from the token: `email` for users, `common_name` (the client 
 | `POST /api/accounts` | Admin: onboarding, body `{ accountId, token, profile, name?, cadenceHours? }` |
 | `POST /api/accounts/{id}/scan` | Admin: start a scan now: 202 `{ started: true, id }`; otherwise `{ started: false, reason, id }`, 404 for `unknown_account` and 409 for `removing`, `running` or `exists` |
 | `DELETE /api/accounts/{id}` | Admin: remove the account (offboarding), body `{ confirm: "<id>" }` |
+| `GET /api/audit?limit=&cursor=` | Admin: the tool audit trail, newest first: `{ entries, cursor }`, `limit` 1 to 200 (default 50); viewers and service tokens get 403 |
 
 An account that is not in the index answers 404; a failed RPC answers 502 `upstream_error` without detail. Responses are JSON with `Cache-Control: no-store`.
 
@@ -62,6 +63,10 @@ Removal (offboarding) needs the body `{ "confirm": "<account ID>" }`, so a reque
 The export answers with `Content-Disposition: attachment`, and with 403 `cross_origin` when `Sec-Fetch-Site` is present and not `same-origin` or `none`, or when an `Origin` is not the Worker's own: another site cannot start a download in the user's name. Strings from scanned accounts stay JSON strings; `<`, `>`, `&` and invisible formatting characters are written as JSON escapes, and `unmapped.virga.untrusted` names the fields that hold them.
 
 POST and DELETE requests need `Content-Type: application/json`, an `Origin` equal to the Worker's own origin, and no `Sec-Fetch-Site` other than `same-origin`. Bodies are capped at 16 KB.
+
+## Audit trail
+
+Every API request and every MCP tool call of an identity that passed the Access check lands in core's `tool_audit` table ([data model](../../docs/architecture/data-model.md#tool-audit-table)) through `Admin.recordToolCall`: the identity (email, or a service token's client ID), the channel (`ui` for requests with `Sec-Fetch-Site: same-origin`, `api` for other clients, `mcp`), the route template (`GET /api/accounts/{id}/findings`) or tool name, the account ID when it is a valid one, and the HTTP status or the tool's outcome (`ok`, `not_found`, `error`, or `refused` when a `tools/call` request runs no tool). Never the raw URL, a body, a header value, a token or a string from a scanned account. The write runs in `waitUntil` after the answer is ready; a failed write is logged by error name and never changes the answer. Requests that Access refused and the SPA's static files are not recorded. Core keeps the rows for 90 days. Admins read the trail at `GET /api/audit` and on the SPA's audit page.
 
 Every response carries `Content-Security-Policy` (`default-src 'none'`, scripts, styles, images and fonts from `'self'`, `frame-ancestors 'none'`, `base-uri 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, COOP and CORP `same-origin`, and HSTS.
 
@@ -77,13 +82,15 @@ Every response carries `Content-Security-Policy` (`default-src 'none'`, scripts,
 | `get_finding` | `account_id`, `fingerprint` |
 | `get_neighborhood` | `account_id`, `node_id`, `depth` (1 or 2), `limit` (1 to 100, default 40) |
 
+Each tool call lands in the audit trail (above). A `tools/call` request that runs no tool, for example an unknown tool, input that fails the schema or a foreign `Origin`, is recorded as `refused` once its answer has ended; a legacy batch of several calls records the tools that ran.
+
 Every result is a notice plus the data inside `<untrusted-data>`. The notice (also in the server instructions) tells the model that the values were written by whoever controls the scanned account and are data, not instructions. The JSON escapes `<`, `>` and `&`, so a value cannot close the block. Strings, lists, objects and nesting are capped, and the text is shrunk until it fits 100,000 characters. A browser `Origin` must be the Worker's own host, and no CORS headers are sent.
 
 MCP clients reach the Worker through Access like everyone else, for example with an Access service token (`CF-Access-Client-Id` and `CF-Access-Client-Secret`) allowed by a Service Auth policy.
 
 ## SPA
 
-React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage, the rules of the latest scan (hits, undecided rows, not evaluated with the missing inputs, and the error of a failed rule as untrusted text) and findings (filters, paging, and an OCSF export of the filtered findings as JSON or NDJSON, saved part by part), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding and account removal for admins. Removal sits at the bottom of the account page behind a confirmation: the admin types the account ID, and the result says what each step removed and that the token still has to be revoked in the scanned account. When core does not finish, the result says that the account stays listed as removing until the removal is repeated, and that repeating is safe. An account with status `removing` (R5-08) is marked "removal pending" in the accounts list; its summary shows a "Removal pending" notice, its page has no Start scan, and the removal button reads "Remove account again…". Start scan names each refusal, `removing` included. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
+React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage, the rules of the latest scan (hits, undecided rows, not evaluated with the missing inputs, and the error of a failed rule as untrusted text) and findings (filters, paging, and an OCSF export of the filtered findings as JSON or NDJSON, saved part by part), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), onboarding and account removal for admins, and the audit trail for admins (`/audit`, linked in the header, 100 entries at a time). Removal sits at the bottom of the account page behind a confirmation: the admin types the account ID, and the result says what each step removed and that the token still has to be revoked in the scanned account. When core does not finish, the result says that the account stays listed as removing until the removal is repeated, and that repeating is safe. An account with status `removing` (R5-08) is marked "removal pending" in the accounts list; its summary shows a "Removal pending" notice, its page has no Start scan, and the removal button reads "Remove account again…". Start scan names each refusal, `removing` included. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
 
 ## Known limits (v1)
 
@@ -96,5 +103,5 @@ React and Vite under `spa/`, built to `dist/client`: accounts, account summary w
 
 `pnpm --filter @virga/web test` builds the SPA, then runs two Vitest projects:
 
-- `worker` in workerd (`@cloudflare/vitest-plugin`). [test/worker.ts](test/worker.ts) adds stub `GraphReader`, `Admin` and `TokenIntake` entrypoints behind the service bindings; the stubs return hostile strings and record their calls. Tests sign tokens with a generated RSA key and answer the certs endpoint through a `fetch` spy; nothing leaves the process. They cover the Access check, the API, CSRF, onboarding (the token never appears in responses or logs), the MCP tools and the built SPA behind the check.
+- `worker` in workerd (`@cloudflare/vitest-plugin`). [test/worker.ts](test/worker.ts) adds stub `GraphReader`, `Admin` and `TokenIntake` entrypoints behind the service bindings; the stubs return hostile strings and record their calls. Tests sign tokens with a generated RSA key and answer the certs endpoint through a `fetch` spy; nothing leaves the process. They cover the Access check, the API, CSRF, onboarding (the token never appears in responses or logs), the OCSF export, the audit trail, the MCP tools and the built SPA behind the check.
 - `spa` in Node: views rendered with `react-dom/server` and hostile data, and a scan of the SPA sources for HTML sinks.

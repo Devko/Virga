@@ -7,6 +7,7 @@ import type {
   Neighborhood,
   Profile,
   ScanSummaryView,
+  ToolCallPage,
   TriggerResult,
 } from "../src/rpc.ts";
 
@@ -156,4 +157,9 @@ export const api = {
   onboard: (input: OnboardingInput) =>
     send<{ account: AccountRow; intake: IntakeView }>("POST", "/api/accounts", input),
   remove: (id: string) => send<RemovalView>("DELETE", account(id), { confirm: id }),
+  /** The tool audit trail, newest first; admins only. */
+  audit: (cursor?: string) =>
+    request<ToolCallPage>(
+      `/api/audit?${new URLSearchParams(cursor ? { limit: "100", cursor } : { limit: "100" })}`,
+    ),
 };

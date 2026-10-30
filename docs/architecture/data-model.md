@@ -198,3 +198,24 @@ The rule is [`rules/CF-001/rule.sql`](../../rules/CF-001/rule.sql). Compared wit
 6. **Unknown entry points** (version 2). A Worker that only entry points with exposure `unknown` serve would qualify if one were public, so it returns an undecided row. The fixture `undecided-unknown-entry-point` covers it.
 
 Not in the query: the spec's "a matching WAF virtual patch lowers one level". That needs WAF rule-to-CVE matching. It belongs in a severity modifier step after the query (D-13).
+
+## Tool audit table
+
+The tool audit trail ([design spec](../concept/design-spec.md), "Audit trail") is not part of any account's graph. It lives in the account index, the core Worker's D1 database `virga-index`, as `tool_audit` ([migration 0003](../../apps/core/migrations/0003_tool_audit.sql)). The web Worker writes one row per JSON API request and per MCP tool call, through `Admin.recordToolCall`, after its answer is ready; a write that fails is logged by error name and does not change the answer. A request that the Access check refuses is not recorded, and neither are the SPA's static files.
+
+| Column | Value |
+| --- | --- |
+| `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`; newest first is `ORDER BY id DESC`, and ids are never reused |
+| `at` | When core wrote the row, epoch milliseconds |
+| `identity` | The Access identity: a lowercase email, or a service token's client ID (`common_name`); 1 to 320 characters, no spaces, controls or bidi characters |
+| `identity_type` | `email` or `service_token` |
+| `channel` | `ui` (`Sec-Fetch-Site: same-origin`, the SPA), `api` (other API clients) or `mcp` (tool calls). Clients can set the header, so the channel describes the call; only the identity is verified |
+| `action` | The route template, such as `GET /api/accounts/{id}/findings`, `GET unmatched` for a path that matched no route, or the MCP tool name (`unknown_tool` for a name that is not one). Never the raw URL or query; at most 100 characters of `[A-Za-z0-9_ /{}.-]` |
+| `account_id` | The account ID from the path or the tool's `account_id` argument when it is 32 hex characters, else `NULL` |
+| `outcome` | The HTTP status for API requests; `ok`, `not_found`, `error` or `refused` for tool calls (`refused`: no tool ran, for example an unknown tool, invalid input or a foreign `Origin`); at most 32 characters of `[a-z0-9_]` |
+
+No column holds a request body, a token, a header value or a string from a scanned account: `Admin.recordToolCall` checks every field against the shapes above and refuses the row otherwise, and `CHECK` constraints repeat the bounds.
+
+Retention is 90 days. The hourly `DispatchWorkflow` runs a step `audit:purge` after it has started the due scans: it deletes rows older than 90 days before the dispatch time, oldest first, in batches of 5,000 and at most 20 batches per run, so a backlog clears over the following hours. A purge that still fails after the step's retries is logged and leaves the dispatch result intact (`auditPurged: null`).
+
+`Admin.listToolCalls({ limit, cursor })` returns `{ entries, cursor }`, newest first, `limit` 1 to 200 (default 50); `cursor` is the `id` of the last row of the previous page. The web Worker serves it to admins only (`GET /api/audit`).

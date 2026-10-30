@@ -9,6 +9,7 @@ import {
   PROFILES,
   type Profile,
   type ScanSummaryView,
+  type ToolCallRow,
   type TriggerResult,
 } from "../src/rpc.ts";
 import {
@@ -26,6 +27,7 @@ import { Link, paths } from "./router.tsx";
 import { Text } from "./text.tsx";
 import {
   AccountsTable,
+  AuditTable,
   FindingHeader,
   FindingsTable,
   IntakeResult,
@@ -529,6 +531,71 @@ export function FindingPage({
           );
         }}
       </Pending>
+    </>
+  );
+}
+
+interface AuditList {
+  entries: ToolCallRow[];
+  cursor: string | null;
+  loading: boolean;
+  error?: Error;
+}
+
+/**
+ * The tool audit trail for admins: every API request and MCP tool call,
+ * newest first, 100 at a time. The API refuses everyone else with 403.
+ */
+export function AuditPage({ me }: { me: Me | undefined }) {
+  const [list, setList] = useState<AuditList>({ entries: [], cursor: null, loading: true });
+  const admin = me?.admin === true;
+
+  const load = useCallback(async (cursor?: string) => {
+    setList((l) => ({ ...l, loading: true, error: undefined }));
+    try {
+      const page = await api.audit(cursor);
+      setList((l) => ({
+        entries: cursor ? [...l.entries, ...page.entries] : page.entries,
+        cursor: page.cursor,
+        loading: false,
+      }));
+    } catch (error) {
+      setList((l) => ({
+        ...l,
+        loading: false,
+        error: error instanceof Error ? error : new Error("failed"),
+      }));
+    }
+  }, []);
+  useEffect(() => {
+    if (admin) void load();
+  }, [admin, load]);
+
+  if (me && !admin) {
+    return <p className="problem">Only administrators can read the audit trail.</p>;
+  }
+  return (
+    <>
+      <h1>Audit trail</h1>
+      <p className="muted">
+        Every API request and MCP tool call, with the Access identity, the route or tool, the
+        account and the outcome. Entries are kept for 90 days.
+      </p>
+      {list.loading && list.entries.length === 0 ? (
+        <p className="muted">Loading…</p>
+      ) : (
+        <AuditTable entries={list.entries} />
+      )}
+      {list.error && <Problem error={list.error} />}
+      {list.cursor && (
+        <button
+          type="button"
+          disabled={list.loading}
+          onClick={() => load(list.cursor ?? undefined)}
+        >
+          {list.loading ? "Loading…" : "Older entries"}
+        </button>
+      )}
     </>
   );
 }

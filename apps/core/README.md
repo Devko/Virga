@@ -9,7 +9,7 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
 | `ACCOUNT_GRAPH` | `AccountGraph`, named by account ID |
 | `SCAN_WORKFLOW` | `ScanWorkflow` (`virga-scan`), params `{ accountId }` |
 | `DISPATCH_WORKFLOW` | `DispatchWorkflow` (`virga-dispatch`), `schedules: ["17 * * * *"]` (UTC) |
-| `INDEX` | D1 `virga-index`: `accounts` and `scan_runs` ([migrations/](migrations/)) |
+| `INDEX` | D1 `virga-index`: `accounts`, `scan_runs` and `tool_audit` ([migrations/](migrations/)) |
 | `BROKER` | Service binding to `virga-broker`, entrypoint `ApiCaller`; the only way to the Cloudflare API |
 
 ## Scan
@@ -35,13 +35,17 @@ Only the running scan that is current in the graph may write (R2-07). `writeChun
 
 `DispatchWorkflow` runs on its schedule and starts the scans that are due: active accounts whose last scan started at least `cadence_hours` UTC hour slots ago, without a running scan. Each step `dispatch:<n>` selects 100 accounts and calls `createBatch`. Instance IDs are `scan-<accountId>-<yyyymmddhh>`, so a retried step or a second dispatch in the same hour skips existing instances (code 10405) instead of starting a scan twice.
 
+Then the step `audit:purge` deletes tool audit rows older than 90 days, at most 20 batches of 5,000 per run ([src/audit.ts](src/audit.ts)). A purge that still fails after the step's retries is logged and returns `auditPurged: null` in the result; it does not fail the dispatch.
+
 ## Entrypoints
 
-`GraphReader` (read-only, for the web Worker): `listAccounts()` (every account in the index by name, then ID, at most 1,000; it reads only the index), `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account. Findings are read as of the call: a suppressed finding whose `suppressed_until` is `null` or not after that time is `open`, without suppression fields, in the status filter, the counts and `getFinding`, even while its rule is not evaluated (R3-07). Reads write nothing.
+`GraphReader` (read-only, for the web Worker): `listAccounts()` (every account in the index by name, then ID, at most 1,000; it reads only the index), `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })` (each finding with its `subject`, the node of `finding_nodes` with role `subject`), `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account. Findings are read as of the call: a suppressed finding whose `suppressed_until` is `null` or not after that time is `open`, without suppression fields, in the status filter, the counts and `getFinding`, even while its rule is not evaluated (R3-07). Reads write nothing.
 
 `getScanSummary` returns `{ account, lastRun, graph }`: the index row, the latest `scan_runs` row, and the graph's summary. `graph.ruleRuns` lists, per rule of the latest scan, its status, hits (decided rows), undecided rows, missing inputs and the error text (`Untrusted`, at most 500 characters). A rule that is not evaluated, or an undecided row, is not a pass.
 
 `Admin`: `addAccount({ id, name, cadenceHours, profile })`, which also calls the account's graph object to clear its `removed` marker (`AccountGraph.clearRemoved`), so an account that is added again can be scanned again; `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless the account is unknown (`unknown_account`), being removed (`removing`) or has a scan running (`running`), and `removeAccount(accountId)`. `addAccount` on an account that is still `removing` finishes the removal first, so the account starts from nothing.
+
+`Admin` also keeps the tool audit trail (`tool_audit`, migration 0003, [docs/architecture/data-model.md](../../docs/architecture/data-model.md#tool-audit-table)): `recordToolCall({ identity, identityType, channel, action, accountId, outcome })` checks every field against a fixed shape and writes one row at the time of the call, and `listToolCalls({ limit, cursor })` returns a page, newest first. The web Worker records each API request and MCP tool call, and shows the trail to admins.
 
 `removeAccount` runs in an order that never hides an account whose graph is left (R5-08):
 
