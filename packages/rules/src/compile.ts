@@ -1,7 +1,7 @@
 import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RESOURCE_CLASSES } from "@virga/collectors";
-import { migrate } from "@virga/graph";
+import { migrate, type Row } from "@virga/graph";
 import { openNodeDatabase } from "@virga/graph/node";
 import { evaluateFixture, loadFixture } from "./fixtures.ts";
 import { parseFixture, parseRule } from "./parse.ts";
@@ -11,6 +11,47 @@ const REQUIRED_COLUMNS = ["rule_id", "fingerprint", "severity", "subject_id"];
 
 /** Inputs a rule may require: resource classes plus inputs derived by scan steps. */
 const KNOWN_INPUTS = new Set<string>([...RESOURCE_CLASSES, "exposure", "packages", "vulns"]);
+
+/**
+ * Inputs a rule needs because it reads a table, whatever its front matter
+ * says (R4-04). Exposure without Access coverage is no decision, so reading
+ * exposure needs both. Which classes `nodes`, `edges` and `signals` hold
+ * depends on their rows, so a table alone does not tell.
+ */
+const TABLE_INPUTS: Record<string, readonly string[]> = {
+  exposure: ["access", "exposure"],
+  vulns: ["vulns"],
+  insights: ["insights"],
+};
+
+/** Opcodes that open a b-tree of the database for reading: p2 is its root page, p3 the database. */
+const READ_OPCODES = new Set(["OpenRead", "ReopenIdx"]);
+
+/**
+ * Opcodes besides OpenWrite and Clear that change the database. Insert and
+ * Delete also fill the temporary tables of a plain SELECT, so a write shows
+ * as one of these, OpenWrite, Clear or a write transaction.
+ */
+const WRITE_OPCODES = new Set([
+  "CreateBtree",
+  "Destroy",
+  "DropIndex",
+  "DropTable",
+  "DropTrigger",
+  "IncrVacuum",
+  "ParseSchema",
+  "SetCookie",
+  "VCreate",
+  "VDestroy",
+  "VUpdate",
+  "Vacuum",
+]);
+
+/**
+ * Durable Object SQLite refuses a statement whose program grows past about
+ * 21,500 operations (SQLITE_NOMEM, measured 2026-10-30); Node SQLite does not.
+ */
+const MAX_PROGRAM_OPS = 20_000;
 
 type FixtureKind = "positive" | "negative" | "undecided";
 const FIXTURE_FILE = /^(positive|negative|undecided)-.+\.yaml$/;
@@ -34,6 +75,7 @@ export async function compileRules(rulesDir: string): Promise<CompileResult> {
 
   for (const dir of dirs) {
     let rule: CompiledRule;
+    let reads: Set<string>;
     try {
       rule = parseRule(readFileSync(join(rulesDir, dir, "rule.sql"), "utf8"), `${dir}/rule.sql`);
       if (rule.id !== dir)
@@ -42,12 +84,23 @@ export async function compileRules(rulesDir: string): Promise<CompileResult> {
         if (!KNOWN_INPUTS.has(input))
           throw new Error(`${dir}/rule.sql: unknown input '${input}' in requires`);
       }
-      checkAgainstSchema(rule);
+      reads = checkAgainstSchema(rule);
     } catch (error) {
       errors.push((error as Error).message);
       continue;
     }
-    rules.push(rule);
+    const derived = [...reads].filter((table) => table in TABLE_INPUTS).sort();
+    const missing = [...new Set(derived.flatMap((table) => TABLE_INPUTS[table] ?? []))]
+      .filter((input) => !rule.requires.includes(input))
+      .sort();
+    if (missing.length > 0) {
+      const list = missing.join(", ");
+      errors.push(
+        `${dir}/rule.sql: reads ${derived.join(", ")}, so requires must also list ${list}`,
+      );
+    } else {
+      rules.push(rule);
+    }
 
     const fixtureDir = join(rulesDir, dir, "fixtures");
     let entries: Dirent[];
@@ -73,9 +126,14 @@ export async function compileRules(rulesDir: string): Promise<CompileResult> {
     if (!kinds.has("positive") || !kinds.has("negative")) {
       errors.push(`${dir}: needs at least one positive-*.yaml and one negative-*.yaml fixture`);
     }
-    if (rule.requires.includes("exposure") && !kinds.has("undecided")) {
+    const exposure = reads.has("exposure")
+      ? "reads"
+      : rule.requires.includes("exposure")
+        ? "requires"
+        : null;
+    if (exposure && !kinds.has("undecided")) {
       errors.push(
-        `${dir}: requires exposure, so it needs an undecided-*.yaml fixture for unknown exposure`,
+        `${dir}: ${exposure} exposure, so it needs an undecided-*.yaml fixture for unknown exposure`,
       );
     }
     for (const { file, kind } of files) {
@@ -119,20 +177,62 @@ function checkFixtureKind(kind: FixtureKind, fixture: RuleFixture): string | nul
   return null;
 }
 
-/** Prepares the statement against the current schema and checks the output columns. */
-function checkAgainstSchema(rule: CompiledRule): void {
+interface ProgramStep {
+  opcode: string;
+  p1: number;
+  p2: number;
+  p3: number;
+}
+
+/**
+ * Prepares the statement against the current schema, checks the output
+ * columns, and returns the tables its program reads. A statement that
+ * writes is refused: a WITH clause can front INSERT, UPDATE or DELETE with
+ * RETURNING, which passes the SELECT/WITH check of the parser (R4-05).
+ */
+function checkAgainstSchema(rule: CompiledRule): Set<string> {
   const db = openNodeDatabase();
   try {
     migrate(db);
     let columns: string[];
+    let program: ProgramStep[];
     try {
+      const params = rule.paramOrder.map((name) => rule.params[name] ?? null);
+      program = db.query<ProgramStep & Row>(`EXPLAIN ${rule.sql}`, ...params);
       columns = db.columns(rule.sql);
     } catch (error) {
       throw new Error(`${rule.id}: ${(error as Error).message}`);
     }
+    const tables = new Map<number, string>([[1, "sqlite_schema"]]);
+    for (const row of db.query<{ rootpage: number; tbl_name: string }>(
+      "SELECT rootpage, tbl_name FROM sqlite_schema WHERE rootpage > 0",
+    )) {
+      tables.set(row.rootpage, row.tbl_name);
+    }
+    const table = (root: number, database: number) =>
+      (database === 0 && tables.get(root)) || `root page ${root} of database ${database}`;
+
+    const reads = new Set<string>();
+    for (const step of program) {
+      // DELETE without WHERE empties the table with Clear (root page in p1).
+      if (step.opcode === "OpenWrite" || step.opcode === "Clear") {
+        const [root, database] = step.opcode === "Clear" ? [step.p1, step.p2] : [step.p2, step.p3];
+        throw new Error(`${rule.id}: writes to ${table(root, database)}; a rule may only read`);
+      }
+      if (WRITE_OPCODES.has(step.opcode) || (step.opcode === "Transaction" && step.p2 !== 0)) {
+        throw new Error(`${rule.id}: changes the database (${step.opcode}); a rule may only read`);
+      }
+      if (READ_OPCODES.has(step.opcode)) reads.add(table(step.p2, step.p3));
+    }
+    if (program.length > MAX_PROGRAM_OPS) {
+      throw new Error(
+        `${rule.id}: compiles to ${program.length} operations; Durable Object SQLite accepts about ${MAX_PROGRAM_OPS}`,
+      );
+    }
     for (const column of REQUIRED_COLUMNS) {
       if (!columns.includes(column)) throw new Error(`${rule.id}: output lacks column ${column}`);
     }
+    return reads;
   } finally {
     db.close();
   }
@@ -143,6 +243,8 @@ async function runFixture(rule: CompiledRule, fixture: RuleFixture) {
   try {
     migrate(db);
     await loadFixture(db, fixture);
+    // The program check refuses writes; this refuses any it might miss.
+    db.script("PRAGMA query_only = ON");
     return evaluateFixture(db, rule, fixture);
   } finally {
     db.close();
