@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (git-ignored), or set TF_VAR_<name> in the
+# environment instead. Never commit real IDs. The API token is not a variable:
+# it comes from CLOUDFLARE_API_TOKEN.
+
+account_id             = "<32-character hex ID of the dedicated test account>"
+zone_id                = "<32-character hex ID of the range's zone>"
+zone_name              = "<the range's zone, for example range.example.org>"
+dedicated_test_account = true
+
+# Optional:
+# name_prefix          = "vtr"
+# access_allowed_email = "nobody@example.com"
