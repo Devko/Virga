@@ -196,6 +196,47 @@ export function wranglerEnv(
   return { ...out, ...QUIET_VARS, ...API_VARS };
 }
 
+/** host:port of a proxy URL; never the user name or password in it. */
+function proxyHost(value: string): string {
+  // Without a scheme, `proxy:3128` would parse as scheme `proxy:`.
+  for (const candidate of [value, `http://${value}`]) {
+    try {
+      const url = new URL(candidate);
+      if (url.host === "") continue;
+      return url.username !== "" || url.password !== ""
+        ? `${url.host} (credentials not shown)`
+        : url.host;
+    } catch {}
+  }
+  return "(not a URL)";
+}
+
+/**
+ * The proxy settings Wrangler gets, for the deploy to print. A proxy sees
+ * Wrangler's connections; one that presents certificates from
+ * NODE_EXTRA_CA_CERTS sees the token too.
+ */
+export function proxyNotice(env: Env, platform: Platform = process.platform): string[] {
+  const fold = caseOf(platform);
+  const order = PROXY_VARS.map(fold);
+  const names = Object.keys(env)
+    .filter((name) => order.includes(fold(name)) && (env[name] ?? "") !== "")
+    .sort((a, b) => order.indexOf(fold(a)) - order.indexOf(fold(b)));
+  if (names.length === 0) return [];
+  const show = (name: string, value: string) => {
+    const kind = name.toUpperCase();
+    if (kind === "NO_PROXY") return value;
+    if (kind === "NODE_EXTRA_CA_CERTS") {
+      return `${value}; Node trusts these certificates as well, so a proxy with one of their keys can read the API token`;
+    }
+    return proxyHost(value);
+  };
+  return [
+    "Proxy settings passed to Wrangler:",
+    ...names.map((name) => `  ${name}: ${show(name, env[name] ?? "")}`),
+  ];
+}
+
 const LOADS_LIBRARY =
   "it loads a library into every process the deploy starts, and into the deploy";
 

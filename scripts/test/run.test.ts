@@ -10,6 +10,7 @@ import {
   droppedSettings,
   parseJsonOutput,
   processRunner,
+  proxyNotice,
   redact,
   unsafeVars,
   wranglerEnv,
@@ -223,6 +224,53 @@ describe("droppedSettings", () => {
         "linux",
       ),
     ).toEqual([]);
+  });
+});
+
+describe("proxyNotice", () => {
+  const CA_NOTE =
+    "/etc/ssl/proxy-ca.pem; Node trusts these certificates as well, so a proxy with one of their keys can read the API token";
+
+  it("R5-03: names the proxy settings Wrangler gets, with the proxy's host and never its credentials", () => {
+    const lines = proxyNotice(
+      {
+        http_proxy: "proxy.example:8080",
+        HTTPS_PROXY: "http://alice:s3cret-pass@proxy.example:3128",
+        NO_PROXY: "localhost,.example",
+        NODE_EXTRA_CA_CERTS: "/etc/ssl/proxy-ca.pem",
+        PATH: "/usr/bin",
+        HTTP_PROXY: "",
+      },
+      "linux",
+    );
+    expect(lines).toEqual([
+      "Proxy settings passed to Wrangler:",
+      "  HTTPS_PROXY: proxy.example:3128 (credentials not shown)",
+      "  http_proxy: proxy.example:8080",
+      "  NO_PROXY: localhost,.example",
+      `  NODE_EXTRA_CA_CERTS: ${CA_NOTE}`,
+    ]);
+    expect(lines.join("\n")).not.toMatch(/alice|s3cret/);
+  });
+
+  it("R5-03: prints no value it cannot read as a URL", () => {
+    expect(proxyNotice({ https_proxy: "alice:s3cret@" }, "linux")).toEqual([
+      "Proxy settings passed to Wrangler:",
+      "  https_proxy: (not a URL)",
+    ]);
+    expect(proxyNotice({ https_proxy: "alice:s3cret@proxy.example:3128" }, "linux")).toEqual([
+      "Proxy settings passed to Wrangler:",
+      "  https_proxy: proxy.example:3128 (credentials not shown)",
+    ]);
+  });
+
+  it("R5-03: is empty without proxy settings, and matches without case on Windows", () => {
+    expect(proxyNotice({ PATH: "/usr/bin", NO_PROXY: "" }, "linux")).toEqual([]);
+    expect(proxyNotice({ Https_Proxy: "http://proxy.example:3128" }, "linux")).toEqual([]);
+    expect(proxyNotice({ Https_Proxy: "http://proxy.example:3128" }, "win32")).toEqual([
+      "Proxy settings passed to Wrangler:",
+      "  Https_Proxy: proxy.example:3128",
+    ]);
   });
 });
 

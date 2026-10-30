@@ -115,6 +115,17 @@ describe("deploy.ts", () => {
     }
   });
 
+  it("R5-03: prints the proxy settings it passes to Wrangler, without credentials", () => {
+    const result = deploy(["--dry-run"], {
+      HTTPS_PROXY: "http://alice:s3cret-pass@proxy.example:3128",
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/proxy-ca.pem",
+    });
+    expect(result.stdout).toContain(
+      "Proxy settings passed to Wrangler:\n  HTTPS_PROXY: proxy.example:3128 (credentials not shown)\n  NODE_EXTRA_CA_CERTS: /etc/ssl/proxy-ca.pem;",
+    );
+    expect(result.stdout + result.stderr).not.toMatch(/alice|s3cret/);
+  });
+
   it("R5-03: names the Cloudflare and Wrangler variables it does not pass to Wrangler", () => {
     const result = deploy(["--dry-run"], {
       CLOUDFLARE_API_TOKEN: "the-deploy-token-value",

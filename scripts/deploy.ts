@@ -22,6 +22,7 @@ import {
   configOverrides,
   droppedSettings,
   processRunner,
+  proxyNotice,
   redact,
   UNSAFE_VARS,
   unsafeVars,
@@ -111,6 +112,7 @@ async function main(): Promise<number> {
     todo: [],
   };
 
+  for (const line of proxyNotice(process.env)) ctx.log(line);
   const dropped = droppedSettings(process.env, credentials);
   if (dropped.length > 0) {
     ctx.log(
