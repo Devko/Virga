@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 import { dotEnvFiles, dotEnvProblem } from "./run.ts";
 
@@ -48,6 +48,8 @@ export interface WorkerConfig {
   previewUrls: boolean | null;
   hasRoutes: boolean;
   hasAssets: boolean;
+  /** `assets.directory` as written; Wrangler resolves it against the config's directory. */
+  assetsDirectory: string | null;
   /**
    * Every key in the config, parents before children, so that checkTopology
    * can refuse what it does not check (R5-02). The names inside `vars` are free.
@@ -137,7 +139,100 @@ export function readWorkerConfig(root: string, app: string): WorkerConfig | null
   } catch (error) {
     throw new ConfigError(`${where}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return parseWorkerConfig(raw, { app, dir, configPath, where });
+  const config = parseWorkerConfig(raw, { app, dir, configPath, where });
+  const assets = assetsDirectoryProblem(config);
+  if (assets !== null) throw new ConfigError(`${where}: ${assets}`);
+  return config;
+}
+
+type AssetsSource = Pick<WorkerConfig, "app" | "dir" | "name" | "assetsDirectory">;
+
+/**
+ * `path` with every symlink followed, and the part that does not exist yet
+ * as written; or the link on the way that points nowhere.
+ */
+function realPath(path: string): { real: string } | { dangling: string } {
+  const rest: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      return { real: join(realpathSync(current), ...rest) };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" || dirname(current) === current) throw error;
+    }
+    if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return { dangling: current };
+    }
+    rest.unshift(basename(current));
+    current = dirname(current);
+  }
+}
+
+/**
+ * Why Wrangler would upload files from outside apps/<app> as the Worker's
+ * assets, or null. assets.directory is resolved as Wrangler resolves it,
+ * then with symlinks followed, so a link counts where it points. A directory
+ * the build has yet to create is checked as written (R5-03).
+ */
+export function assetsDirectoryProblem(worker: AssetsSource): string | null {
+  const directory = worker.assetsDirectory;
+  if (directory === null) return null;
+  const at = `assets.directory "${directory}"`;
+  const app = `apps/${worker.app}`;
+  let appDir: string;
+  let resolved: ReturnType<typeof realPath>;
+  try {
+    appDir = realpathSync(worker.dir);
+    resolved = realPath(resolve(worker.dir, directory));
+  } catch (error) {
+    return `${at} cannot be resolved: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if ("dangling" in resolved) {
+    return `${at} passes through ${resolved.dangling}, a symlink to a path that does not exist. Remove the link`;
+  }
+  const inside = relative(appDir, resolved.real);
+  if (inside === "") {
+    return `${at} is ${app} itself; Wrangler would upload its sources and config with ${worker.name}. Use a directory below it, such as ./dist/client`;
+  }
+  if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
+    return `${at} resolves to ${resolved.real} (symlinks followed), outside ${app}; Wrangler would upload what it holds with ${worker.name}. Keep the assets in a directory below ${app}`;
+  }
+  return null;
+}
+
+const SHOWN_LINKS = 5;
+
+/**
+ * Symlinks in the assets directory, once the build has filled it. Wrangler
+ * uploads the file a link points to and the files under a linked directory,
+ * wherever they are, so the assets must be plain files and directories.
+ */
+export function assetsLinkProblem(worker: AssetsSource): string | null {
+  if (worker.assetsDirectory === null) return null;
+  const dir = resolve(worker.dir, worker.assetsDirectory);
+  if (!existsSync(dir)) return null;
+  const at = `assets.directory "${worker.assetsDirectory}"`;
+  const links: string[] = [];
+  try {
+    const pending = [dir];
+    for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const path = join(current, entry.name);
+        if (entry.isSymbolicLink()) links.push(path);
+        else if (entry.isDirectory()) pending.push(path);
+      }
+    }
+  } catch (error) {
+    return `${at} cannot be read: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (links.length === 0) return null;
+  const shown = links
+    .map((path) => join("apps", worker.app, relative(worker.dir, path)))
+    .sort()
+    .slice(0, SHOWN_LINKS);
+  const more = links.length > SHOWN_LINKS ? ` and ${links.length - SHOWN_LINKS} more` : "";
+  return `${at} holds symlinks, whose targets Wrangler would upload: ${shown.join(", ")}${more}. Replace them with the files`;
 }
 
 interface Source {
@@ -233,6 +328,10 @@ export function parseWorkerConfig(raw: unknown, source: Source): WorkerConfig {
     classBinding(w, `workflows[${i}]`, "binding"),
   );
 
+  const assets = raw.assets;
+  if (assets !== undefined && !isRecord(assets)) fail("assets must be an object");
+  const assetsDirectory = isRecord(assets) ? str(assets, "directory", "assets") : null;
+
   const vars = raw.vars === undefined ? {} : raw.vars;
   if (!isRecord(vars)) fail("vars must be an object");
 
@@ -264,6 +363,7 @@ export function parseWorkerConfig(raw: unknown, source: Source): WorkerConfig {
     previewUrls,
     hasRoutes: raw.routes !== undefined || raw.route !== undefined,
     hasAssets: raw.assets !== undefined,
+    assetsDirectory,
     keys: keyPaths(raw),
     services,
     d1,

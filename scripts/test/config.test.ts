@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -122,6 +122,82 @@ describe("readWorkerConfig", () => {
     app({ "wrangler.jsonc": `{ "name": "virga-web", "workers_dev": false, "workers_dev": true }` });
     expect(() => readWorkerConfig(root, "web")).toThrow(/duplicate key "workers_dev"/);
   });
+
+  /** What readWorkerConfig says about apps/web with this assets.directory: null when it accepts it. */
+  const assets = (directory: string): string | null => {
+    const config = { name: "virga-web", assets: { directory } };
+    writeFileSync(join(root, "apps", "web", "wrangler.jsonc"), JSON.stringify(config));
+    try {
+      readWorkerConfig(root, "web");
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  };
+  const outside = (directory: string, real: string) =>
+    `apps/web/wrangler.jsonc: assets.directory "${directory}" resolves to ${real} (symlinks followed), outside apps/web; Wrangler would upload what it holds with virga-web`;
+
+  it("R5-03: refuses an assets.directory that climbs out of the app directory", () => {
+    app({});
+    const real = realpathSync(root);
+    expect(assets("../../outside")).toContain(outside("../../outside", join(real, "outside")));
+    expect(assets("./dist/../../core/dist")).toContain(
+      outside("./dist/../../core/dist", join(real, "apps", "core", "dist")),
+    );
+    expect(assets("..")).toContain(outside("..", join(real, "apps")));
+  });
+
+  it("R5-03: refuses an absolute assets.directory outside the app directory", () => {
+    app({});
+    const real = realpathSync(root);
+    expect(assets(join(root, "outside"))).toContain(
+      outside(join(root, "outside"), join(real, "outside")),
+    );
+    expect(assets(realpathSync(tmpdir()))).toContain(
+      outside(realpathSync(tmpdir()), realpathSync(tmpdir())),
+    );
+    // An absolute path below the app directory is fine.
+    expect(assets(join(root, "apps", "web", "dist"))).toBeNull();
+  });
+
+  it("R5-03: follows symlinks: a link takes the assets wherever it points", () => {
+    app({});
+    const real = realpathSync(root);
+    mkdirSync(join(root, "outside"));
+    // A parent of the directory, before the build creates the rest.
+    symlinkSync(join(root, "outside"), join(root, "apps", "web", "dist"));
+    expect(assets("./dist/client")).toContain(
+      outside("./dist/client", join(real, "outside", "client")),
+    );
+    // The directory itself, by a relative link.
+    symlinkSync("../../outside", join(root, "apps", "web", "public"));
+    expect(assets("public")).toContain(outside("public", join(real, "outside")));
+    // A link that points nowhere yet could point anywhere once the build runs.
+    symlinkSync(join(root, "missing"), join(root, "apps", "web", "gone"));
+    expect(assets("./gone/client")).toContain(
+      `apps/web/wrangler.jsonc: assets.directory "./gone/client" passes through ${join(root, "apps", "web", "gone")}, a symlink to a path that does not exist`,
+    );
+    // A link to another directory below the app directory is fine.
+    mkdirSync(join(root, "apps", "web", "build-output"));
+    symlinkSync("build-output", join(root, "apps", "web", "build"));
+    expect(assets("build")).toBeNull();
+  });
+
+  it("R5-03: refuses the app directory itself, which holds its sources and config", () => {
+    app({});
+    for (const directory of [".", "./", "src/.."]) {
+      expect(assets(directory)).toContain(
+        `apps/web/wrangler.jsonc: assets.directory "${directory}" is apps/web itself`,
+      );
+    }
+    expect(assets("")).toContain("assets.directory must be a non-empty string");
+  });
+
+  it("accepts an assets.directory below the app directory, also before the build creates it", () => {
+    app({});
+    expect(assets("./dist/client")).toBeNull();
+    expect(readWorkerConfig(REPO_ROOT, "web")?.assetsDirectory).toBe("./dist/client");
+  });
 });
 
 describe("parseWorkerConfig", () => {
@@ -133,6 +209,7 @@ describe("parseWorkerConfig", () => {
       previewUrls: null,
       hasRoutes: false,
       hasAssets: false,
+      assetsDirectory: null,
       keys: [["name"]],
       services: [],
       d1: [],
@@ -165,6 +242,7 @@ describe("parseWorkerConfig", () => {
     expect(config).toMatchObject({
       hasRoutes: true,
       hasAssets: true,
+      assetsDirectory: "dist",
       vars: { ADMIN_EMAILS: "a@example.com" },
       requiredSecrets: ["ACCESS_AUD"],
     });

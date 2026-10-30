@@ -3,8 +3,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -374,5 +376,46 @@ describe("deploy", () => {
     await expect(deploy(ctx, worker("broker"), { dryRun: false })).rejects.toThrow(
       /deploying virga-broker failed/,
     );
+  });
+
+  /** apps/web in the temporary root, with assets in dist/client. */
+  const webWithAssets = () => {
+    const dir = join(root, "apps", "web");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(root, "outside"));
+    writeFileSync(join(root, "outside", "id_ed25519"), "a private key");
+    return worker("web", { dir, hasAssets: true, assetsDirectory: "./dist/client" });
+  };
+
+  it("R5-03: checks assets.directory again after the build, before Wrangler reads it", async () => {
+    const web = webWithAssets();
+    // The build replaced dist with a link to a directory outside the app.
+    mkdirSync(join(root, "outside", "client"));
+    symlinkSync(join(root, "outside"), join(web.dir, "dist"));
+    const { ctx, calls } = fakeContext({});
+    await expect(deploy(ctx, web, { dryRun: true })).rejects.toThrow(
+      `apps/web/wrangler.jsonc: assets.directory "./dist/client" resolves to ${join(realpathSync(root), "outside", "client")} (symlinks followed), outside apps/web`,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("R5-03: refuses symlinks in the assets directory, whose targets Wrangler would upload", async () => {
+    const web = webWithAssets();
+    const client = join(web.dir, "dist", "client");
+    mkdirSync(join(client, "assets"), { recursive: true });
+    writeFileSync(join(client, "index.html"), "<!doctype html>");
+    // Wrangler uploads the file a link points to, and lists the files under a linked directory.
+    symlinkSync(join(root, "outside", "id_ed25519"), join(client, "assets", "key.txt"));
+    symlinkSync(join(root, "outside"), join(client, "home"));
+    const { ctx, calls } = fakeContext({});
+    await expect(deploy(ctx, web, { dryRun: true })).rejects.toThrow(
+      `apps/web/wrangler.jsonc: assets.directory "./dist/client" holds symlinks, whose targets Wrangler would upload: apps/web/dist/client/assets/key.txt, apps/web/dist/client/home`,
+    );
+    expect(calls).toEqual([]);
+
+    rmSync(join(client, "assets", "key.txt"));
+    rmSync(join(client, "home"));
+    await deploy(ctx, web, { dryRun: true });
+    expect(calls).toEqual(["web: deploy --autoconfig=false --dry-run"]);
   });
 });

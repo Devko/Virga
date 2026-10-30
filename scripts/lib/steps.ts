@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WorkerConfig } from "./config.ts";
+import { assetsDirectoryProblem, assetsLinkProblem, type WorkerConfig } from "./config.ts";
 import {
   MASTER_KEY_SECRET,
   type MasterKeySetup,
@@ -387,11 +387,17 @@ export async function build(ctx: Context, worker: WorkerConfig) {
   if (result.code !== 0) throw new DeployError(`building ${worker.name} failed`);
 }
 
+/**
+ * Runs `wrangler deploy`. The assets directory is checked again first: the
+ * build has filled it by now and may have replaced it with a link (R5-03).
+ */
 export async function deploy(
   ctx: Context,
   worker: WorkerConfig,
   options: { dryRun: boolean; secretsFile?: string },
 ) {
+  const assets = assetsDirectoryProblem(worker) ?? assetsLinkProblem(worker);
+  if (assets !== null) throw new DeployError(`${worker.displayPath}: ${assets}`);
   const args = ["deploy", "--autoconfig=false"];
   if (options.dryRun) args.push("--dry-run");
   if (options.secretsFile) args.push("--secrets-file", options.secretsFile);

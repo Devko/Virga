@@ -22,6 +22,7 @@ export function worker(app: string, overrides: Partial<WorkerConfig> = {}): Work
     previewUrls: app === "web" ? null : false,
     hasRoutes: false,
     hasAssets: false,
+    assetsDirectory: null,
     keys: [],
     services: [],
     d1: [],
