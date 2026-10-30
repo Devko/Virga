@@ -1,0 +1,279 @@
+:root {
+  --fg: #1d232b;
+  --muted: #66707c;
+  --bg: #ffffff;
+  --panel: #f4f6f8;
+  --line: #d9dee4;
+  --accent: #4a6fa5;
+  --problem: #b42318;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e4e8ec;
+    --muted: #9aa4af;
+    --bg: #15191e;
+    --panel: #1f252c;
+    --line: #333c46;
+    --accent: #8fb0dd;
+    --problem: #f97066;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+header {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+a,
+button.link {
+  color: var(--accent);
+}
+
+header > a {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+header .who {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 3rem;
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+button.link.selected {
+  font-weight: 700;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0.5rem 0;
+  overflow-wrap: anywhere;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin-top: 2rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.untrusted {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.problem {
+  color: var(--problem);
+}
+
+.notice {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.75rem;
+}
+
+.title-row,
+.actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem 1.5rem;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.count {
+  margin-right: 0.75rem;
+}
+
+.severity {
+  display: inline-block;
+  min-width: 4.5rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  text-align: center;
+  color: #fff;
+  background: #6b7785;
+}
+
+.severity-critical {
+  background: #9b1c1c;
+}
+
+.severity-high {
+  background: #c2410c;
+}
+
+.severity-medium {
+  background: #b7791f;
+}
+
+.severity-low {
+  background: #2f6f9f;
+}
+
+.coverage-complete {
+  color: #2f7d4a;
+}
+
+.coverage-no_permission,
+.coverage-partial,
+.coverage-error {
+  color: var(--problem);
+}
+
+.filters {
+  display: inline-flex;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  margin: 0 1rem 1rem 0;
+}
+
+.json-object {
+  margin: 0;
+}
+
+.json-object > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.75rem;
+}
+
+.json-object dt {
+  color: var(--muted);
+}
+
+.json-object dd {
+  margin: 0;
+}
+
+.json-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.literal {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.subjects {
+  padding-left: 1.25rem;
+}
+
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
+  gap: 1rem;
+}
+
+/* Cytoscape's own container rule; its injected <style> is not allowed by the CSP. */
+.__________cytoscape_container,
+.graph {
+  position: relative;
+}
+
+.graph {
+  height: 480px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.node-details h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 32rem;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.filters label {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+}
+
+@media (max-width: 800px) {
+  .graph-layout {
+    grid-template-columns: 1fr;
+  }
+}
