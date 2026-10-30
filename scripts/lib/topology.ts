@@ -126,7 +126,9 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
       if (worker.hasRoutes) error(`${at}: ${worker.name} must have no routes`);
     }
     if (worker.hasEnvironments) {
-      warning(`${at}: named environments are ignored; the top-level configuration is deployed`);
+      error(
+        `${at}: named environments (env) are not supported; the deploy checks only the top-level configuration, and Wrangler would deploy an environment chosen with --env or CLOUDFLARE_ENV unchecked`,
+      );
     }
   }
 

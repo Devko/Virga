@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { parseJsonOutput, processRunner, redact } from "../lib/run.ts";
+import { configOverrides, parseJsonOutput, processRunner, redact } from "../lib/run.ts";
 
 describe("redact", () => {
   it("removes known secrets and Cloudflare credential shapes", () => {
@@ -30,6 +30,16 @@ describe("parseJsonOutput", () => {
 
 const CONFIG = "/repo/apps/web/wrangler.jsonc";
 
+describe("configOverrides", () => {
+  it("R3-03: names the variables that make Wrangler deploy something else", () => {
+    expect(configOverrides({ CLOUDFLARE_ENV: "prod", WRANGLER_CI_OVERRIDE_NAME: "x" })).toEqual([
+      "CLOUDFLARE_ENV",
+      "WRANGLER_CI_OVERRIDE_NAME",
+    ]);
+    expect(configOverrides({ CLOUDFLARE_ENV: "", PATH: "/bin" })).toEqual([]);
+  });
+});
+
 describe("processRunner", () => {
   let dir = "";
   beforeAll(() => {
@@ -44,6 +54,8 @@ describe("processRunner", () => {
         'echo "args=$*"',
         // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
         'echo "token=${CLOUDFLARE_API_TOKEN:-unset} key=${CLOUDFLARE_API_KEY:-unset} metrics=$WRANGLER_SEND_METRICS"',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
+        'echo "env=${CLOUDFLARE_ENV-unset} name=${WRANGLER_CI_OVERRIDE_NAME-unset}"',
         'echo "warning cfat_0123456789abcdefghij" >&2',
         "exit 3",
       ].join("\n"),
@@ -73,7 +85,7 @@ describe("processRunner", () => {
     });
     expect(result.code).toBe(3);
     expect(result.stdout).toBe(
-      `args=deploy --dry-run --config ${CONFIG}\ntoken=unset key=unset metrics=false\n`,
+      `args=deploy --dry-run --config ${CONFIG}\ntoken=unset key=unset metrics=false\nenv=unset name=unset\n`,
     );
     // Captured stdout is not printed; stderr is, redacted.
     expect(printed).toEqual(["stderr:warning [redacted]"]);
@@ -109,6 +121,20 @@ describe("processRunner", () => {
     await expect(
       run({ bin: "wrangler", cwd: dir, config: "wrangler.jsonc", args: ["deploy"] }),
     ).rejects.toThrow(/absolute/);
+  });
+
+  it("R3-03: never passes a named environment or another Worker name to Wrangler", async () => {
+    vi.stubEnv("CLOUDFLARE_ENV", "prod");
+    vi.stubEnv("WRANGLER_CI_OVERRIDE_NAME", "");
+    const run = processRunner({ credentials: "token", secrets: () => [] });
+    const result = await run({
+      bin: "wrangler",
+      cwd: dir,
+      config: CONFIG,
+      args: [],
+      capture: true,
+    });
+    expect(result.stdout).toContain("env=unset name=unset");
   });
 
   it("asks for pnpm install when the app has no Wrangler", async () => {

@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
-import { processRunner, redact } from "./lib/run.ts";
+import { configOverrides, processRunner, redact } from "./lib/run.ts";
 import {
   build,
   type Context,
@@ -56,6 +56,14 @@ async function main(): Promise<number> {
   }
   const dryRun = values["dry-run"] === true;
   const root = fileURLToPath(new URL("..", import.meta.url));
+
+  const overrides = configOverrides(process.env);
+  if (overrides.length > 0) {
+    console.error(
+      `error: unset ${overrides.join(" and ")}; the deploy checks and deploys only the top-level configuration of each Worker`,
+    );
+    return 1;
+  }
 
   const token = process.env.CLOUDFLARE_API_TOKEN ?? "";
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? "";

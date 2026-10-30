@@ -274,9 +274,13 @@ describe("checkTopology", () => {
     ]);
   });
 
-  it("warns that named environments are not deployed", () => {
-    expect(warnings(check(broker({ hasEnvironments: true }), core()))).toEqual([
-      expect.stringContaining("named environments are ignored"),
+  it("R3-03: refuses named environments, which the deploy never checks", () => {
+    const issues = check(broker({ hasEnvironments: true }), core());
+    expect(errors(issues)).toEqual([
+      expect.stringContaining(
+        "apps/broker/wrangler.jsonc: named environments (env) are not supported",
+      ),
     ]);
+    expect(warnings(issues)).toEqual([]);
   });
 });

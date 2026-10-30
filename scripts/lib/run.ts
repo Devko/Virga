@@ -51,6 +51,17 @@ const TOKEN_PATTERN = /\b(?:cfat|cfut|cfk|cfoat)_[A-Za-z0-9_-]{8,}/g;
 /** Wrangler flags that pick another config or a named environment; only the runner sets --config. */
 const CHOOSERS = /^(?:--config|-c|--env|-e)(?:=|$)/;
 
+/**
+ * Variables with which Wrangler deploys something other than the checked
+ * config: a named environment, or another Worker name (meant for Workers Builds).
+ */
+export const OVERRIDE_VARS = ["CLOUDFLARE_ENV", "WRANGLER_CI_OVERRIDE_NAME"];
+
+/** The override variables set in `env`. The deploy refuses to run while one is set. */
+export function configOverrides(env: Readonly<Record<string, string | undefined>>): string[] {
+  return OVERRIDE_VARS.filter((name) => (env[name] ?? "") !== "");
+}
+
 /** Replaces known secret values and anything shaped like a Cloudflare credential. */
 export function redact(text: string, secrets: readonly string[]): string {
   let out = text;
@@ -102,6 +113,7 @@ export function processRunner(options: RunnerOptions): Runner {
         args = [...command.args, "--config", command.config];
       }
       const env: NodeJS.ProcessEnv = { ...process.env, WRANGLER_SEND_METRICS: "false" };
+      for (const name of OVERRIDE_VARS) delete env[name];
       for (const name of CREDENTIAL_VARS) {
         if (options.credentials === "none" || name !== "CLOUDFLARE_API_TOKEN") delete env[name];
       }
