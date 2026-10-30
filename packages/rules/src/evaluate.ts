@@ -30,12 +30,13 @@ export interface RuleRunSummary {
  *   `coverage`.
  * - Decided rows (hits) upsert findings by fingerprint (open, last_seen,
  *   evidence, finding_nodes); a resolved finding that reappears is reopened.
- * - Undecided rows change no finding (see below).
+ * - Undecided rows change no finding, except that an expired suppression
+ *   ends (see below).
  * - Open findings of an evaluated rule whose fingerprint it no longer
  *   returns, decided or undecided, are resolved.
- * - Expired suppressions return to open on the next hit; suppressed
- *   findings stay suppressed while the suppression lasts unless their
- *   severity rises.
+ * - Expired suppressions return to open on the next evaluated run that
+ *   returns the fingerprint, decided or undecided; suppressed findings stay
+ *   suppressed while the suppression lasts unless their severity rises.
  * - One row per rule in `rule_runs`.
  *
  * Output contract. Every row a rule returns has
@@ -53,13 +54,22 @@ export interface RuleRunSummary {
  * Unknown is a result. An undecided row meets the same contract, but it
  * neither opens nor resolves a finding: an existing finding with its
  * fingerprint keeps its status, severity, evidence, node links, insight and
- * `last_seen`, whether it is open, suppressed (even past `suppressed_until`)
- * or resolved; without one, nothing opens. The fingerprint still counts as
- * returned, so an open finding is not resolved. Fingerprints stay unique
- * across decided and undecided rows: a rule that decides a fingerprint on one
- * path and cannot on another returns one decided row. `hits` in `rule_runs`
- * and in the summary counts decided rows only; `undecided` counts the others.
- * A run that is `error` records its message in `rule_runs.error`.
+ * `last_seen`, whether it is open, suppressed or resolved; without one,
+ * nothing opens. The fingerprint still counts as returned, so an open
+ * finding is not resolved.
+ *
+ * A suppression still ends at its date (R3-07). On an undecided row, a
+ * suppressed finding whose `suppressed_until` is not after `at` returns to
+ * open with the severity, evidence, node links, insight and `last_seen` it
+ * had, so an exposure that stays `unknown` cannot keep it out of the open
+ * list. That happens at the latest on the first evaluated run at or after
+ * the date; a run that is `not_evaluated` or `error` changes no finding.
+ *
+ * Fingerprints stay unique across decided and undecided rows: a rule that
+ * decides a fingerprint on one path and cannot on another returns one
+ * decided row. `hits` in `rule_runs` and in the summary counts decided rows
+ * only; `undecided` counts the others. A run that is `error` records its
+ * message in `rule_runs.error`.
  *
  * Evidence is every other column, stored by column name as a JSON object in
  * `findings.evidence`. Text that parses as a JSON array (`json_group_array`,
@@ -288,6 +298,11 @@ INSERT OR IGNORE INTO finding_nodes (fingerprint, node_id, role)
 SELECT j.value ->> '$.fingerprint', j.value ->> '$.node', j.value ->> '$.role'
 FROM json_each(?) AS j`;
 
+const END_SUPPRESSION = `
+UPDATE findings
+SET status = 'open', suppressed_until = NULL, suppressed_by = NULL, suppress_reason = NULL
+WHERE fingerprint IN (SELECT value FROM json_each(?))`;
+
 const RESOLVE = `
 UPDATE findings
 SET status = 'resolved', resolved_at = ?,
@@ -309,6 +324,8 @@ function applyHits(
       .map((finding) => [finding.fingerprint, finding]),
   );
   const insightFor = insightLookup(db, rule);
+  const lasts = (finding: StoredFinding) =>
+    finding.status === "suppressed" && (finding.suppressed_until ?? 0) > at;
   const decided = hits.filter((hit) => hit.decided);
   let opened = 0;
   const rows = decided.map((hit) => {
@@ -317,11 +334,7 @@ function applyHits(
     let severity = hit.severity;
     if (!before || before.status === "resolved") {
       opened++;
-    } else if (
-      before.status === "suppressed" &&
-      (before.suppressed_until ?? 0) > at &&
-      SEVERITY_RANK[hit.severity] <= SEVERITY_RANK[before.severity]
-    ) {
+    } else if (lasts(before) && SEVERITY_RANK[hit.severity] <= SEVERITY_RANK[before.severity]) {
       status = "suppressed";
       severity = before.severity;
     }
@@ -334,8 +347,15 @@ function applyHits(
     };
   });
 
-  // Undecided fingerprints count as returned, so their findings stay as they are.
+  // Undecided fingerprints count as returned, so their findings stay as they
+  // are, but a suppression past its date ends (R3-07).
   const returned = new Set(hits.map((hit) => hit.fingerprint));
+  const expired = hits
+    .filter((hit) => {
+      const before = stored.get(hit.fingerprint);
+      return !hit.decided && before?.status === "suppressed" && !lasts(before);
+    })
+    .map((hit) => hit.fingerprint);
   const gone = [...stored.values()]
     .filter((finding) => finding.status !== "resolved" && !returned.has(finding.fingerprint))
     .map((finding) => finding.fingerprint);
@@ -348,6 +368,7 @@ function applyHits(
   }
   for (const json of jsonChunks(decided.map((hit) => hit.fingerprint))) db.run(CLEAR_NODES, json);
   for (const json of jsonChunks(links)) db.run(INSERT_NODES, json);
+  for (const json of jsonChunks(expired)) db.run(END_SUPPRESSION, json);
   for (const json of jsonChunks(gone)) db.run(RESOLVE, at, json);
   return { opened, resolved: gone.length };
 }
