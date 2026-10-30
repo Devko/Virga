@@ -6,10 +6,12 @@
 // their migrations, checks the master key (D-15), then deploys virga-broker,
 // virga-core and virga-web in that order. Safe to run again. Wrangler always
 // gets the checked config as --config, and only while it and the generated
-// rules hold the bytes that were checked and the app's workspace links lead
-// to packages/; it never gets a named environment, loads no .env file, gets
-// only allowlisted variables of the operator's environment, and runs only
-// while its files are those recorded before the builds (R6-01, R8-05, L-2).
+// rules hold the bytes that were checked, the app's workspace links lead to
+// packages/, and the tsconfig and package.json files that decide how its
+// imports resolve are those recorded before the builds; it never gets a
+// named environment, loads no .env file, gets only allowlisted variables of
+// the operator's environment, and runs only while its files are those
+// recorded before the builds (R6-01, R8-05, L-2, R10-04).
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
@@ -135,7 +137,8 @@ async function main(): Promise<number> {
     return false;
   });
   const dirOf = (app: string) => join(root, "apps", app);
-  // The workspace packages each app bundles through node_modules/@virga (L-2).
+  // The workspace packages each app bundles through node_modules/@virga (L-2),
+  // and the files that tell Wrangler's bundler how to resolve its imports (R10-04).
   const workspaces = new Map(present.map(({ app }) => [dirOf(app), recordWorkspace(root, app)]));
   const wranglers = recordWranglers(present.map(({ app }) => dirOf(app)));
   for (const install of new Map([...wranglers.values()].map((w) => [w.bin, w])).values()) {

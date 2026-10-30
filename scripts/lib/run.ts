@@ -379,7 +379,9 @@ export interface RunnerOptions {
   /**
    * The workspace links of each app directory, recorded before the builds:
    * Wrangler runs in an app only while its links still lead to the workspace
-   * packages, and those hold no symlink (L-2).
+   * packages, and those hold no symlink (L-2), and while the tsconfig and
+   * package.json files that decide how its imports resolve are unchanged and
+   * map no import (R10-04).
    */
   workspaces?: ReadonlyMap<string, WorkspaceRecord>;
   print?: (stream: "stdout" | "stderr", line: string) => void;
@@ -419,8 +421,10 @@ function childEnv(command: Command, credentials: RunnerOptions["credentials"]): 
  * while the file holds the bytes the script checked, and runs only while
  * every file recorded before the builds is unchanged: a build, or a process
  * a build left running, may have rewritten either (R6-01). The same holds
- * for the other checked files, the generated rules (R8-05), and for the
- * links through which the app bundles the workspace packages (L-2).
+ * for the other checked files, the generated rules (R8-05), for the links
+ * through which the app bundles the workspace packages (L-2), and for the
+ * files that tell Wrangler's bundler how to resolve the app's imports
+ * (R10-04).
  */
 function wranglerProblem(command: WranglerCommand, options: RunnerOptions): string | null {
   const chooser = command.args.find((arg) => CHOOSERS.test(arg));

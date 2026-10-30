@@ -42,8 +42,11 @@ export async function loadRuleCompiler(): Promise<CheckGenerated> {
  * The directory of the generated rule modules that virga-core bundles: src/
  * of the package that apps/core/node_modules/@virga/rules leads to, by its
  * real path. The workspace record holds the link only while it leads to
- * packages/rules, and the runner compares the record before every Wrangler
- * call, so the modules checked are the ones Wrangler bundles (L-2).
+ * packages/rules and no tsconfig file maps an import, and it holds the
+ * sha256 of packages/rules/package.json, whose exports lead from the name to
+ * src/. The runner compares the record before every Wrangler call, so the
+ * modules checked are the ones Wrangler bundles (L-2, R10-04). Which modules
+ * src/index.ts imports is still what the builds left.
  */
 export function bundledRulesDir(core: WorkspaceRecord | undefined): string {
   const at = join("apps", "core", "node_modules", "@virga", "rules");

@@ -200,12 +200,13 @@ function npmrcProblem(app: string, dir: string): string | null {
  * The checks of apps/<app> that need no parsed config: one Wrangler config,
  * none above the app, no .env file, no symlink and no other node_modules
  * directory outside its own node_modules, no package manager or pnpm
- * settings of its own, and workspace links that lead to the workspace
- * packages, which hold no symlink either (L-2). Wrangler bundles, migrates
- * and uploads what a link points to, and Vite copies it, from wherever that
- * is. The deploy runs these before the builds and again after them (R6-01).
- * Returns the config's path, or null when the app has none. Throws a
- * ConfigError, or a WorkspaceError for the workspace links.
+ * settings of its own, workspace links that lead to the workspace packages,
+ * which hold no symlink either (L-2), and tsconfig files that map no import
+ * (R10-04). Wrangler bundles, migrates and uploads what a link points to,
+ * and Vite copies it, from wherever that is. The deploy runs these before
+ * the builds and again after them (R6-01). Returns the config's path, or
+ * null when the app has none. Throws a ConfigError, or a WorkspaceError for
+ * the workspace links and tsconfig files.
  */
 export function checkAppDir(root: string, app: string): string | null {
   const dir = join(root, "apps", app);
