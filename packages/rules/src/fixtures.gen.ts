@@ -3983,7 +3983,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http_status:404",
           "origin_scheme": "http_status",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -4030,7 +4031,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": true
+          "access_required": true,
+          "via_fallthrough": false
         }
       },
       {
@@ -4043,7 +4045,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8080",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": true
+          "access_required": true,
+          "via_fallthrough": false
         }
       },
       {
@@ -4143,7 +4146,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4156,7 +4160,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "https://localhost:8443",
           "origin_scheme": "https",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4169,7 +4174,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http_status:503",
           "origin_scheme": "http_status",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -4213,6 +4219,84 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-004",
+    "name": "positive-fallthrough-behind-path-rule",
+    "description": "The ingress is [{hostname: app.example.com, path: ^/admin, access required}, {service: http://localhost:8080}]. cloudflared checks an Access token on /admin only; every other path of app.example.com falls through to the catch-all origin without a check. The collector emits that origin as a via_fallthrough node of app.example.com. No Access app covers the host, so the evaluator decides /admin access (origin-enforced, confidence 1) and the fall-through node public. The finding is the fall-through node's.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+        "name": "apps",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com^/admin",
+        "name": "app.example.com",
+        "props": {
+          "hostname": "app.example.com",
+          "path": "^/admin",
+          "service": "http://localhost:9000",
+          "origin_scheme": "http",
+          "tunnel_id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+          "access_required": true,
+          "via_fallthrough": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "name": "app.example.com",
+        "props": {
+          "hostname": "app.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+          "access_required": false,
+          "via_fallthrough": true
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com^/admin",
+        "dst": "tunnel:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "dst": "tunnel:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com^/admin",
+        "path": "/admin*",
+        "decision": "access",
+        "confidence": 1
+      },
+      {
+        "entry": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
     "name": "positive-public-tunnel-hostnames",
     "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access. A second tunnel serves ssh.example.com as well; its hostname node is keyed by its own tunnel ID, so it is a finding of its own.\n",
     "nodes": [
@@ -4236,7 +4320,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4259,7 +4344,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://10.1.0.4:22",
           "origin_scheme": "ssh",
           "tunnel_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4272,7 +4358,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "bastion",
           "origin_scheme": "other",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4285,7 +4372,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8080",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -4385,7 +4473,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "rdp://10.0.0.5:3389",
           "origin_scheme": "rdp",
           "tunnel_id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -4437,7 +4526,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "tcp://localhost:5432",
           "origin_scheme": "tcp",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4450,7 +4540,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8080",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4463,7 +4554,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "https://localhost:8443",
           "origin_scheme": "https",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4476,7 +4568,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:3000",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": true
+          "access_required": true,
+          "via_fallthrough": false
         }
       }
     ],
@@ -6986,7 +7079,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:3000",
           "origin_scheme": "http",
           "tunnel_id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -8064,7 +8158,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8000",
           "origin_scheme": "http",
           "tunnel_id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -8331,7 +8426,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "https://localhost:9443",
           "origin_scheme": "https",
           "tunnel_id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {

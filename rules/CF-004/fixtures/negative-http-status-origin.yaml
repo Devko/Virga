@@ -4,7 +4,7 @@
 description: A public hostname whose ingress rule only answers with a fixed status code.
 nodes:
   - { type: tunnel, id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com", name: gone.example.com, props: { hostname: gone.example.com, path: "", service: "http_status:404", origin_scheme: http_status, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: false } }
+  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com", name: gone.example.com, props: { hostname: gone.example.com, path: "", service: "http_status:404", origin_scheme: http_status, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: false, via_fallthrough: false } }
 edges:
   - { type: ROUTES_TO, src: "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com", dst: "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa" }
 exposure:

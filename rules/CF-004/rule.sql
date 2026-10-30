@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-004
--- version: 2
+-- version: 3
 -- title: Published tunnel hostname reachable without Access
 -- severity: high
 -- kind: posture
@@ -24,6 +24,11 @@
 -- example once audience tags are collected. An `unknown` row of such a
 -- hostname stays undecided for the same reason.
 --
+-- A `via_fallthrough` node is the entry point of the requests that no
+-- hostname rule of its host takes, served by an ingress rule without a
+-- hostname (review R3-02). It is a finding of its own, and the evidence
+-- column `via_fallthrough` tells it apart from a hostname rule.
+--
 -- The spec has this rule reference the Security Insight "Unprotected
 -- Cloudflare Tunnels" instead of duplicating it. `enriches` stays null for
 -- now: the insights table types insights by API issue_type, a category such
@@ -31,17 +36,18 @@
 -- issue_class for that insight.
 WITH hostname AS (
   SELECT h.id AS hostname_id,
-         h.props ->> '$.origin_scheme' AS scheme,
-         h.props ->> '$.service'       AS service,
-         r.dst                         AS tunnel_id
+         h.props ->> '$.origin_scheme'   AS scheme,
+         h.props ->> '$.service'         AS service,
+         h.props ->> '$.via_fallthrough' AS via_fallthrough,
+         r.dst                           AS tunnel_id
   FROM nodes h
   LEFT JOIN edges r ON r.src = h.id AND r.type = 'ROUTES_TO' AND r.deleted_at IS NULL
   WHERE h.type = 'tunnel_hostname' AND h.deleted_at IS NULL
     AND COALESCE(h.props ->> '$.origin_scheme', '') <> 'http_status'
 ),
 exposed AS (
-  SELECT h.hostname_id, h.scheme, h.service, h.tunnel_id, x.path_prefix, x.decision,
-         x.confidence,
+  SELECT h.hostname_id, h.scheme, h.service, h.via_fallthrough, h.tunnel_id, x.path_prefix,
+         x.decision, x.confidence,
          max(x.decision = 'public') OVER (PARTITION BY h.hostname_id) AS decided
   FROM hostname h
   JOIN exposure x ON x.entry_id = h.hostname_id AND x.decision IN ('public', 'unknown')
@@ -56,6 +62,7 @@ SELECT
   hostname_id                                AS subject_id,
   max(decided)                               AS decided,
   scheme                                     AS origin_scheme,
+  via_fallthrough                            AS via_fallthrough,
   json_group_array(DISTINCT path_prefix)     AS public_paths,
   json_group_array(DISTINCT tunnel_id) FILTER (WHERE tunnel_id IS NOT NULL) AS tunnels,
   min(confidence)                            AS exposure_confidence
