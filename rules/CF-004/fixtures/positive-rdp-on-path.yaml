@@ -6,7 +6,7 @@ description: >
   tunnel, hostname and path; exposure is public.
 nodes:
   - { type: tunnel, id: 5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3, name: dc, props: { tunnel_type: cfd_tunnel, status: down, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk", name: remote.example.com, props: { hostname: remote.example.com, path: /desk, service: "rdp://10.0.0.5:3389", origin_scheme: rdp, tunnel_id: 5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3, access_required: false } }
+  - { type: tunnel_hostname, id: "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk", name: remote.example.com, props: { hostname: remote.example.com, path: /desk, service: "rdp://10.0.0.5:3389", origin_scheme: rdp, tunnel_id: 5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3, access_required: false, via_fallthrough: false } }
 edges:
   - { type: ROUTES_TO, src: "tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk", dst: "tunnel:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3" }
 exposure:

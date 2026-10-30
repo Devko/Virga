@@ -1,10 +1,23 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { compileRules } from "../src/compile.ts";
 
-const rule = (requires: string) => `-- ---
+const SELECT_SCRIPTS = `SELECT 'CF-999' AS rule_id, 'CF-999:' || id AS fingerprint, 'low' AS severity,
+       id AS subject_id, COALESCE(props ->> '$.decided', 1) AS decided
+FROM nodes WHERE type = 'worker_script' AND deleted_at IS NULL`;
+
+const rule = (requires: string, sql = SELECT_SCRIPTS) => `-- ---
 -- id: CF-999
 -- version: 1
 -- title: Test
@@ -12,9 +25,7 @@ const rule = (requires: string) => `-- ---
 -- kind: posture
 -- requires: ${requires}
 -- ---
-SELECT 'CF-999' AS rule_id, 'CF-999:' || id AS fingerprint, 'low' AS severity,
-       id AS subject_id, COALESCE(props ->> '$.decided', 1) AS decided
-FROM nodes WHERE type = 'worker_script' AND deleted_at IS NULL
+${sql}
 `;
 
 const fingerprint = "CF-999:worker_script:a";
@@ -31,11 +42,11 @@ afterEach(() => {
 });
 
 /** Writes a rules directory with one rule and the given fixture files. */
-async function compile(fixtures: Record<string, string>, requires = "[workers]") {
+async function compile(fixtures: Record<string, string>, requires = "[workers]", sql?: string) {
   root = mkdtempSync(join(tmpdir(), "virga-rules-"));
   const dir = join(root, "CF-999");
   mkdirSync(join(dir, "fixtures"), { recursive: true });
-  writeFileSync(join(dir, "rule.sql"), rule(requires));
+  writeFileSync(join(dir, "rule.sql"), rule(requires, sql));
   for (const [file, content] of Object.entries(fixtures)) {
     writeFileSync(join(dir, "fixtures", file), content);
   }
@@ -143,5 +154,148 @@ expect: [{ fingerprint: "${fingerprint}" }, { fingerprint: "CF-999:worker_script
     writeFileSync(join(root, "CF-999", "rule.sql"), rule("[workers]"));
     const result = await compileRules(root);
     expect(result.errors).toEqual([expect.stringMatching(/^CF-999: no fixtures directory/)]);
+  });
+});
+
+/** Worker scripts unless Access protects them: reads exposure through `table`. */
+const readsExposure = (table = "exposure") => `${SELECT_SCRIPTS}
+  AND NOT EXISTS (SELECT 1 FROM ${table} x WHERE x.entry_id = id AND x.decision = 'access')`;
+
+const ALL_FIXTURES = {
+  "positive-a.yaml": FIXTURES.hit,
+  "negative-a.yaml": FIXTURES.none,
+  "undecided-a.yaml": FIXTURES.undecided,
+};
+
+describe("compileRules: inputs from the tables a rule reads", () => {
+  it("R4-04: rejects a rule that reads exposure without requiring exposure and access", async () => {
+    const result = await compile(ALL_FIXTURES, "[workers]", readsExposure());
+    expect(result.errors).toEqual([
+      "CF-999/rule.sql: reads exposure, so requires must also list access, exposure",
+    ]);
+    expect(result.rules).toEqual([]);
+  });
+
+  it("R4-04: rejects a rule that reads exposure and requires it, but not access", async () => {
+    const result = await compile(ALL_FIXTURES, "[workers, exposure]", readsExposure());
+    expect(result.errors).toEqual([
+      "CF-999/rule.sql: reads exposure, so requires must also list access",
+    ]);
+  });
+
+  it.each([
+    ["a quoted name", '"exposure"'],
+    ["a schema name", "main.exposure"],
+    ["a comment before the name", "/* table */ exposure"],
+    ["brackets", "[exposure]"],
+    ["backticks", "`exposure`"],
+    ["a view of it in a CTE", "(WITH e AS (SELECT * FROM exposure) SELECT * FROM e)"],
+  ])("R4-04: finds the exposure table behind %s", async (_, table) => {
+    const result = await compile(ALL_FIXTURES, "[workers]", readsExposure(table));
+    expect(result.errors).toEqual([
+      "CF-999/rule.sql: reads exposure, so requires must also list access, exposure",
+    ]);
+  });
+
+  it.each([
+    ["vulns", "vulns", "vulns"],
+    ["insights", "insights", "insights"],
+  ])("R4-04: rejects a rule that reads %s without requiring it", async (_, table, input) => {
+    const sql = `${SELECT_SCRIPTS}\n  AND NOT EXISTS (SELECT 1 FROM ${table})`;
+    const result = await compile(ALL_FIXTURES, "[workers]", sql);
+    expect(result.errors).toEqual([
+      `CF-999/rule.sql: reads ${table}, so requires must also list ${input}`,
+    ]);
+    expect((await compile(ALL_FIXTURES, `[workers, ${input}]`, sql)).errors).toEqual([]);
+  });
+
+  it("R4-04: accepts a rule that reads exposure and requires exposure and access", async () => {
+    const result = await compile(ALL_FIXTURES, "[workers, access, exposure]", readsExposure());
+    expect(result.errors).toEqual([]);
+    expect(result.rules.map((r) => r.requires)).toEqual([["workers", "access", "exposure"]]);
+  });
+
+  it("R4-04: needs an undecided fixture when the rule reads exposure", async () => {
+    const fixtures = { "positive-a.yaml": FIXTURES.hit, "negative-a.yaml": FIXTURES.none };
+    const result = await compile(fixtures, "[workers, access, exposure]", readsExposure());
+    expect(result.errors).toEqual([
+      "CF-999: reads exposure, so it needs an undecided-*.yaml fixture for unknown exposure",
+    ]);
+  });
+
+  it("R4-04: fails the review's copy of CF-004 that drops exposure from requires", async () => {
+    root = mkdtempSync(join(tmpdir(), "virga-rules-"));
+    const dir = join(root, "CF-004");
+    cpSync(fileURLToPath(new URL("../../../rules/CF-004", import.meta.url)), dir, {
+      recursive: true,
+    });
+    const file = join(dir, "rule.sql");
+    const source = readFileSync(file, "utf8");
+    const changed = source.replace(
+      "-- requires: [tunnels, access, exposure]",
+      "-- requires: [tunnels, access]",
+    );
+    expect(changed).not.toBe(source);
+    writeFileSync(file, changed);
+    for (const fixture of readdirSync(join(dir, "fixtures"))) {
+      if (fixture.startsWith("undecided-")) rmSync(join(dir, "fixtures", fixture));
+    }
+    expect((await compileRules(root)).errors).toEqual([
+      "CF-004/rule.sql: reads exposure, so requires must also list exposure",
+      "CF-004: reads exposure, so it needs an undecided-*.yaml fixture for unknown exposure",
+    ]);
+  });
+});
+
+describe("compileRules: rules only read", () => {
+  // The review's CF-998: a CTE in front of DML passes the SELECT/WITH check.
+  const RETURNING = `RETURNING 'CF-999' AS rule_id, 'CF-999:' || key AS fingerprint,
+  'low' AS severity, key AS subject_id`;
+
+  it.each([
+    [
+      "an INSERT",
+      "meta",
+      `WITH z AS (SELECT id FROM nodes WHERE type = 'zone')
+INSERT INTO meta (key, value) SELECT 'current_scan', 'forged' FROM z WHERE true
+ON CONFLICT (key) DO UPDATE SET value = excluded.value ${RETURNING}`,
+    ],
+    [
+      "an UPDATE",
+      "meta",
+      `WITH z AS (SELECT 1) UPDATE meta SET value = 'forged' WHERE key = 'current_scan' ${RETURNING}`,
+    ],
+    [
+      "a DELETE",
+      "findings",
+      `WITH z AS (SELECT 1) DELETE FROM findings
+RETURNING 'CF-999' AS rule_id, fingerprint, 'low' AS severity, fingerprint AS subject_id`,
+    ],
+    [
+      "a REPLACE",
+      "meta",
+      `WITH z AS (SELECT 1) REPLACE INTO meta (key, value) VALUES ('current_scan', 'forged') ${RETURNING}`,
+    ],
+  ])("R4-05: rejects %s behind a CTE, with RETURNING", async (_, table, sql) => {
+    const result = await compile(ALL_FIXTURES, "[workers]", sql);
+    expect(result.errors).toEqual([`CF-999: writes to ${table}; a rule may only read`]);
+    expect(result.rules).toEqual([]);
+    expect(result.fixtures).toEqual([]);
+  });
+
+  it("R4-05: rejects a write without RETURNING for the write, not for its columns", async () => {
+    const sql = "WITH z AS (SELECT 1) DELETE FROM exposure";
+    expect((await compile(ALL_FIXTURES, "[workers]", sql)).errors).toEqual([
+      "CF-999: writes to exposure; a rule may only read",
+    ]);
+  });
+});
+
+describe("compileRules: statement size", () => {
+  it("refuses a statement too large for Durable Object SQLite", async () => {
+    const cases = Array.from({ length: 8000 }, (_, i) => `WHEN '${i}' THEN ${i}`).join(" ");
+    const sql = SELECT_SCRIPTS.replace(" AS decided", ` AS decided, CASE id ${cases} END AS big`);
+    const [error] = (await compile(ALL_FIXTURES, "[workers]", sql)).errors;
+    expect(error).toMatch(/^CF-999: compiles to \d+ operations; Durable Object SQLite accepts/);
   });
 });

@@ -2916,6 +2916,151 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-003",
+    "name": "negative-restricted-in-any-spelling",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires and each can write Workers scripts, but every allow list limits where it works, in spellings other than the canonical one: an IPv4-mapped /24 written in hex, an IPv4-mapped /8 with leading zeros, an expanded IPv6 /48 and an upper-case address, and two /96 ranges next to the IPv4-mapped block.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000001",
+        "name": "mapped-office-in-hex",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0:0:0:0:0:ffff:c633:6400/120"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000002",
+        "name": "mapped-slash-8-expanded",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0000:0000:0000:0000:0000:ffff:1100:0000/104"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000003",
+        "name": "ipv6-expanded",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "2001:0db8:0000:0000:0000:0000:0000:0000/48",
+              "2001:DB8::7"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000004",
+        "name": "next-to-the-block",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::fffe:0:0/96",
+              "64:ff9b::/96"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-003",
     "name": "negative-scan-clock",
     "description": "Without a now_ms override, time runs from the fixture scan's start at epoch 1 ms. This token expires 59 days after it, so it is not long-lived.\n",
     "nodes": [
@@ -3102,6 +3247,233 @@ export const FIXTURES: readonly RuleFixture[] = [
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-003",
+    "name": "positive-ip-allow-list-mapped-spellings",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires and each can write Workers scripts. Next to an office range, each allow list holds the IPv4-mapped block ::ffff:0:0/96 that admits every IPv4 client, in the spellings of the review: fully expanded, with a zero group before ffff, mixed with a dotted quad, and with leading zeros. The last one holds ::/64, which contains that block.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000001",
+        "name": "expanded",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0:0:0:0:0:ffff:0:0/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000002",
+        "name": "zero-group",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::0:ffff:0:0/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000003",
+        "name": "mixed",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0::ffff:0.0.0.0/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000004",
+        "name": "leading-zeros",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0000:0000:0000:0000:0000:ffff:0000:0000/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000005",
+        "name": "around-the-block",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::/64",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "account_token:e0000000000000000000000000000001",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000002",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000003",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000004",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000005",
+        "name": "last_used_on",
+        "value": 1793145600000
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000001",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000002",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000003",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000004",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000005",
+        "severity": "high"
+      }
+    ]
   },
   {
     "rule": "CF-003",
@@ -3611,7 +3983,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http_status:404",
           "origin_scheme": "http_status",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -3658,7 +4031,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": true
+          "access_required": true,
+          "via_fallthrough": false
         }
       },
       {
@@ -3671,7 +4045,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8080",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": true
+          "access_required": true,
+          "via_fallthrough": false
         }
       },
       {
@@ -3771,7 +4146,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -3784,7 +4160,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "https://localhost:8443",
           "origin_scheme": "https",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -3797,7 +4174,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http_status:503",
           "origin_scheme": "http_status",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -3841,6 +4219,84 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-004",
+    "name": "positive-fallthrough-behind-path-rule",
+    "description": "The ingress is [{hostname: app.example.com, path: ^/admin, access required}, {service: http://localhost:8080}]. cloudflared checks an Access token on /admin only; every other path of app.example.com falls through to the catch-all origin without a check. The collector emits that origin as a via_fallthrough node of app.example.com. No Access app covers the host, so the evaluator decides /admin access (origin-enforced, confidence 1) and the fall-through node public. The finding is the fall-through node's.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+        "name": "apps",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com^/admin",
+        "name": "app.example.com",
+        "props": {
+          "hostname": "app.example.com",
+          "path": "^/admin",
+          "service": "http://localhost:9000",
+          "origin_scheme": "http",
+          "tunnel_id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+          "access_required": true,
+          "via_fallthrough": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "name": "app.example.com",
+        "props": {
+          "hostname": "app.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+          "access_required": false,
+          "via_fallthrough": true
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com^/admin",
+        "dst": "tunnel:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "dst": "tunnel:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com^/admin",
+        "path": "/admin*",
+        "decision": "access",
+        "confidence": 1
+      },
+      {
+        "entry": "tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d:app.example.com",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
     "name": "positive-public-tunnel-hostnames",
     "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access. A second tunnel serves ssh.example.com as well; its hostname node is keyed by its own tunnel ID, so it is a finding of its own.\n",
     "nodes": [
@@ -3864,7 +4320,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -3887,7 +4344,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "ssh://10.1.0.4:22",
           "origin_scheme": "ssh",
           "tunnel_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -3900,7 +4358,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "bastion",
           "origin_scheme": "other",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -3913,7 +4372,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8080",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -4013,7 +4473,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "rdp://10.0.0.5:3389",
           "origin_scheme": "rdp",
           "tunnel_id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       }
     ],
@@ -4065,7 +4526,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "tcp://localhost:5432",
           "origin_scheme": "tcp",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4078,7 +4540,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8080",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4091,7 +4554,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "https://localhost:8443",
           "origin_scheme": "https",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -4104,7 +4568,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:3000",
           "origin_scheme": "http",
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
-          "access_required": true
+          "access_required": true,
+          "via_fallthrough": false
         }
       }
     ],
@@ -6614,7 +7079,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:3000",
           "origin_scheme": "http",
           "tunnel_id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -7692,7 +8158,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "http://localhost:8000",
           "origin_scheme": "http",
           "tunnel_id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -7959,7 +8426,8 @@ export const FIXTURES: readonly RuleFixture[] = [
           "service": "https://localhost:9443",
           "origin_scheme": "https",
           "tunnel_id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876",
-          "access_required": false
+          "access_required": false,
+          "via_fallthrough": false
         }
       },
       {
@@ -8521,6 +8989,132 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "fingerprint": "CF-021:r2_bucket:photos",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-021",
+    "name": "undecided-unknown-enabled-state",
+    "description": "The storage collector could not read whether a domain is enabled, so it stores enabled null, and the evaluator decides such a domain unknown. customer-exports has one such custom domain, and backups an r2.dev domain in the same state. Either would make its bucket public if it were enabled, so both rows are undecided. assets has one too, but another of its custom domains is enabled and public, which decides it.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "customer-exports",
+        "name": "customer-exports"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "files.example.com",
+        "name": "files.example.com",
+        "props": {
+          "bucket": "customer-exports",
+          "kind": "custom",
+          "enabled": null,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "backups",
+        "name": "backups"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "name": "pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "props": {
+          "bucket": "backups",
+          "kind": "r2_dev",
+          "enabled": null,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "assets",
+        "name": "assets"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "old-assets.example.com",
+        "name": "old-assets.example.com",
+        "props": {
+          "bucket": "assets",
+          "kind": "custom",
+          "enabled": null,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "assets.example.com",
+        "name": "assets.example.com",
+        "props": {
+          "bucket": "assets",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:files.example.com",
+        "dst": "r2_bucket:customer-exports"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "dst": "r2_bucket:backups"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:old-assets.example.com",
+        "dst": "r2_bucket:assets"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:assets.example.com",
+        "dst": "r2_bucket:assets"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:files.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:old-assets.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:assets.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-021:r2_bucket:customer-exports",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:backups",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:assets",
         "severity": "high"
       }
     ]

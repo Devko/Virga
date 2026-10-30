@@ -10,8 +10,8 @@ description: >
   exposure rows.
 nodes:
   - { type: tunnel, id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com", name: ssh.example.com, props: { hostname: ssh.example.com, path: "", service: "ssh://localhost:22", origin_scheme: ssh, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: true } }
-  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com", name: wiki.example.com, props: { hostname: wiki.example.com, path: "", service: "http://localhost:8080", origin_scheme: http, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: true } }
+  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com", name: ssh.example.com, props: { hostname: ssh.example.com, path: "", service: "ssh://localhost:22", origin_scheme: ssh, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: true, via_fallthrough: false } }
+  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com", name: wiki.example.com, props: { hostname: wiki.example.com, path: "", service: "http://localhost:8080", origin_scheme: http, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: true, via_fallthrough: false } }
   - type: access_app
     id: app-wiki
     name: Wiki

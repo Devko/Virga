@@ -1,6 +1,6 @@
 -- ---
 -- id: CF-021
--- version: 2
+-- version: 3
 -- title: R2 bucket public through r2.dev or a custom domain without Access
 -- severity: high
 -- kind: posture
@@ -15,21 +15,28 @@
 -- lists those domains. Access is required, as for every rule that reads
 -- exposure: without its coverage every custom domain is `unknown`. One
 -- finding per bucket.
+--
+-- A domain counts unless `enabled` is exactly false. One whose enabled state
+-- is unknown (null, missing or not a boolean), r2.dev or custom, would make
+-- the bucket public if it were enabled, so it can only make the row
+-- undecided; the evaluator decides such a domain `unknown` as well (R4-02).
 WITH
 domain AS (
-  SELECT d.id AS domain_id, d.name AS host, d.props ->> '$.kind' AS kind, r.dst AS bucket_id
+  SELECT d.id AS domain_id, d.name AS host, d.props ->> '$.kind' AS kind, r.dst AS bucket_id,
+         json_type(d.props, '$.enabled') IS 'true' AS enabled
   FROM nodes d
   JOIN edges r ON r.src = d.id AND r.type = 'ROUTES_TO' AND r.deleted_at IS NULL
   JOIN nodes b ON b.id = r.dst AND b.type = 'r2_bucket' AND b.deleted_at IS NULL
   WHERE d.type = 'r2_public_domain' AND d.deleted_at IS NULL
-    AND d.props ->> '$.enabled' = 1
+    AND json_type(d.props, '$.enabled') IS NOT 'false'
 ),
 exposed_domain AS (
-  SELECT domain_id, host, kind, bucket_id, NULL AS confidence, 1 AS decided
+  SELECT domain_id, host, kind, bucket_id, NULL AS confidence, enabled AS decided
   FROM domain
   WHERE kind = 'r2_dev'
   UNION
-  SELECT dm.domain_id, dm.host, dm.kind, dm.bucket_id, x.confidence, x.decision = 'public'
+  SELECT dm.domain_id, dm.host, dm.kind, dm.bucket_id, x.confidence,
+         x.decision = 'public' AND dm.enabled
   FROM domain dm
   JOIN exposure x ON x.entry_id = dm.domain_id AND x.decision IN ('public', 'unknown')
   WHERE dm.kind = 'custom'

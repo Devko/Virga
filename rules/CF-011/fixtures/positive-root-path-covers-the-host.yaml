@@ -12,7 +12,7 @@ nodes:
   - { type: worker_custom_domain, id: files.example.com, name: files.example.com, props: { zone_id: z1, hostname: files.example.com, service: files, environment: null } }
   - { type: r2_bucket, id: customer-exports, name: customer-exports }
   - { type: tunnel, id: 3f2e1d0c-9b8a-4765-a432-10fedcba9876, name: ops, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: "3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org", name: ops.example.org, props: { hostname: ops.example.org, path: "", service: "https://localhost:9443", origin_scheme: https, tunnel_id: 3f2e1d0c-9b8a-4765-a432-10fedcba9876, access_required: false } }
+  - { type: tunnel_hostname, id: "3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org", name: ops.example.org, props: { hostname: ops.example.org, path: "", service: "https://localhost:9443", origin_scheme: https, tunnel_id: 3f2e1d0c-9b8a-4765-a432-10fedcba9876, access_required: false, via_fallthrough: false } }
   - type: access_app
     id: app-files
     name: Files

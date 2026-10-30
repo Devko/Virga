@@ -16,7 +16,7 @@ nodes:
   - { type: worker_custom_domain, id: admin.example.com, name: admin.example.com, props: { zone_id: z1, hostname: admin.example.com, service: admin, environment: null } }
   - { type: d1_database, id: users-db, name: users }
   - { type: tunnel, id: 0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f, name: monitoring, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net", name: grafana.example.net, props: { hostname: grafana.example.net, path: "", service: "http://localhost:3000", origin_scheme: http, tunnel_id: 0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f, access_required: false } }
+  - { type: tunnel_hostname, id: "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net", name: grafana.example.net, props: { hostname: grafana.example.net, path: "", service: "http://localhost:3000", origin_scheme: http, tunnel_id: 0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f, access_required: false, via_fallthrough: false } }
   - { type: pages_project, id: docs, name: docs, props: { production_branch: main, subdomain: docs.pages.dev, preview_deployments: none } }
   - { type: pages_domain, id: docs.example.org, name: docs.example.org, props: { project: docs, status: active } }
   - { type: kv_namespace, id: kv-docs, name: docs-cache }
