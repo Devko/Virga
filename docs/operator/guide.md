@@ -2,7 +2,7 @@
 
 Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md), then R5-01 to R5-03 of the [round 5 verification](../reviews/2026-10-30-verification-round-5.md), in round 7 Wrangler's environment and the assets directory, in round 8 the order of builds and checks, R6-01 of the [round 6 verification](../reviews/2026-10-30-verification-round-6.md), and in round 9 the builds' pnpm, the generated rules and the release-age check before every install, R8-02, R8-04 and R8-05 of the [round 8 verification](../reviews/2026-10-30-verification-round-8.md)), offboarding the same day (account removal in the UI and API). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
 
-Virga is an independent project. It is not affiliated with or endorsed by Cloudflare (D-01).
+Virga is an independent open source project. It is not affiliated with or endorsed by Cloudflare, Inc., and it uses no Cloudflare logos (D-01). The [threat model](../architecture/threat-model.md) lists what an instance protects, against whom, and the risks that remain.
 
 An instance has three Workers in one dedicated Cloudflare account, the **tool account**:
 
@@ -343,6 +343,8 @@ Configuration metadata only (D-14). The **Check** column says where the name com
 | Zone Read | All zones | `zones`, `dns`, `workers` | API reference |
 | DNS Read | All zones | `dns` | API reference |
 | Workers Routes Read | All zones | `workers` (routes) | API reference |
+
+**Account API Tokens Read shows every token.** The onboarding check needs this group to read the token's own policies, so no scan token works without it. The same group lets Virga list every account API token of the scanned account. Virga stores each token's name, status, dates, permission groups, resources and IP condition, never its value, and every viewer of the instance and every MCP client sees them ([threat model](../architecture/threat-model.md#account-api-tokens-read), TM-02). Tell the account owner before they create the token.
 
 **Storage needs data groups for now.** D-14 prefers product-level Metadata Read-Only roles for D1, KV and R2, but the API reference lists none for their listing endpoints, and S-05 has not run. The `storage` collector needs these three to list databases, namespaces and buckets:
 
