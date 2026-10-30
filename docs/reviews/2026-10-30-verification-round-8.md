@@ -2,7 +2,16 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 6 verification](2026-10-30-verification-round-6.md) (R6-01 to R6-07) and the [round 7 review](2026-10-30-review-round-7.md) (R7-01, R7-02) fixed? (2) review of the round 8 changes, `git diff b8a29c1..13fd01c`, and the code paths they change or rely on, at commit 13fd01c
-- Status: not yet fixed; R8-01 to R8-03 and the leads R8-04 to R8-11 are open
+- Status: round 9 of the [work packages](../team/work-packages.md) fixed R8-01 to R8-03 (`supply-chain-3`, and `deploy-3` for the build half of R8-02), the source side of the leads R8-04 and R8-05 (`deploy-3`, `supply-chain-3`), and the guard hardening (`rules-6`); not yet verified by a review. The deciding facts of R8-04 and R8-05 (the deploy branch's rules) and the leads R8-06 to R8-11 stay open
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R8-01 | `supply-chain-3` | a69a96e, 37dbfbf, e67526e | `scripts/test/check-release-age.test.ts` (R8-01: `configDependencies` as a block key, a quoted key, in a flow map, under an anchor or merge key, nested, and in `package.json`; settings that make pnpm read another lockfile or run code; the committed `pnpm-workspace.yaml`) |
+| R8-02 | `supply-chain-3` (gate), `deploy-3` (builds) | 47e59b3; 6c0722e | `check-release-age.test.ts` (R8-02: a pin or `devEngines.packageManager` in `apps/web/package.json`, `.corepack.env` at any depth, a nested `pnpm-workspace.yaml`, symbolic links); `steps.test.ts`, `run.test.ts`, `config.test.ts`, `deploy.test.ts` (R8-02: builds start at the root with `COREPACK_ENV_FILE=0`; app-level pins refused before and after the builds) |
+| R8-03 | `supply-chain-3` | a2d141b | `check-release-age.test.ts` (R8-03: with an exception for `a@1.0.0`, a foreign tarball, a tarball without integrity and a sha384 integrity with `version: 1.0.1` still fail; an exception accepts only the failure and resolution it names) |
+| R8-04 (source side) | `deploy-3`, `supply-chain-3` | 646af7d; d2d5c8d | `scripts/test/guide.test.ts` (the guide's deploy example needs `release-age`, which installs nothing; the check runs before every install the guide shows); `check-release-age.test.ts` (R8-04: every file in `.github/workflows`) |
+| R8-05 (source side) | `deploy-3`, `supply-chain-3` | f10c4f2; d2d5c8d | `packages/rules/test/generate.test.ts`; `deploy.test.ts` and `run.test.ts` (R8-05: a stale `rules.gen.ts` or a rule that fails the compiler stops the deploy before any Wrangler call; a generated module changed after its check is refused before the next one); `ci.yml`: `deploy-dry-run` needs `check` |
+| Guard hardening | `rules-6` | 8d03dfd, f8977d9, 2c214c5, bd627b0, c3ab3db | `apps/core/test/rules-runtime.test.ts` (R8 hardening in workerd: drop and re-create, a `$name(...)` variable, the shadowing view, `defer_foreign_keys`, every committed rule still runs); `packages/graph/test/node.test.ts`; `packages/rules/test/params.test.ts` and `compile.test.ts` (placeholders). [Decision 0006](../decisions/0006-read-only-rule-runs.md) |
 
 ## Summary
 

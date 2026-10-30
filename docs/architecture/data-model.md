@@ -170,7 +170,7 @@ A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`,
 `pnpm rules:build`, implemented in [`packages/rules`](../../packages/rules):
 
 1. parses and validates the front matter (unknown keys fail)
-2. replaces `:name` parameters with positional `?` and an ordered binding list, and rejects positional `?`, a second statement, and parameters that are undeclared or unused
+2. replaces `:name` parameters with positional `?` and an ordered binding list, and rejects positional `?`, a second statement, parameters that are undeclared or unused, and every placeholder it does not rewrite (`@name`, `$name`, `#name`, `:1`, a `:` that SQLite would read further); Node SQLite would bind those NULL, and Durable Object SQL refuses the bindings (round 9)
 3. prepares the statement against the current schema in Node SQLite, checks the required output columns, and runs `EXPLAIN` on it:
    - It refuses any write: `OpenWrite`, `Clear`, a write transaction, or a schema or virtual table change. That includes `WITH … INSERT/UPDATE/DELETE … RETURNING`, which passes the parser's `SELECT`/`WITH` check (R4-05).
    - It refuses a program of more than 20,000 operations. Durable Object SQLite failed one of about 21,700 with `SQLITE_NOMEM` (2026-10-30); Node SQLite accepts it.

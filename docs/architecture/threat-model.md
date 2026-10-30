@@ -1,6 +1,6 @@
 # Threat model v1
 
-Status: v1, 2026-10-30 (phase 1 backlog item 15). It describes the code at commit 0812b03, the end of round 8. Round 9 is changing the deploy script, the release-age gate, the run-time rule guard and the web Worker, and adds the test range in Terraform; residual risks in its scope say which work package takes them. Nothing has scanned a real account yet, so every statement about Cloudflare's behavior comes from the docs and the spikes, not from a production run.
+Status: v1, 2026-10-30 (phase 1 backlog item 15). It describes the code at commit 0812b03, the end of round 8. Round 9 is changing the deploy script, the release-age gate, the run-time rule guard and the web Worker, and adds the test range in Terraform; residual risks in its scope say which work package takes them. Updated after the round 9 merges where a residual risk changed (TM-08, TM-11, TM-13, TM-26, TM-29, TM-30, TM-31 and [Not built yet](#not-built-yet)); the round 9 review has not verified those changes yet. Nothing has scanned a real account yet, so every statement about Cloudflare's behavior comes from the docs and the spikes, not from a production run.
 
 Virga is an independent open source project. It is not affiliated with or endorsed by Cloudflare, Inc., and it uses no Cloudflare logos (D-01).
 
@@ -162,10 +162,10 @@ B7 (CI and the release-age gate) decides which code and packages reach B6 and th
 
 | ID | Residual risk | Source |
 | --- | --- | --- |
-| TM-08 | The run-time guard misses a tail that drops a table and creates it again, and a view that shadows a `pragma_*` read; only the compiler's tail refusal keeps them out. The deploy also ships the committed `rules.gen.ts` without comparing it with compiler output, so a tail added by hand is caught only by CI's `rules:check`. Round 9: `rules-6` and `deploy-3` | [Decision 0006](../decisions/0006-read-only-rule-runs.md), round 8 hardening, lead R8-05 |
+| TM-08 | Until round 9, the run-time guard missed a tail that drops a table and creates it again, and a view that shadows a `pragma_*` read, and the deploy shipped `rules.gen.ts` unchecked. Round 9 (`rules-6`, `deploy-3`): a read refuses any statement tail before it runs, on both adapters; the guard also compares which tables hold rows and sets every setting back, read with `PRAGMA`; the deploy compares the generated rules with compiler output after the builds and before every Wrangler call. Left: the guard alone does not see an index or trigger created again identically, or an empty table dropped and created again; the tail refusal keeps those out | [Decision 0006](../decisions/0006-read-only-rule-runs.md), round 8 hardening, lead R8-05 |
 | TM-09 | `addAccount` and `removeAccount` for one account are not serialized; the worst interleaving leaves an empty graph without its `removed` marker. Graphs left by the removal order before round 6 are not detected | R5-08 leftovers, round 8 hardening |
 | TM-10 | Data outlives offboarding: Durable Object point-in-time recovery (30 days; whether it restores a graph after `deleteAll` is not documented), D1 Time Travel on both databases, Workflow instances for 3 to 7 days, which hold coverage detail and chunk units as well as counters, and Worker logs | Operator guide ("What stays behind"), round 8 hardening |
-| TM-11 | A scan in which single rules ended `error` is reported `complete`; the error shows only per rule in `ruleRuns`. A rule with an `@name`, `$name` or `#name` placeholder passes the compiler and ends `error` on every production run (fail-safe; round 9 `rules-6` refuses it). A rule may read the lifecycle tables without listing them in `requires` | Round 8 hardening |
+| TM-11 | A scan in which single rules ended `error` is reported `complete`; the error shows only per rule in `ruleRuns`. Since round 9 (`rules-6`) the compiler refuses `@name`, `$name` and `#name` placeholders, which used to pass and end `error` on every production run. A rule may read the lifecycle tables without listing them in `requires` | Round 8 hardening |
 
 ## B3. Web Worker and Access
 
@@ -200,7 +200,7 @@ B7 (CI and the release-age gate) decides which code and packages reach B6 and th
 | ID | Residual risk | Source |
 | --- | --- | --- |
 | TM-12 | No per-account access control: every identity that passes Access reads every account, and admin is a flat list of emails. The spec's per-account access control in D1 is not built | `apps/web/README.md` ("Known limits"), [design spec](../concept/design-spec.md#security-of-the-tool-itself) |
-| TM-13 | No tool audit trail: Virga records no UI, API or MCP call. Access logs show sign-ins, not what was read. Round 9: `web-export` | Phase 1 backlog item 13, design spec ("Audit trail") |
+| TM-13 | Until round 9 Virga recorded no UI, API or MCP call. Since `web-export`, API requests and MCP tool calls land in `tool_audit` for 90 days. Left: the `ui` channel comes from a header a client can set; audit writes are not rate limited; a JSON-RPC batch records only the tools that ran | Phase 1 backlog item 13, design spec ("Audit trail") |
 | TM-14 | The Access JWT check is the only identity check inside the Worker: `ctx.access` does not reach a Worker with static assets, and S-08 has not confirmed the setup on a real account. When the certs endpoint fails, cached keys are used for up to 24 hours | [Analysis](../analysis.md#external-claims-checked) (`ctx.access`), S-08 |
 | TM-15 | The Access application in front is the operator's configuration. A broad allow policy on the right application admits everyone it names to all data (TM-12). A request without a token, for example through a Bypass application on the hostname, is refused by the Worker | Operator guide ("Access for the UI") |
 | TM-16 | The lockfile holds body-parser 2.3.0 and fast-uri 3.1.8, which have published advisories and reach `apps/web` through the MCP SDK. The patched versions pass the age gate on 2026-11-05 and 2026-11-02. Whether the advisories are reachable in Virga's use has not been assessed | [Work packages](../team/work-packages.md), round 5 status (R4-07 trade-off) |
@@ -298,7 +298,7 @@ B7 (CI and the release-age gate) decides which code and packages reach B6 and th
 | ID | Residual risk | Source |
 | --- | --- | --- |
 | TM-25 | Build code runs as the operator while the deploy process holds the token. It can read the token from the process environment (on Linux, `/proc/<pid>/environ`), read anything else the user can, or change sources and migrations before Wrangler bundles them. The checks catch changed configs and Wrangler files, not this. Builds also get the operator's environment minus `CLOUDFLARE_` and `CF_` variables, including variables that make build tools load code | Operator guide ("What the build checks cover"), R6-01, round 8 hardening |
-| TM-26 | Corepack runs a build with the pnpm pin of `apps/<app>/package.json` and a `.corepack.env`, which the release-age gate does not read. Round 9: `supply-chain-3` and `deploy-3` | R8-02 |
+| TM-26 | Until round 9, corepack ran a build with the pnpm pin of `apps/<app>/package.json` and a `.corepack.env`, which the gate did not read. Round 9: the gate refuses a package manager named below the root and any `.corepack.env` (`supply-chain-3`); the deploy builds from the root with `COREPACK_ENV_FILE=0` and refuses app-level pins (`deploy-3`). Left: other `COREPACK_` variables of the operator's environment reach the builds | R8-02 |
 | TM-27 | The Wrangler record is trust on first use, and pnpm's shared store carries an in-place edit into a fresh clone. `checkAppDir` walks only `apps/<app>`, although core and broker bundle sources from `packages/*`; `main` and `migrations_dir` get no containment check | Round 8 hardening |
 | TM-28 | The redaction misses a token stored with a trailing newline, and the uploaded web settings join the redaction list only after the builds. On macOS, `DYLD_IMAGE_SUFFIX`, `DYLD_PRINT_ENV` and `DYLD_PRINT_TO_FILE` are not refused; the review rates them as within the documented residuals | Round 8 hardening |
 
@@ -330,9 +330,9 @@ TM-08 covers the generated rules that the deploy ships unchecked (R8-05).
 
 | ID | Residual risk | Source |
 | --- | --- | --- |
-| TM-29 | `configDependencies` in `pnpm-workspace.yaml` or `package.json` are installed, and plugins among them run on every pnpm command, without being dated. Round 9: `supply-chain-3` | R8-01 (medium) |
-| TM-30 | An exception for `name@version` also accepts a non-registry or unverifiable resolution under the same key. Round 9: `supply-chain-3` | R8-03 |
-| TM-31 | Whether a real deploy can run from a commit that skipped `release-age` or `rules:check` depends on branch rules and environments the repository does not show. The guide's deploy example installs without the gate. Round 9: `supply-chain-3` and `deploy-3` | Leads R8-04 and R8-05 |
+| TM-29 | Until round 9, `configDependencies` were installed, and plugins among them ran on every pnpm command, without being dated. Round 9 (`supply-chain-3`): the gate reads `pnpm-workspace.yaml` strictly and refuses `configDependencies` and every setting the project does not use. Left: `.npmrc` and other `pnpm` fields of `package.json` are not read | R8-01 (medium) |
+| TM-30 | Until round 9, an exception for `name@version` also accepted a non-registry or unverifiable resolution under the same key. Round 9 (`supply-chain-3`): an exception names the failure it accepts and, for a non-registry package, its exact resolution; `unverified` and `mismatch` are never accepted | R8-03 |
+| TM-31 | Whether a real deploy can run from a commit that skipped `release-age` or `rules:check` depends on branch rules and environments the repository does not show. Round 9: the guide's example and workstation steps run the gate before any install, a test holds every workflow and the example to that, `deploy-dry-run` needs `check`, and the deploy compares the generated rules itself. Left: the branch and environment settings | Leads R8-04 and R8-05 |
 | TM-32 | Gate inputs it does not refuse: a sha1 integrity equal to `dist.shasum`; settings that make pnpm read another lockfile (`gitBranchLockfile`, `sharedWorkspaceLockfile`, `lockfileDir`) or download at run time (`useNodeVersion`); `.nvmrc` follows the newest Node 22 | Round 8 hardening |
 | TM-33 | The gate dates versions and compares digests; it does not judge content. A malicious version older than 14 days passes, and so does a malicious action at the commit it is pinned to | By design ([CONTRIBUTING.md](../../CONTRIBUTING.md), "Dependencies") |
 
@@ -379,12 +379,10 @@ Point 6 of the [analysis](../analysis.md#security-review-additions): Account API
 
 ## Not built yet
 
-Controls the design spec names that do not exist at 0812b03:
+Controls the design spec names that do not exist yet (after the round 9 merges):
 
 | Control | Plan | Residual risk |
 | --- | --- | --- |
-| Tool audit trail for UI, API and MCP calls | Phase 1 backlog item 13; round 9 `web-export` | TM-13 |
-| OCSF export of findings | Phase 1 backlog item 13; round 9 `web-export` | |
 | Per-account access control in D1 | Design spec ("Access to the UI"); not planned in a round yet | TM-12 |
 | Signed releases with an SBOM | Phase 4 ([versioning policy](../release/versioning.md#what-a-release-contains)) | |
 | Scanner containers without internet, pull credentials injected by an outbound handler, scanner images pinned by digest and signature-checked, scanner output validated; bundles in R2 deleted after one day | Phase 2, S-07 | |
@@ -392,7 +390,7 @@ Controls the design spec names that do not exist at 0812b03:
 | Pseudonymized user IDs | Phase 3 | TM-17 |
 | An entrypoint that rotates the master key | Not planned yet | TM-06 |
 | A scheduled recheck of stored tokens | Not planned yet | TM-04 |
-| A test range that gives every rule a ground truth | Phase 1 backlog item 14; round 9 `terraform-1` writes it, it is applied when the account exists ([decision 0007](../decisions/0007-later-phases-before-the-phase-1-gate.md)) | TM-20, TM-21 |
+| A test range that gives every rule a ground truth | Phase 1 backlog item 14; round 9 `terraform-1` wrote it (not yet validated with Terraform), it is applied when the account exists ([decision 0007](../decisions/0007-later-phases-before-the-phase-1-gate.md)) | TM-20, TM-21 |
 
 ## Open items that need the paid account or the test range
 
