@@ -1,6 +1,6 @@
 import type { Collector, CollectorContext } from "../types.ts";
 import { type Binding, bindingTarget, type StoreLookup, storeLookup } from "./bindings.ts";
-import { inspectValue, type ValueVerdict } from "./secrets.ts";
+import { inspectText, UNINSPECTED, type ValueVerdict } from "./secrets.ts";
 import { chunk, GraphBuilder, isObject, nonEmpty, sortedUnique, str, unlessGone } from "./util.ts";
 
 /** developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get */
@@ -71,8 +71,6 @@ function previewSetting(project: CfPagesProject): string {
 
 type PlainTextVar = { name: string | null; environment: string; kind: string } & ValueVerdict;
 
-const UNINSPECTED = { looks_secret: null, secret_pattern: null } as const;
-
 /**
  * Plain-text environment variables of both environments, without their
  * values. Values are inspected here and dropped; secret_text is never read.
@@ -80,8 +78,10 @@ const UNINSPECTED = { looks_secret: null, secret_pattern: null } as const;
  * What the API did not return is unknown, not clean (review R5-07): an
  * environment without an `env_vars` object yields one entry of kind
  * `unread` with no name, and a variable of another or no type one of kind
- * `unknown`, both with `looks_secret` null and without reading a value.
- * `null` is how the API deletes a variable, so it stands for none.
+ * `unknown`, both with `looks_secret` null and without reading a value. A
+ * plain_text value that is not a string, `null` included, is not inspected
+ * either (R6-05). `null` as the variable itself is how the API deletes a
+ * variable, so it stands for none.
  */
 function plainTextVars(configs: unknown): PlainTextVar[] {
   const vars: PlainTextVar[] = [];
@@ -97,7 +97,7 @@ function plainTextVars(configs: unknown): PlainTextVar[] {
       if (envVar === null || (isObject(envVar) && envVar.type === "secret_text")) continue;
       vars.push(
         isObject(envVar) && envVar.type === "plain_text"
-          ? { name, environment, kind: "plain_text", ...inspectValue(envVar.value) }
+          ? { name, environment, kind: "plain_text", ...inspectText(envVar.value) }
           : { name, environment, kind: "unknown", ...UNINSPECTED },
       );
     }

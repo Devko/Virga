@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { detectSecret, detectSecretIn, entropy } from "../../src/platform/secrets.ts";
+import {
+  detectSecret,
+  detectSecretIn,
+  entropy,
+  inspectJson,
+  inspectText,
+  UNINSPECTED,
+} from "../../src/platform/secrets.ts";
 
 // Fake credentials are assembled at runtime so secret scanners do not flag this file.
 const forty = "Q7v2Lm9XkT4pR8sWc1Ny6Hb3Jd5Fg0Za2Ue7Io4P";
@@ -97,6 +104,22 @@ describe("detectSecretIn", () => {
     let value: unknown = { k: fake("cfat") };
     for (let i = 0; i < 100_000; i++) value = i % 2 ? [value] : { v: value };
     expect(detectSecretIn(value).secret_pattern).toBe("cfat_");
+  });
+});
+
+describe("inspectText and inspectJson", () => {
+  it("R6-05: inspects only a string as plain text; anything else is uninspected", () => {
+    for (const value of [undefined, null, {}, { value: fake("cfat") }, [fake("cfat")], 42, true]) {
+      expect(inspectText(value), JSON.stringify(value)).toEqual(UNINSPECTED);
+    }
+    expect(inspectText(fake("cfat"))).toEqual(detectSecret(fake("cfat")));
+    expect(inspectText("")).toEqual({ looks_secret: false, secret_pattern: null });
+  });
+
+  it("walks any JSON value, and only a missing one is uninspected", () => {
+    expect(inspectJson(undefined)).toEqual(UNINSPECTED);
+    expect(inspectJson({ value: fake("cfat") }).secret_pattern).toBe("cfat_");
+    expect(inspectJson(null)).toEqual({ looks_secret: false, secret_pattern: null });
   });
 });
 

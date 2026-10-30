@@ -2,7 +2,7 @@ import { nodeId } from "@virga/graph";
 import type { Collector, CollectorContext } from "../types.ts";
 import { bindingTarget, type StoreLookup, storeLookup } from "./bindings.ts";
 import { listZoneIds } from "./lists.ts";
-import { inspectValue, type ValueVerdict } from "./secrets.ts";
+import { inspectJson, inspectText, type ValueVerdict } from "./secrets.ts";
 import {
   bool,
   chunk,
@@ -243,12 +243,14 @@ async function collectScript(
 type PlainTextVar = { name: string; kind: string } & ValueVerdict;
 
 /**
- * Binding types that hold their value in plain text, and the field with the
- * value. wrangler uploads a `[vars]` entry with an object value as `json`.
+ * Binding types that hold their value in plain text, the field with the
+ * value, and how it is inspected. wrangler uploads a `[vars]` entry with an
+ * object value as `json`. A `text` that is not a string is not inspected
+ * (review R6-05).
  */
-const PLAIN_VALUES = new Map<string, string>([
-  ["plain_text", "text"],
-  ["json", "json"],
+const PLAIN_VALUES = new Map<string, [string, (value: unknown) => ValueVerdict]>([
+  ["plain_text", ["text", inspectText]],
+  ["json", ["json", inspectJson]],
 ]);
 
 async function addVersion(
@@ -267,10 +269,11 @@ async function addVersion(
     const type = str(binding.type);
     const name = str(binding.name);
     if (!type || !name) continue;
-    const field = PLAIN_VALUES.get(type);
-    if (field) {
+    const plain = PLAIN_VALUES.get(type);
+    if (plain) {
+      const [field, inspect] = plain;
       // The value is inspected here and dropped; only the verdict is kept.
-      plainTextVars.push({ name, kind: type, ...inspectValue(binding[field]) });
+      plainTextVars.push({ name, kind: type, ...inspect(binding[field]) });
     } else if (type === "secret_text") {
       secretNames.push(name);
     } else {

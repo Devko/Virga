@@ -112,5 +112,15 @@ export type ValueVerdict = {
   secret_pattern: SecretPattern | null;
 };
 
-export const inspectValue = (value: unknown): ValueVerdict =>
-  value === undefined ? { looks_secret: null, secret_pattern: null } : detectSecretIn(value);
+export const UNINSPECTED = { looks_secret: null, secret_pattern: null } as const;
+
+/**
+ * The verdict for a plain-text value. Anything but a string, `null` and
+ * objects included, is no value to inspect (review R6-05).
+ */
+export const inspectText = (value: unknown): ValueVerdict =>
+  typeof value === "string" ? detectSecret(value) : UNINSPECTED;
+
+/** The verdict for a JSON value, such as a `json` binding; a missing one was not inspected. */
+export const inspectJson = (value: unknown): ValueVerdict =>
+  value === undefined ? UNINSPECTED : detectSecretIn(value);

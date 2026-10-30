@@ -261,6 +261,37 @@ describe("pages collector", () => {
     ]);
   });
 
+  it("R6-05: records a plain-text variable whose value is not a string as uninspected", async () => {
+    // The review's scan 2: API_KEY came back with value null or an object,
+    // read as clean, and CF-024 resolved its finding.
+    const vars = async (value: unknown) =>
+      varsOf({
+        deployment_configs: {
+          preview: { env_vars: {} },
+          production: { env_vars: { API_KEY: { type: "plain_text", value }, GONE: null } },
+        },
+      });
+    const apiKey = (looks: boolean | null, pattern: string | null = null) => [
+      {
+        name: "API_KEY",
+        environment: "production",
+        kind: "plain_text",
+        looks_secret: looks,
+        secret_pattern: pattern,
+      },
+    ];
+    for (const value of [null, { redacted: true }, {}, [], 42, true]) {
+      expect(await vars(value), JSON.stringify(value)).toEqual(apiKey(null));
+    }
+    // An object holding the token is not walked either: it is no plain-text value.
+    expect(await vars({ value: FAKE_TOKEN })).toEqual(apiKey(null));
+    // A string is inspected, an empty one too; a variable that is itself null
+    // (GONE, the delete marker) still yields nothing.
+    expect(await vars(FAKE_TOKEN)).toEqual(apiKey(true, "cfat_"));
+    expect(await vars("hello world")).toEqual(apiKey(false));
+    expect(await vars("")).toEqual(apiKey(false));
+  });
+
   it("skips projects deleted between listing and reading", async () => {
     const gone = without(routes, `${projects}/docs`, `${projects}/landing/domains`);
     const { output } = await run(pagesCollector, gone);

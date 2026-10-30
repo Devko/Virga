@@ -136,8 +136,18 @@ export interface AccountState {
    * when the API leaves the flag out (R4-02).
    */
   publicAssetsR2Dev: boolean | null;
+  /**
+   * CF-021, R6-06: the managed response of `public-assets` leaves out
+   * `domain`, or its custom domains response leaves out `domains`.
+   */
+  publicAssetsLeftOut: "domain" | "domains" | null;
   /** CF-024: the API returns the env vars of `handbook`; else `env_vars: null` (R5-07). */
   handbookEnvVars: boolean;
+  /**
+   * CF-024, R6-05: the type of the value the API returns for handbook's
+   * plain-text CF_API_TOKEN: the token, `null` or an object.
+   */
+  handbookTokenValue: "string" | "null" | "object";
   /**
    * R5-06, decision 0005: the edge tunnel's ingress starts with 1,000
    * harmless hostname rules, so its own rules fall past the cap.
@@ -147,7 +157,9 @@ export interface AccountState {
 
 export const initialState = (): AccountState => ({
   publicAssetsR2Dev: true,
+  publicAssetsLeftOut: null,
   handbookEnvVars: true,
+  handbookTokenValue: "string",
   edgeIngressFlood: false,
 });
 
@@ -480,14 +492,35 @@ const PAGES_PROJECTS = [
   pagesProject("landing", "25507196-ff59-435e-9f6e-87d5ed25721a", landingEnv, landingEnv),
 ];
 
+type PagesProject = (typeof PAGES_PROJECTS)[number];
+
 /** The project as the API returns it when it leaves the env var data out. */
-function withoutEnvVars(project: (typeof PAGES_PROJECTS)[number]) {
+function withoutEnvVars(project: PagesProject) {
   const { preview, production } = project.deployment_configs;
   return {
     ...project,
     deployment_configs: {
       preview: { ...preview, env_vars: null },
       production: { ...production, env_vars: null },
+    },
+  };
+}
+
+/**
+ * handbook as the API returns it: without env var data (R5-07), or with
+ * `null` or an object as the value of its plain-text CF_API_TOKEN (R6-05).
+ */
+function servedHandbook(project: PagesProject, state: AccountState) {
+  if (!state.handbookEnvVars) return withoutEnvVars(project);
+  if (state.handbookTokenValue === "string") return project;
+  const value = state.handbookTokenValue === "null" ? null : { redacted: true };
+  const { production } = project.deployment_configs;
+  const envVars = { ...production.env_vars, CF_API_TOKEN: { type: "plain_text", value } };
+  return {
+    ...project,
+    deployment_configs: {
+      ...project.deployment_configs,
+      production: { ...production, env_vars: envVars },
     },
   };
 }
@@ -842,10 +875,12 @@ export function fakeAccount(
     [`${base}/r2/buckets`]: envelope({ buckets: BUCKETS }, { per_page: 1000 }),
     [`${base}/r2/buckets/public-assets/domains/managed`]: envelope({
       bucketId: R2_PUBLIC_ID,
-      domain: R2_DEV_HOST,
+      ...(state.publicAssetsLeftOut === "domain" ? {} : { domain: R2_DEV_HOST }),
       ...(state.publicAssetsR2Dev === null ? {} : { enabled: state.publicAssetsR2Dev }),
     }),
-    [`${base}/r2/buckets/public-assets/domains/custom`]: envelope({ domains: [] }),
+    [`${base}/r2/buckets/public-assets/domains/custom`]: envelope(
+      state.publicAssetsLeftOut === "domains" ? {} : { domains: [] },
+    ),
     [`${base}/r2/buckets/private-data/domains/managed`]: envelope({
       bucketId: R2_PRIVATE_ID,
       domain: `pub-${R2_PRIVATE_ID}.r2.dev`,
@@ -892,8 +927,7 @@ export function fakeAccount(
     routes[`${scripts}/${w.name}/versions/${w.versionId}`] = envelope(version(w));
   }
   for (const project of PAGES_PROJECTS) {
-    const served =
-      project.name === "handbook" && !state.handbookEnvVars ? withoutEnvVars(project) : project;
+    const served = project.name === "handbook" ? servedHandbook(project, state) : project;
     routes[`${base}/pages/projects/${project.name}`] = envelope(served);
     routes[`${base}/pages/projects/${project.name}/domains`] = list([]);
   }
