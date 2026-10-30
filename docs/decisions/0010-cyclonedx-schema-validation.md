@@ -18,3 +18,4 @@
 
 - One new dev dependency, under the release-age rule. If it turns out to pull in other packages, it is not added and this decision is revisited.
 - The schema is refreshed by hand when Virga moves to a newer CycloneDX version.
+- `@cfworker/json-schema` 4.1.1 does not check the formats `iri-reference` (18 uses in `bom-1.6.schema.json`) and `idn-email` (2 uses) and passes formats it does not know, so the tests register functions under both names that fail any value reaching them, and a test fails if the validator ever brings its own entry for either name. Virga's SBOMs carry no URL or e-mail address and reach neither. (Round 10: schema tag 1.6.2, commit e833d73; the hashes are in `packages/scanner-io/test/schema/cyclonedx-1.6/README.md`.)
