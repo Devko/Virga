@@ -40,6 +40,42 @@ export interface RulesCounters {
   undecided: number;
   opened: number;
   resolved: number;
+  /**
+   * IDs of the rules whose run ended `error`, in run order, at most
+   * RULE_ERRORS_LISTED (policy.ts); set only when `errors` is above 0
+   * (TM-11). Rule IDs come from the compiled rules, not the scanned account.
+   */
+  errored?: string[];
+  detail?: string;
+}
+
+/**
+ * What the vulns step wrote: counts only, since the rematch's lists of
+ * unknown matches and unparsed packages hold IDs from the scanned account.
+ */
+export interface VulnCounters {
+  /** The `vulns` coverage the step recorded. */
+  status: "complete" | "partial" | "error";
+  /** Live package nodes matched. */
+  packages: number;
+  /** Decided matches, open or ignored. */
+  matched: number;
+  opened: number;
+  reopened: number;
+  updated: number;
+  fixed: number;
+  /** Rows left as they are. */
+  unchanged: number;
+  /** Matches that could not be decided or ranked. */
+  unknown: number;
+  /** Package IDs that did not parse. */
+  unparsed: number;
+  /** Rows written. */
+  written: number;
+  /**
+   * Why `vulns` is not complete: counts and fixed words, such as `no advisory
+   * feed configured`, or the error, which may quote the advisory source.
+   */
   detail?: string;
 }
 
@@ -77,6 +113,7 @@ export interface ScanGraph {
   ): Awaitable<void>;
   sweep(scanId: string, resourceClass: string): Awaitable<SweepResult>;
   computeExposure(scanId: string): Awaitable<ExposureCounters>;
+  matchVulns(scanId: string): Awaitable<VulnCounters>;
   evaluateRules(scanId: string): Awaitable<RulesCounters>;
   /** Returns the status the scan ended with, which is `failed` if it was ended as stale. */
   finishScan(scanId: string, status: ScanEnd, at: number): Awaitable<ScanEnd>;
@@ -108,9 +145,15 @@ export interface ClassSummary {
 }
 
 /**
- * `complete`: every class, exposure and rules ran fully. `partial`: rules
- * ran, but some input was not complete. `failed`: rules did not run.
- * `skipped`: another scan of the account was still running.
+ * `complete`: every class, exposure and every rule ran fully. `partial`:
+ * rules ran, but some input was not complete or single rules ended `error`
+ * (TM-11). `failed`: rules did not run. `skipped`: another scan of the
+ * account was still running, or the account is not in the index.
+ *
+ * The vulns step counts when it ended `error`. `vulns` coverage `partial`
+ * does not make a scan partial: no advisory feed exists yet, so it is
+ * partial in every scan, and the rules that require it (CF-001) are
+ * `not_evaluated`, which their runs show.
  */
 export type ScanStatus = "complete" | "partial" | "failed" | "skipped";
 
@@ -123,12 +166,16 @@ export interface ScanSummary {
   finishedAt: number | null;
   classes: Record<string, ClassSummary>;
   exposure: ExposureCounters | null;
+  vulns: VulnCounters | null;
   rules: RulesCounters | null;
   /** Set when status is `skipped` because another scan of the account runs. */
   running?: string;
   /**
    * Why the scan was skipped or stopped: the account is not in the index or
-   * is being removed, or the scan is no longer the running scan of the account.
+   * is being removed, or the scan is no longer the running scan of the
+   * account. For a `partial` scan in which rules ended `error`, which ones:
+   * `rules ended error (<count>): <IDs>`, at most RULE_ERRORS_LISTED IDs
+   * (TM-11).
    */
   detail?: string;
 }

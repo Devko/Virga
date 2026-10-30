@@ -50,9 +50,18 @@ export const MAX_IDENTITY = 320;
 export const AUDIT_PAGE = { default: 50, max: 200 };
 /** Rows older than this are deleted by the hourly dispatcher. */
 export const AUDIT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-/** Rows one purge statement deletes, and statements per purge. */
+/** Rows one purge statement deletes, and statements per purge step. */
 export const PURGE_BATCH = 5000;
 export const PURGE_ROUNDS = 20;
+/** Rows one purge step deletes at most: 100,000. */
+export const PURGE_STEP_ROWS = PURGE_BATCH * PURGE_ROUNDS;
+/**
+ * Purge steps per dispatch at most. The dispatcher runs another step while
+ * the last one deleted PURGE_STEP_ROWS, so it deletes up to 5,000,000 rows an
+ * hour in at most 1,000 D1 statements, far inside the Workflow limits (10,000
+ * steps and 10,000 subrequests per instance).
+ */
+export const PURGE_STEPS = 50;
 
 // Spaces, C0 and C1 controls, bidi embeddings, overrides and isolates, zero-width
 // marks: an email or a client ID has none of them.
@@ -139,8 +148,8 @@ export async function listToolCalls(
 
 /**
  * Deletes rows from before `before`, oldest first, in batches of
- * PURGE_BATCH and at most PURGE_ROUNDS batches; the next run deletes the
- * rest. Returns the number of rows deleted.
+ * PURGE_BATCH and at most PURGE_ROUNDS batches. Returns the number of rows
+ * deleted: PURGE_STEP_ROWS when rows may be left.
  */
 export async function purgeToolCalls(db: D1Database, before: number): Promise<number> {
   let deleted = 0;
@@ -160,17 +169,32 @@ export async function purgeToolCalls(db: D1Database, before: number): Promise<nu
 }
 
 /**
- * The dispatcher's purge step: deletes audit rows older than the retention.
- * A purge that still fails after the step's retries is logged and returns
- * null; it does not fail the dispatch, and the next hour tries again.
+ * The dispatcher's purge: deletes audit rows older than the retention, one
+ * step `audit:purge:<n>` after the other while the last one deleted a full
+ * PURGE_STEP_ROWS, at most PURGE_STEPS steps. The cutoff is fixed by `at`, so
+ * a replay deletes the same rows. One MCP request can write up to 100 rows
+ * (a JSON-RPC batch), and audit writes are not rate limited (TM-13): the
+ * purge keeps up with 5,000,000 new rows an hour on average. A burst above
+ * that is deleted at that rate in the hours after it expires, so its rows
+ * outlive the retention by at most their number divided by 5,000,000 hours.
+ * Returns the rows deleted. A step that still fails after its retries is
+ * logged and ends the purge with null; it does not fail the dispatch, and
+ * the next hour goes on.
  */
 export async function runAuditPurge(
   step: ScanStep,
   purge: (before: number) => Promise<number>,
   at: number,
 ): Promise<number | null> {
+  const before = at - AUDIT_RETENTION_MS;
+  let total = 0;
   try {
-    return await step.do("audit:purge", STORE_STEP, () => purge(at - AUDIT_RETENTION_MS));
+    for (let n = 1; n <= PURGE_STEPS; n++) {
+      const deleted = await step.do(`audit:purge:${n}`, STORE_STEP, () => purge(before));
+      total += deleted;
+      if (deleted < PURGE_STEP_ROWS) break;
+    }
+    return total;
   } catch (error) {
     console.error("audit purge failed", error instanceof Error ? error.name : typeof error);
     return null;

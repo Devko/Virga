@@ -137,9 +137,14 @@ describe("SqlRunner.queryReadOnly (R6-02)", () => {
     // A flag pragma acts when it is prepared, before it runs.
     expect(() => db.queryReadOnly(`PRAGMA ${name} = 1`)).toThrow(`the setting ${name}`);
     expect(setting(name)).toBe(0);
+    // H-3: a setting that stuck is not the baseline: the read is refused
+    // before it runs, and the setting goes back to its default.
     db.run(`PRAGMA ${name} = 1`);
-    expect(() => db.queryReadOnly(`PRAGMA ${name} = 0`)).toThrow(`the setting ${name}`);
-    expect(setting(name)).toBe(1);
+    expect(() => db.queryReadOnly("SELECT 1 AS one")).toThrow(
+      `the setting ${name} was not at its default before a read-only query; the query was not run`,
+    );
+    expect(setting(name)).toBe(0);
+    expect(db.queryReadOnly("SELECT 1 AS one")).toEqual([{ one: 1 }]);
   });
 
   it("sets case_sensitive_like back, which can only be seen in what LIKE does", () => {

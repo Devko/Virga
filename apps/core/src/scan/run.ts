@@ -1,12 +1,15 @@
 import type { CfReader } from "@virga/cf-api";
 import { COLLECTORS, type Collector, type CollectorContext } from "@virga/collectors";
 import { describe, isStaleScanError } from "../errors.ts";
+import { noVulns } from "../graph/vulns.ts";
 import { orderCollectors } from "./order.ts";
+import { RULE_ERRORS_LISTED } from "./policy.ts";
 import { API_STEP, type Failure, type ScanStep, STORE_STEP, settle } from "./step.ts";
 import type {
   BeginResult,
   ChunkCounters,
   ClassSummary,
+  RulesCounters,
   ScanGraph,
   ScanIndex,
   ScanStatus,
@@ -114,8 +117,8 @@ function checkPlan(chunks: unknown): unknown[][] {
  * recorded as `error` (or `partial` if earlier chunks were written). A chunk
  * that reports resources it left out (`truncated`) makes the class `partial`
  * without a sweep, and collection goes on with the next chunk (decision
- * 0005). Then exposure, rules, and the end of the scan in the graph and the
- * index.
+ * 0005). Then exposure, the vulns rematch, rules, and the end of the scan
+ * in the graph and the index.
  *
  * Once the graph refuses a call because the scan is no longer the running
  * scan of the account (marked failed as stale, or taken over by a newer
@@ -136,6 +139,7 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
     finishedAt: null,
     classes: {},
     exposure: null,
+    vulns: null,
     rules: null,
   };
 
@@ -273,6 +277,17 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
       summary.exposure = { status: "error", entries: 0, decisions: {}, detail: describe(error) };
     }
 
+    // After the sweeps, so gone packages are no longer live.
+    try {
+      const vulns = await step.do("vulns", STORE_STEP, () =>
+        current(async () => graph().matchVulns(scanId)),
+      );
+      if (isStale(vulns)) return vulns;
+      summary.vulns = vulns;
+    } catch (error) {
+      summary.vulns = { ...noVulns(0), detail: describe(error) };
+    }
+
     try {
       const rules = await step.do("rules", STORE_STEP, () =>
         current(async () => graph().evaluateRules(scanId)),
@@ -298,6 +313,9 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
 
   const stopped = await work();
   const status = stopped ? "failed" : scanStatus(summary);
+  // Single rules that ended `error` make the scan partial; say which (TM-11).
+  const errored = status === "partial" ? rulesDetail(summary.rules) : null;
+  if (errored) summary.detail = errored;
   const end = await step.do("finish", STORE_STEP, async () => {
     const at = clock();
     // A stopped scan leaves the graph as it is; the index row still ends.
@@ -330,8 +348,29 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
   return result;
 }
 
+/**
+ * `failed` when the rules did not run; `complete` when every class, exposure
+ * and every rule ran fully and the vulns step did not end `error`; otherwise
+ * `partial`. A rule that ended `error` opened and resolved nothing, so the
+ * scan is not complete (TM-11). `vulns` coverage `partial` does not count
+ * (ScanStatus).
+ */
 function scanStatus(summary: ScanSummary): Exclude<ScanStatus, "skipped"> {
   if (summary.rules?.status !== "complete") return "failed";
   const classesComplete = Object.values(summary.classes).every((c) => c.status === "complete");
-  return classesComplete && summary.exposure?.status === "complete" ? "complete" : "partial";
+  const vulnsRan = summary.vulns !== null && summary.vulns.status !== "error";
+  return classesComplete &&
+    summary.exposure?.status === "complete" &&
+    vulnsRan &&
+    summary.rules.errors === 0
+    ? "complete"
+    : "partial";
+}
+
+/** `rules ended error (<count>): <IDs>`, at most RULE_ERRORS_LISTED IDs; null without errors. */
+function rulesDetail(rules: RulesCounters | null): string | null {
+  if (!rules || rules.errors === 0) return null;
+  const ids = (rules.errored ?? []).slice(0, RULE_ERRORS_LISTED).map((id) => id.slice(0, 64));
+  const more = rules.errors > ids.length ? ", …" : "";
+  return `rules ended error (${rules.errors}): ${ids.join(", ")}${more}`;
 }

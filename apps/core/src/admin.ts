@@ -9,12 +9,9 @@ import {
 import {
   type AccountRow,
   checkNewAccount,
-  deleteAccount,
   getAccount,
-  markRemoving,
   type NewAccount,
   runningScan,
-  upsertAccount,
 } from "./index-db.ts";
 import { assertAccountId, manualScanInstanceId } from "./scan/ids.ts";
 
@@ -35,19 +32,6 @@ const graphOf = (env: Env, accountId: string) =>
   env.ACCOUNT_GRAPH.get(env.ACCOUNT_GRAPH.idFromName(accountId));
 
 /**
- * Removes the account in an order that never hides an account whose graph
- * is left (R5-08): mark the index row `removing`, delete the graph, then
- * delete the index rows. A step that fails leaves the account listed as
- * `removing`, and running the removal again finishes it.
- */
-async function remove(env: Env, accountId: string): Promise<boolean> {
-  const listed = await markRemoving(env.INDEX, accountId, Date.now());
-  await graphOf(env, accountId).deleteAll();
-  await deleteAccount(env.INDEX, accountId);
-  return listed;
-}
-
-/**
  * Account administration for the web Worker: register an account in the
  * index, start a scan by hand, remove an account, and keep the tool audit
  * trail. Tokens are stored and removed through the broker's TokenIntake,
@@ -58,15 +42,14 @@ export class Admin extends WorkerEntrypoint<Env> {
    * Adds the account or updates its name, cadence and profile. An account
    * that was removed may be scanned again from here on. A removal that did
    * not finish is finished first, so the account starts from nothing.
+   *
+   * The account's graph object runs it (AccountGraph.addAccount), one
+   * addition or removal of the account at a time: a removal that is under
+   * way finishes first, and one that arrives later waits (TM-09).
    */
   async addAccount(input: NewAccount): Promise<AccountRow> {
-    checkNewAccount(input);
-    if ((await getAccount(this.env.INDEX, input.id))?.status === "removing") {
-      await remove(this.env, input.id);
-    }
-    const account = await upsertAccount(this.env.INDEX, input, Date.now());
-    await graphOf(this.env, account.id).clearRemoved();
-    return account;
+    const account = checkNewAccount(input);
+    return graphOf(this.env, account.id).addAccount(account);
   }
 
   /** Starts a scan now unless the account is unknown or being removed, or a scan is running. */
@@ -101,10 +84,13 @@ export class Admin extends WorkerEntrypoint<Env> {
    * no index row back. Idempotent, so a retry after a partial failure
    * finishes the job. The token stays in the broker until TokenIntake.remove
    * deletes it.
+   *
+   * The account's graph object runs it (AccountGraph.removeAccount), one
+   * addition or removal of the account at a time (TM-09).
    */
   async removeAccount(accountId: string): Promise<RemoveResult> {
     assertAccountId(accountId);
-    return { removed: await remove(this.env, accountId) };
+    return { removed: await graphOf(this.env, accountId).removeAccount(accountId) };
   }
 
   /**

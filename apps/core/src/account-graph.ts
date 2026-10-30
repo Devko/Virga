@@ -19,6 +19,7 @@ import {
   sweep,
 } from "@virga/graph";
 import { RULES, type RuleHit, runRule } from "@virga/rules";
+import { type AccountChanges, addAccount, removeAccount, Serial } from "./accounts.ts";
 import { describe, StaleScanError } from "./errors.ts";
 import { checkOutput } from "./graph/chunk.ts";
 import { DEFAULT_EVALUATORS, type Evaluators } from "./graph/evaluators.ts";
@@ -30,7 +31,10 @@ import type {
   GraphSummary,
   Neighborhood,
 } from "./graph/views.ts";
-import { STALE_SCAN_MS } from "./scan/policy.ts";
+import { livePackages, matchVulns, noVulns } from "./graph/vulns.ts";
+import type { AccountRow, NewAccount } from "./index-db.ts";
+import { assertAccountId } from "./scan/ids.ts";
+import { RULE_ERRORS_LISTED, STALE_SCAN_MS } from "./scan/policy.ts";
 import type {
   BeginResult,
   ChunkCounters,
@@ -38,6 +42,7 @@ import type {
   RulesCounters,
   ScanEnd,
   ScanGraph,
+  VulnCounters,
 } from "./scan/types.ts";
 
 /** A scan's status, and the scan that is current in the graph. */
@@ -61,6 +66,38 @@ function assertCurrent(db: SqlRunner, scanId: string): void {
 }
 
 /**
+ * Deletes the account's whole graph, for offboarding (removeAccount runs it
+ * after marking the index row and before deleting it). The object is
+ * migrated again, so it stays an empty, valid graph: a scan that still runs
+ * is refused like any scan that is not current, and an account that is
+ * added again starts from nothing. The `removed` marker in meta makes
+ * beginScan refuse new scans, for example from an instance that was queued
+ * before the removal (R4-03), until clearRemoved. A module function, not a
+ * method, so it is not reachable over RPC and runs only inside an account
+ * change (TM-09).
+ */
+async function deleteAll(ctx: DurableObjectState, db: SqlRunner): Promise<void> {
+  await ctx.blockConcurrencyWhile(async () => {
+    await ctx.storage.deleteAll();
+    migrate(db);
+    db.run("INSERT INTO meta (key, value) VALUES ('removed', ?)", String(Date.now()));
+  });
+}
+
+/** Lets scans begin again after deleteAll, for an account that is added again. */
+function clearRemoved(db: SqlRunner): void {
+  db.run("DELETE FROM meta WHERE key = 'removed'");
+}
+
+/** An account change names the account whose graph object this is, or it is refused. */
+function assertOwnAccount(ctx: DurableObjectState, env: Env, accountId: unknown): void {
+  assertAccountId(accountId);
+  if (!ctx.id.equals(env.ACCOUNT_GRAPH.idFromName(accountId))) {
+    throw new TypeError("the account ID does not name this graph object");
+  }
+}
+
+/**
  * The security graph of one scanned account. One instance per account, named
  * by the account ID; tenant isolation is the object boundary.
  */
@@ -71,10 +108,22 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
    * field, so it is not reachable over RPC; tests replace it in place.
    */
   evaluators: Evaluators = DEFAULT_EVALUATORS;
+  /**
+   * The account index and this graph, for addAccount and removeAccount. An
+   * instance field, so it is not reachable over RPC; tests replace it in place.
+   */
+  accounts: AccountChanges;
+  /** Additions and removals of the account, one at a time (TM-09). */
+  private readonly changes = new Serial();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = fromDurableObjectStorage(ctx.storage);
+    this.accounts = {
+      index: env.INDEX,
+      deleteGraph: () => deleteAll(ctx, this.db),
+      clearRemoved: () => clearRemoved(this.db),
+    };
     void ctx.blockConcurrencyWhile(async () => {
       migrate(this.db);
     });
@@ -84,8 +133,8 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
    * Starts a scan. Idempotent for a retried step. Refuses while another scan
    * is running, because its sweep would tombstone what this one writes; a
    * scan running longer than STALE_SCAN_MS is marked failed instead, and is
-   * refused if its instance comes back (a restart). Refuses after deleteAll
-   * until clearRemoved.
+   * refused if its instance comes back (a restart). Refuses after
+   * removeAccount until addAccount.
    */
   beginScan(id: string, kind: "full" | "partial" | "event" = "full", at = Date.now()): BeginResult {
     if (this.db.query("SELECT 1 FROM meta WHERE key = 'removed'").length > 0) {
@@ -179,7 +228,34 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     }
   }
 
-  /** Runs every rule with the findings lifecycle and returns counters. */
+  /**
+   * Matches the live package nodes against the advisories of the advisory
+   * source, writes the `vulns` rows and records the scan's `vulns` coverage
+   * (applyVulnRematch). Without a feed, `vulns` is `partial` with the
+   * reason, so CF-001 stays `not_evaluated`. A source or rematch that fails
+   * is a result, `vulns` coverage `error`, like an evaluator failure.
+   * Returns counts only.
+   */
+  async matchVulns(scanId: string): Promise<VulnCounters> {
+    assertCurrent(this.db, scanId);
+    const packages = livePackages(this.db);
+    try {
+      const read = await this.evaluators.advisories.read(packages);
+      // After the await: the scan must still be current before it writes.
+      assertCurrent(this.db, scanId);
+      return matchVulns(this.db, scanId, packages, read, Date.now());
+    } catch (error) {
+      if (error instanceof StaleScanError) throw error;
+      const detail = describe(error);
+      recordCoverage(this.db, { scanId, resourceClass: "vulns", status: "error", detail });
+      return { ...noVulns(packages.length), status: "error", detail };
+    }
+  }
+
+  /**
+   * Runs every rule with the findings lifecycle and returns counters, with
+   * the IDs of the first RULE_ERRORS_LISTED rules that ended `error`.
+   */
   evaluateRules(scanId: string): RulesCounters {
     const counters: RulesCounters = {
       status: "complete",
@@ -198,7 +274,13 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
         counters.rules++;
         if (run.status === "evaluated") counters.evaluated++;
         else if (run.status === "not_evaluated") counters.notEvaluated++;
-        else counters.errors++;
+        else {
+          counters.errors++;
+          // The scan reports itself partial and names these (TM-11).
+          if (counters.errors <= RULE_ERRORS_LISTED) {
+            counters.errored = [...(counters.errored ?? []), run.ruleId];
+          }
+        }
         counters.hits += run.hits;
         counters.undecided += run.undecided;
         counters.opened += run.opened;
@@ -226,25 +308,25 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
   }
 
   /**
-   * Deletes the account's whole graph, for offboarding (Admin.removeAccount
-   * calls it after marking the index row and before deleting it). The object is
-   * migrated again, so it stays an empty, valid graph: a scan that still runs
-   * is refused like any scan that is not current, and an account that is
-   * added again starts from nothing. The `removed` marker in meta makes
-   * beginScan refuse new scans, for example from an instance that was queued
-   * before the removal (R4-03), until clearRemoved.
+   * Admin.addAccount: adds the account to the index or updates it, finishing
+   * a removal that did not finish first, then clears the `removed` marker.
+   * Runs after any addition or removal of the account that is under way, so
+   * the last call decides the end state (TM-09).
    */
-  async deleteAll(): Promise<void> {
-    await this.ctx.blockConcurrencyWhile(async () => {
-      await this.ctx.storage.deleteAll();
-      migrate(this.db);
-      this.db.run("INSERT INTO meta (key, value) VALUES ('removed', ?)", String(Date.now()));
-    });
+  addAccount(input: NewAccount): Promise<AccountRow> {
+    assertOwnAccount(this.ctx, this.env, input?.id);
+    return this.changes.run(() => addAccount(this.accounts, input));
   }
 
-  /** Lets scans begin again after deleteAll, for an account that is added again. */
-  clearRemoved(): void {
-    this.db.run("DELETE FROM meta WHERE key = 'removed'");
+  /**
+   * Admin.removeAccount: marks the index row `removing`, deletes this graph,
+   * then deletes the index rows (R5-08). Returns whether the account was in
+   * the index. Runs after any addition or removal of the account that is
+   * under way, so the last call decides the end state (TM-09).
+   */
+  removeAccount(accountId: string): Promise<boolean> {
+    assertOwnAccount(this.ctx, this.env, accountId);
+    return this.changes.run(() => removeAccount(this.accounts, accountId));
   }
 
   /** Runs one compiled rule. One call per rule keeps each request well below the CPU limit. */

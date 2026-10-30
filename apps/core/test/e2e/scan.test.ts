@@ -8,6 +8,7 @@ import { sha256 } from "@virga/graph";
 import { evaluateRules, RULES } from "@virga/rules";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AccountGraph } from "../../src/account-graph.ts";
+import { NO_ADVISORY_FEED } from "../../src/graph/vulns.ts";
 import { d1ScanIndex, upsertAccount } from "../../src/index-db.ts";
 import { runScan } from "../../src/scan/run.ts";
 import type { ScanSummary } from "../../src/scan/types.ts";
@@ -47,6 +48,14 @@ import {
 // on the graph contract; it runs as `it.fails` until the mismatch is fixed.
 
 const DAY = 86_400_000;
+
+// No advisory feed exists yet and no collector writes packages (decision 0009).
+const NO_FEED = {
+  resource_class: "vulns",
+  status: "partial",
+  detail:
+    "no advisory feed configured; no KEV catalog; package set not complete; advisory feed not complete",
+};
 
 interface FindingRow {
   fingerprint: string;
@@ -200,7 +209,12 @@ beforeAll(async () => {
   await upsertAccount(env.INDEX, { id: accountId, name: "Fake account" }, NOW);
   stub = graphOf(accountId);
   await runInDurableObject(stub, (graph: AccountGraph) => {
-    graph.evaluators = { exposure: evaluateExposure, rules: evaluateRules, ruleSet: RULES };
+    graph.evaluators = {
+      exposure: evaluateExposure,
+      rules: evaluateRules,
+      ruleSet: RULES,
+      advisories: NO_ADVISORY_FEED,
+    };
   });
 
   first = await scan("seeded", NOW);
@@ -276,12 +290,16 @@ describe("every scan", () => {
 });
 
 describe("first scan of the seeded account", () => {
-  it("completes every phase 1 class and the exposure step", async () => {
+  it("completes every phase 1 class and the exposure step; vulns is partial without a feed", async () => {
     expect(first.summary.status).toBe("complete");
     expect(first.coverage).toEqual(
-      [...RESOURCE_CLASSES, "exposure"]
+      [...RESOURCE_CLASSES, "exposure", "vulns"]
         .sort()
-        .map((resource_class) => ({ resource_class, status: "complete", detail: null })),
+        .map((resource_class) =>
+          resource_class === "vulns"
+            ? NO_FEED
+            : { resource_class, status: "complete", detail: null },
+        ),
     );
     expect(Object.keys(first.summary.classes).sort()).toEqual([...RESOURCE_CLASSES].sort());
     expect((await scanRun(first.scanId))?.status).toBe("complete");
@@ -577,12 +595,14 @@ for (const c of LEFT_OUT) {
       expect(storage?.done).toBe((storage?.chunks ?? 0) - 1);
       expect(storage?.swept).toBeUndefined();
       expect(s.coverage).toEqual(
-        [...RESOURCE_CLASSES, "exposure"]
+        [...RESOURCE_CLASSES, "exposure", "vulns"]
           .sort()
           .map((resource_class) =>
             resource_class === "storage"
               ? { resource_class, status: "partial", detail }
-              : { resource_class, status: "complete", detail: null },
+              : resource_class === "vulns"
+                ? NO_FEED
+                : { resource_class, status: "complete", detail: null },
           ),
       );
       expect(s.summary.status).toBe("partial");
@@ -676,12 +696,14 @@ describe("fourth scan, after 1,000 harmless rules push the edge tunnel's own rul
     // Every chunk was written; collection did not stop at the truncated one.
     expect(tunnels?.done).toBe(tunnels?.chunks);
     expect(fourth.coverage).toEqual(
-      [...RESOURCE_CLASSES, "exposure"]
+      [...RESOURCE_CLASSES, "exposure", "vulns"]
         .sort()
         .map((resource_class) =>
           resource_class === "tunnels"
             ? { resource_class, status: "partial", detail: reason }
-            : { resource_class, status: "complete", detail: null },
+            : resource_class === "vulns"
+              ? NO_FEED
+              : { resource_class, status: "complete", detail: null },
         ),
     );
   });

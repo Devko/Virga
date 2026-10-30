@@ -15,7 +15,9 @@ export interface SqlRunner {
    * Runs one statement that may only read, in its own transaction, and
    * returns all rows. A statement that changed rows, the schema or a
    * connection setting throws {@link ReadOnlyError}; its changes are rolled
-   * back and the setting is set back (R6-02).
+   * back and the setting is set back (R6-02). A connection setting that is
+   * not at its default before the statement throws too, before it runs, and
+   * is set back (H-3).
    */
   queryReadOnly<T extends Row = Row>(sql: string, ...params: SqlValue[]): T[];
   /** Runs one statement and discards rows. */
@@ -46,8 +48,10 @@ const VARIABLE = new Set(["$", "@", "#", ":"]);
  *
  * It skips '...', "..." and `...` (a doubled quote escapes), [...] (ends at
  * the first ]), -- comments to a newline and block comments. Anything after
- * the first `;` other than SQLite's whitespace and comments is a tail. Where
- * its reading could differ from SQLite's, it refuses:
+ * the first `;` other than SQLite's whitespace and comments is a tail.
+ * Durable Object SQL itself refuses a comment after the last `;` ("did not
+ * contain a statement"), which fails closed (H-4). Where its reading could
+ * differ from SQLite's, it refuses:
  * - `$`, `@`, `#` and `:` outside quotes and comments. SQLite reads
  *   `$name(...)` up to the next whitespace or `)`, quotes included. The
  *   compiler turns every `:name` into `?`, so a compiled rule holds none.
@@ -127,6 +131,21 @@ const FLAGS = [
 type Settings = Record<string, number>;
 
 /**
+ * The values the guard expects before a read and sets after it: SQLite's
+ * defaults, which the Durable Object and Node connections hold. Fixed, not
+ * read from the connection, so a setting that stuck from an earlier
+ * statement can never become the baseline of a later run (H-3).
+ */
+const DEFAULTS: Readonly<Settings> = Object.freeze({
+  ignore_check_constraints: 0,
+  recursive_triggers: 0,
+  reverse_unordered_selects: 0,
+  legacy_alter_table: 0,
+  defer_foreign_keys: 0,
+  case_sensitive_like: 0,
+});
+
+/**
  * Reads the settings. `case_sensitive_like` has no read, so its value is
  * what LIKE does. Throws if a value is not 0 or 1.
  */
@@ -142,7 +161,7 @@ function readSettings(db: Pick<SqlRunner, "query">): Settings {
 }
 
 /** The names of the settings that differ from `before`, all of them if they cannot be read. */
-function changedSettings(db: Pick<SqlRunner, "query">, before: Settings): string[] {
+function changedSettings(db: Pick<SqlRunner, "query">, before: Readonly<Settings>): string[] {
   let now: Settings;
   try {
     now = readSettings(db);
@@ -153,11 +172,11 @@ function changedSettings(db: Pick<SqlRunner, "query">, before: Settings): string
 }
 
 /**
- * Sets every setting to its value in `before`, whatever a read says, and
- * checks that it holds. Throws {@link ReadOnlyError} naming each setting
- * that could not be set back.
+ * Sets every setting to its value in `before` (the defaults), whatever a
+ * read says, and checks that it holds. Throws {@link ReadOnlyError} naming
+ * each setting that could not be set back.
  */
-function setBack(db: Pick<SqlRunner, "query" | "run">, before: Settings): void {
+function setBack(db: Pick<SqlRunner, "query" | "run">, before: Readonly<Settings>): void {
   for (const [name, value] of Object.entries(before)) {
     try {
       // Names come from FLAGS and case_sensitive_like, values are 0 or 1.
@@ -218,9 +237,34 @@ function filled(db: Pick<SqlRunner, "query">, names: readonly string[]): string[
 }
 
 /**
+ * Refuses, before anything runs, a read on a connection whose settings are
+ * not the defaults, and sets them to the defaults. A setting can stick, for
+ * example `case_sensitive_like` set while another cursor was open; a read
+ * that took it as its baseline would pass and keep it for the runs after
+ * (H-3). This run fails closed instead, and the next one starts clean if
+ * the setting could be set back.
+ */
+function assertDefaults(db: Pick<SqlRunner, "query" | "run">): void {
+  const differ = changedSettings(db, DEFAULTS);
+  if (differ.length === 0) return;
+  let after = "it was set back";
+  try {
+    setBack(db, DEFAULTS);
+  } catch {
+    after = "it could not be set back";
+  }
+  const names = differ.map((name) => `the setting ${name}`).join(", ");
+  const was = differ.length === 1 ? "was not at its default" : "were not at their defaults";
+  throw new ReadOnlyError(
+    `${names} ${was} before a read-only query; the query was not run and ${after}`,
+  );
+}
+
+/**
  * Runs `exec` as {@link SqlRunner.queryReadOnly} does: in a transaction of
- * `db`, comparing the database's row changes, schema, tables that hold rows
- * and connection settings before and after, and setting every setting back.
+ * `db`, comparing the database's row changes, schema and tables that hold
+ * rows before and after, and the connection settings with their fixed
+ * defaults before and after, then setting every setting to its default.
  * For the adapters, which refuse a statement tail before they call it.
  */
 export function guardRead(
@@ -228,19 +272,19 @@ export function guardRead(
   exec: () => Executed,
 ): Row[] {
   return db.transaction(() => {
+    assertDefaults(db);
     const before = db.query<State>(STATE)[0] as State;
     const held = filled(db, JSON.parse(before.tables) as string[]);
-    const settings = readSettings(db);
     let executed: Executed;
     let changedNames: string[];
     try {
       executed = exec();
-      changedNames = changedSettings(db, settings);
+      changedNames = changedSettings(db, DEFAULTS);
     } finally {
       // On every exit, whatever a read said: a rollback keeps a setting, a
       // statement can change one before a later one fails, and a read can
       // fail or, through a shadowed pragma_ function, lie.
-      setBack(db, settings);
+      setBack(db, DEFAULTS);
     }
     const after = db.query<State>(STATE)[0] as State;
     const schemaChanged = after.schema !== before.schema;
