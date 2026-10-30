@@ -7,4 +7,10 @@
 
 The Security Insight "Overprovisioned Access Policies" reports Allow-Everyone policies; link it once the insight's class is mapped.
 
-Templates for Wrangler and Terraform snippets follow in phase 4.
+## Templates
+
+[`terraform.snippet.tf`](terraform.snippet.tf) is a template, not a diff (A-14): Virga does not see your Terraform files. Adapt the audience (an email domain in the template; IdP groups are better), the IdP IDs for `allowed_idps` and the app's destination.
+
+There is no Wrangler template: Wrangler does not manage Access policies.
+
+The test range shows the fix: case `cf010-seeded` is an Allow policy for Everyone on the app of a Worker with a KV binding, and `cf010-clean` admits one named address instead ([cf010.tf](../../../infra/test-range/cf010.tf), [cases.yaml](../../../infra/test-range/cases.yaml)).

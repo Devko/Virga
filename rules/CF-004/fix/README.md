@@ -6,4 +6,10 @@
 
 The Security Insight "Unprotected Cloudflare Tunnels" reports the same condition; link it once the insight's class is mapped.
 
-Templates for Wrangler and Terraform snippets follow in phase 4.
+## Templates
+
+[`terraform.snippet.tf`](terraform.snippet.tf) is a template, not a diff (A-14): Virga does not see your Terraform files. Adapt the hostname, the audience of the Allow policy (an email domain in the template; IdP groups are better) and, for the optional origin check, your team name.
+
+There is no Wrangler template: Wrangler does not manage tunnels or Access. For a locally managed tunnel, the optional origin check goes into the ingress rule of cloudflared's `config.yml` as `originRequest.access` with `required: true`, `teamName` and `audTag`.
+
+The test range shows the fix: case `cf004-seeded` publishes a tunnel hostname with an SSH origin and no Access app, and `cf004-clean` puts the same kind of hostname behind an Access app with an Allow policy ([cf004.tf](../../../infra/test-range/cf004.tf), [cases.yaml](../../../infra/test-range/cases.yaml)).

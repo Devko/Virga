@@ -1,0 +1,32 @@
+// CF-022 fix template for a Pages project's Wrangler config. A template, not a
+// diff (A-14): merge these keys into your own wrangler.jsonc and replace the
+// values in angle brackets.
+// Test range: turns case cf022-seeded into cf022-clean (infra/test-range/cf022.tf).
+// Once an environment overrides one binding key, it must list every binding
+// key it uses (non-inheritable keys).
+{
+  "name": "<PROJECT_NAME>",
+  "pages_build_output_dir": "<OUTPUT_DIR>",
+  "compatibility_date": "<YYYY-MM-DD>",
+  "env": {
+    "preview": {
+      // Previews run the code of any branch: they get a database of their own.
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "<PROJECT_NAME>-preview",
+          "database_id": "<PREVIEW_DATABASE_ID>"
+        }
+      ]
+    },
+    "production": {
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "<PROJECT_NAME>",
+          "database_id": "<PRODUCTION_DATABASE_ID>"
+        }
+      ]
+    }
+  }
+}

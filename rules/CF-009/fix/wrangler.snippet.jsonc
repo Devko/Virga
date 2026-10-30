@@ -1,0 +1,12 @@
+// CF-009 fix template for the Worker's Wrangler config. A template, not a diff
+// (A-14): merge these keys into your own wrangler.jsonc and replace the values
+// in angle brackets.
+// Test range: turns case cf009-seeded into cf009-clean (infra/test-range/cf009.tf).
+// If nobody needs the Worker, delete it instead: wrangler delete <WORKER_NAME>
+{
+  "name": "<WORKER_NAME>",
+  // The binding to the namespace that production uses is gone. If the Worker
+  // still needs a store, it gets one of its own:
+  //   wrangler kv namespace create <WORKER_NAME>-own
+  "kv_namespaces": [{ "binding": "<BINDING>", "id": "<OWN_NAMESPACE_ID>" }]
+}
