@@ -17,6 +17,25 @@ export type {
   VulnerabilityMatch,
 } from "./report.ts";
 export {
+  buildWorkerSbom,
+  type CdxComponent,
+  type CdxProperty,
+  type CdxTool,
+  type Confidence,
+  CYCLONEDX_SCHEMA,
+  CYCLONEDX_SPEC_VERSION,
+  type CycloneDxBom,
+  checkSbom,
+  PACKAGE_SOURCES,
+  type PackageSource,
+  PROPERTY_CONFIDENCE,
+  PROPERTY_SOURCE,
+  SbomInputError,
+  type SbomPackage,
+  serializeSbom,
+  type WorkerSbomInput,
+} from "./sbom.ts";
+export {
   MASK,
   type MaskedSecret,
   maskSecret,
