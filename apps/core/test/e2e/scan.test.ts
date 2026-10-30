@@ -23,6 +23,7 @@ import {
   type Routes,
   SECRET_VALUES,
   SEEDED,
+  tunnelHostname,
 } from "./account.ts";
 
 // A full scan of a fake account: the real collectors over fixtureTransport,
@@ -84,8 +85,6 @@ let state: AccountState;
 let first: Snapshot;
 let second: Snapshot;
 let third: Snapshot;
-/** Contract-form tunnel hostname IDs (account.ts) to the IDs the collector emits. */
-let tunnelIds: Map<string, string>;
 
 async function scan(name: string, now: number): Promise<Snapshot> {
   const scanId = `${name}-${accountId}`;
@@ -157,16 +156,8 @@ async function scan(name: string, now: number): Promise<Snapshot> {
   };
 }
 
-/** Replaces contract-form tunnel hostname IDs by the IDs in the graph. */
-function resolve(id: string): string {
-  if (id.startsWith("tunnel_hostname:")) return tunnelIds.get(id) ?? id;
-  const colon = id.indexOf(":");
-  const rest = id.slice(colon + 1);
-  return rest.startsWith("tunnel_hostname:") ? `${id.slice(0, colon)}:${resolve(rest)}` : id;
-}
-
 const byFingerprint = (snapshot: Snapshot, fingerprint: string) =>
-  snapshot.findings.find((f) => f.fingerprint === resolve(fingerprint));
+  snapshot.findings.find((f) => f.fingerprint === fingerprint);
 
 beforeAll(async () => {
   accountId = newAccountId();
@@ -178,13 +169,6 @@ beforeAll(async () => {
   });
 
   first = await scan("seeded", NOW);
-  const hostnames = await sql<{ id: string; native: string }>(
-    stub,
-    `SELECT id, (props ->> '$.hostname') || (props ->> '$.path') AS native FROM nodes
-     WHERE type = 'tunnel_hostname' AND deleted_at IS NULL`,
-  );
-  tunnelIds = new Map(hostnames.map((h) => [`tunnel_hostname:${h.native}`, h.id]));
-
   second = await scan("unchanged", NOW + DAY);
   state.publicAssetsR2Dev = false;
   third = await scan("r2-dev-off", NOW + 2 * DAY);
@@ -247,7 +231,7 @@ describe("first scan of the seeded account", () => {
     expect((await scanRun(first.scanId))?.status).toBe("complete");
   });
 
-  it("emits tunnel hostname IDs in a form of the graph contract", async () => {
+  it("R5-04: emits tunnel hostname IDs in the form of the graph contract", async () => {
     const rows = await sql<{ id: string; hostname: string; path: string; tunnel: string }>(
       stub,
       `SELECT id, props ->> '$.hostname' AS hostname, props ->> '$.path' AS path,
@@ -263,17 +247,12 @@ describe("first scan of the seeded account", () => {
       "kb.example.com",
       "ops.example.com",
       "ops.example.com",
+      "ssh",
       "ssh.example.com",
       "vault.example.com",
       "wiki.example.com",
     ]);
-    for (const r of rows) {
-      // Round 1 is `<hostname><path>`; round 2 adds the tunnel ID in front.
-      expect([
-        `tunnel_hostname:${r.hostname}${r.path}`,
-        `tunnel_hostname:${r.tunnel}:${r.hostname}${r.path}`,
-      ]).toContain(r.id);
-    }
+    for (const r of rows) expect(r.id).toBe(tunnelHostname(r.tunnel, r.hostname, r.path));
   });
 
   it("R3-02: emits an entry point per hostname for ingress rules without a hostname", async () => {
@@ -301,11 +280,9 @@ describe("first scan of the seeded account", () => {
       const test = e.mismatch ? it.fails : it;
       test(`${e.case}: ${e.entry}`, () => {
         const rows = first.exposure
-          .filter((r) => r.entry_id === resolve(e.entry))
+          .filter((r) => r.entry_id === e.entry)
           .map(({ entry_id, reason, ...rest }) => rest);
-        expect(rows).toEqual(
-          e.rows.map((r) => ({ ...r, reason_id: r.reason_id && resolve(r.reason_id) })),
-        );
+        expect(rows).toEqual(e.rows);
       });
     }
 
@@ -381,14 +358,14 @@ describe("first scan of the seeded account", () => {
     });
 
     it("reports nothing beyond the seeded cases", () => {
-      const expected = new Set(SEEDED.map((c) => resolve(c.fingerprint)));
+      const expected = new Set(SEEDED.map((c) => c.fingerprint));
       expect(first.findings.map((f) => f.fingerprint).filter((f) => !expected.has(f))).toEqual([]);
     });
   });
 
   describe("no findings for the clean counterparts", () => {
     it("has every clean subject in the graph", async () => {
-      const ids = CLEAN.map((c) => resolve(c.subject));
+      const ids = CLEAN.map((c) => c.subject);
       const found = await sql<{ id: string }>(
         stub,
         "SELECT id FROM nodes WHERE deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))",
@@ -417,7 +394,7 @@ describe("first scan of the seeded account", () => {
     for (const c of CLEAN) {
       it(`${c.rule}: ${c.case}`, () => {
         const hits = first.findings.filter(
-          (f) => f.rule_id === c.rule && first.subjects.get(f.fingerprint) === resolve(c.subject),
+          (f) => f.rule_id === c.rule && first.subjects.get(f.fingerprint) === c.subject,
         );
         expect(hits).toEqual([]);
       });

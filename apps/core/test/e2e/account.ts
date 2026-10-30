@@ -550,6 +550,9 @@ const TUNNEL_CONFIGS: Record<string, { name: string; config: object }> = {
     name: "edge",
     config: {
       ingress: [
+        // R5-04: hostname and path once made the ID of the next rule, which
+        // then had no node.
+        { hostname: "ssh", path: ".example.com", service: "http_status:404" },
         // CF-004 seeded: SSH to the origin, no Access app on the hostname.
         { hostname: "ssh.example.com", service: "ssh://localhost:22" },
         // CF-004 clean: behind the "Internal app" Access app.
@@ -852,13 +855,9 @@ export const SECRET_VALUES = [
   FAKE_CLIENT_ID,
 ];
 
-/**
- * A tunnel hostname node ID in the form of the graph contract as of round 1,
- * `<hostname><path>`. The test maps it to the ID the collector emits, so the
- * round 2 form `<tunnel_id>:<hostname><path>` passes too. Each hostname and
- * path appears in one tunnel only, so the mapping is unique.
- */
-const tunnelHostname = (hostnameAndPath: string) => `tunnel_hostname:${hostnameAndPath}`;
+/** A tunnel hostname node ID as the graph contract specifies it: `<tunnel_id>:<hostname>:<path>`. */
+export const tunnelHostname = (tunnel: string, hostname: string, path = "") =>
+  `tunnel_hostname:${tunnel}:${hostname}:${path}`;
 
 export interface SeededCase {
   rule: string;
@@ -885,25 +884,25 @@ export const SEEDED: SeededCase[] = [
   {
     rule: "CF-004",
     case: "public tunnel hostname with an SSH origin",
-    fingerprint: `CF-004:${tunnelHostname("ssh.example.com")}`,
+    fingerprint: `CF-004:${tunnelHostname(TUNNEL_EDGE, "ssh.example.com")}`,
     severity: "critical",
   },
   {
     rule: "CF-004",
     case: "R3-01: SSH origin under a top-level access block that cloudflared does not enforce",
-    fingerprint: `CF-004:${tunnelHostname("git.example.com")}`,
+    fingerprint: `CF-004:${tunnelHostname(TUNNEL_TEAM, "git.example.com")}`,
     severity: "critical",
   },
   {
     rule: "CF-004",
     case: "R3-02: path-only rule before a hostname rule that requires an Access token",
-    fingerprint: `CF-004:${tunnelHostname("dash.example.com^/debug")}`,
+    fingerprint: `CF-004:${tunnelHostname(TUNNEL_DEBUG, "dash.example.com", "^/debug")}`,
     severity: "high",
   },
   {
     rule: "CF-004",
     case: "R3-02: catch-all origin behind a path-restricted hostname that requires an Access token",
-    fingerprint: `CF-004:${tunnelHostname("ops.example.com")}`,
+    fingerprint: `CF-004:${tunnelHostname(TUNNEL_OPS, "ops.example.com")}`,
     severity: "high",
   },
   {
@@ -974,32 +973,32 @@ export const CLEAN: CleanCase[] = [
   {
     rule: "CF-004",
     case: "tunnel hostname behind Access",
-    subject: tunnelHostname("app.example.com"),
+    subject: tunnelHostname(TUNNEL_EDGE, "app.example.com"),
   },
   {
     rule: "CF-004",
     case: "R3-01: tunnel hostname whose own rule requires an Access token",
-    subject: tunnelHostname("wiki.example.com"),
+    subject: tunnelHostname(TUNNEL_TEAM, "wiki.example.com"),
   },
   {
     rule: "CF-004",
     case: "R3-02: hostname rule that requires an Access token next to a path-only rule",
-    subject: tunnelHostname("dash.example.com"),
+    subject: tunnelHostname(TUNNEL_DEBUG, "dash.example.com"),
   },
   {
     rule: "CF-004",
     case: "R3-02: path-only rule on a hostname behind an Access app",
-    subject: tunnelHostname("kb.example.com^/debug"),
+    subject: tunnelHostname(TUNNEL_DEBUG, "kb.example.com", "^/debug"),
   },
   {
     rule: "CF-004",
     case: "R3-02: path-restricted hostname rule that requires an Access token",
-    subject: tunnelHostname("ops.example.com^/admin"),
+    subject: tunnelHostname(TUNNEL_OPS, "ops.example.com", "^/admin"),
   },
   {
     rule: "CF-004",
     case: "R3-02: hostname rule that requires an Access token on every path, before a catch-all origin",
-    subject: tunnelHostname("vault.example.com"),
+    subject: tunnelHostname(TUNNEL_OPS, "vault.example.com"),
   },
   {
     rule: "CF-007",
@@ -1121,53 +1120,53 @@ export const EXPOSURE: ExposureExpectation[] = [
   },
   {
     case: "tunnel hostname without Access",
-    entry: tunnelHostname("ssh.example.com"),
+    entry: tunnelHostname(TUNNEL_EDGE, "ssh.example.com"),
     rows: [row("public", null)],
   },
   {
     case: "tunnel hostname behind Access",
-    entry: tunnelHostname("app.example.com"),
+    entry: tunnelHostname(TUNNEL_EDGE, "app.example.com"),
     rows: [row("access", `access_app:${APP_TUNNEL}`)],
   },
   {
     case: "R3-01: a top-level access block leaves the tunnel hostname public",
-    entry: tunnelHostname("git.example.com"),
+    entry: tunnelHostname(TUNNEL_TEAM, "git.example.com"),
     rows: [row("public", null)],
   },
   {
     case: "R3-01: the rule's own access block requires the token",
-    entry: tunnelHostname("wiki.example.com"),
-    rows: [originRow(tunnelHostname("wiki.example.com"))],
+    entry: tunnelHostname(TUNNEL_TEAM, "wiki.example.com"),
+    rows: [originRow(tunnelHostname(TUNNEL_TEAM, "wiki.example.com"))],
   },
   {
     case: "R3-02: a path-only rule is public on a hostname without an Access app",
-    entry: tunnelHostname("dash.example.com^/debug"),
+    entry: tunnelHostname(TUNNEL_DEBUG, "dash.example.com", "^/debug"),
     rows: [row("public", null, "/debug*")],
   },
   {
     case: "R3-02: the hostname rule's own token check decides the hostname rule only",
-    entry: tunnelHostname("dash.example.com"),
-    rows: [originRow(tunnelHostname("dash.example.com"))],
+    entry: tunnelHostname(TUNNEL_DEBUG, "dash.example.com"),
+    rows: [originRow(tunnelHostname(TUNNEL_DEBUG, "dash.example.com"))],
   },
   {
     case: "R3-02: an Access app on the hostname covers a path-only rule",
-    entry: tunnelHostname("kb.example.com^/debug"),
+    entry: tunnelHostname(TUNNEL_DEBUG, "kb.example.com", "^/debug"),
     rows: [row("access", `access_app:${APP_KB}`, "/debug*")],
   },
   {
     case: "R3-02: a path-restricted hostname rule with its own token check",
-    entry: tunnelHostname("ops.example.com^/admin"),
-    rows: [originRow(tunnelHostname("ops.example.com^/admin"), "/admin*")],
+    entry: tunnelHostname(TUNNEL_OPS, "ops.example.com", "^/admin"),
+    rows: [originRow(tunnelHostname(TUNNEL_OPS, "ops.example.com", "^/admin"), "/admin*")],
   },
   {
     case: "R3-02: the catch-all origin is public on the path-restricted hostname",
-    entry: tunnelHostname("ops.example.com"),
+    entry: tunnelHostname(TUNNEL_OPS, "ops.example.com"),
     rows: [row("public", null)],
   },
   {
     case: "R3-02: a hostname rule for every path keeps the catch-all away",
-    entry: tunnelHostname("vault.example.com"),
-    rows: [originRow(tunnelHostname("vault.example.com"))],
+    entry: tunnelHostname(TUNNEL_OPS, "vault.example.com"),
+    rows: [originRow(tunnelHostname(TUNNEL_OPS, "vault.example.com"))],
   },
   {
     case: "enabled r2.dev domain",

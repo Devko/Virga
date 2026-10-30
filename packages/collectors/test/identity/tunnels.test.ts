@@ -1,4 +1,5 @@
 import { envelope } from "@virga/cf-api/testing";
+import { sha256 } from "@virga/graph";
 import { describe, expect, it } from "vitest";
 import {
   accessRequired,
@@ -35,8 +36,8 @@ import {
 } from "./helpers.ts";
 
 const routes = tunnelsRoutes;
-const blogHost = (host: string) => `tunnel_hostname:${BLOG}:${host}`;
-const legacyHost = (host: string) => `tunnel_hostname:${LEGACY}:${host}`;
+const blogHost = (host: string, path = "") => `tunnel_hostname:${BLOG}:${host}:${path}`;
+const legacyHost = (host: string, path = "") => `tunnel_hostname:${LEGACY}:${host}:${path}`;
 
 /** The fixture routes with the blog tunnel serving this configuration. */
 const withBlogConfig = (config: object) => ({
@@ -45,6 +46,10 @@ const withBlogConfig = (config: object) => ({
 });
 
 const required = { access: { required: true, teamName: "acme", audTag: ["aud1"] } };
+
+/** The part after the tunnel ID for a pair whose contract ID another pair holds. */
+const pairHash = async (host: string, path: string) =>
+  `sha256:${await sha256(JSON.stringify([host, path]))}`;
 
 /** The blog tunnel's hostname nodes, as `ID → props`. */
 async function blogHostnames(ingress: object[]) {
@@ -149,16 +154,16 @@ describe("tunnels collector", () => {
         blogHost("ssh.example.com"),
         blogHost("status.example.com"),
         blogHost("tcp.example.com"),
-        blogHost("tunnel.example.comsubpath"),
+        blogHost("tunnel.example.com", "subpath"),
         legacyHost("legacy.example.com"),
         legacyHost("open.example.com"),
         legacyHost("ssh.example.com"),
         legacyHost("wiki.example.com"),
       ].sort(),
     );
-    expect(node(output, blogHost("tunnel.example.comsubpath"))).toEqual({
+    expect(node(output, blogHost("tunnel.example.com", "subpath"))).toEqual({
       type: "tunnel_hostname",
-      nativeId: `${BLOG}:tunnel.example.comsubpath`,
+      nativeId: `${BLOG}:tunnel.example.com:subpath`,
       name: "tunnel.example.com",
       props: {
         hostname: "tunnel.example.com",
@@ -246,14 +251,14 @@ describe("tunnels collector", () => {
       { service: "http_status:404" },
     ]);
     expect(nodes).toEqual({
-      "app.example.com^/debug": hostProps(
+      "app.example.com:^/debug": hostProps(
         "app.example.com",
         "^/debug",
         "http://localhost:6060",
         false,
         true,
       ),
-      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", true, false),
     });
   });
 
@@ -270,14 +275,14 @@ describe("tunnels collector", () => {
       { service: "http://localhost:8080" },
     ]);
     expect(nodes).toEqual({
-      "app.example.com^/admin": hostProps(
+      "app.example.com:^/admin": hostProps(
         "app.example.com",
         "^/admin",
         "http://localhost:9000",
         true,
         false,
       ),
-      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", false, true),
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", false, true),
     });
   });
 
@@ -301,18 +306,18 @@ describe("tunnels collector", () => {
     const fallthrough = output.nodes.filter((n) => n.props?.via_fallthrough === true);
     expect(fallthrough.map((n) => [n.nativeId.slice(BLOG.length + 1), n.name]).sort()).toEqual(
       [
-        ["a.example.com", "a.example.com"],
-        ["a.example.com^/metrics", "a.example.com"],
-        ["a.example.com^/ssh", "a.example.com"],
-        ["b.example.com", "b.example.com"],
-        ["b.example.com^/metrics", "b.example.com"],
-        ["b.example.com^/ssh", "b.example.com"],
+        ["a.example.com:", "a.example.com"],
+        ["a.example.com:^/metrics", "a.example.com"],
+        ["a.example.com:^/ssh", "a.example.com"],
+        ["b.example.com:", "b.example.com"],
+        ["b.example.com:^/metrics", "b.example.com"],
+        ["b.example.com:^/ssh", "b.example.com"],
       ].sort(),
     );
-    expect(node(output, blogHost("b.example.com^/metrics")).props).toEqual(
+    expect(node(output, blogHost("b.example.com", "^/metrics")).props).toEqual(
       hostProps("b.example.com", "^/metrics", "http://localhost:9090", true, true),
     );
-    expect(node(output, blogHost("a.example.com^/ssh")).props).toEqual(
+    expect(node(output, blogHost("a.example.com", "^/ssh")).props).toEqual(
       hostProps("a.example.com", "^/ssh", "ssh://localhost:22", false, true),
     );
     // Every fall-through node routes to its tunnel.
@@ -321,7 +326,7 @@ describe("tunnels collector", () => {
         `ROUTES_TO:tunnel_hostname:${n.nativeId}->tunnel:${BLOG}`,
       );
     }
-    expect(nodeIds(output, "tunnel_hostname")).not.toContain(blogHost("*^/ssh"));
+    expect(nodeIds(output, "tunnel_hostname")).not.toContain(blogHost("*", "^/ssh"));
   });
 
   it("R3-02: skips a rule for a hostname that an earlier rule takes whole or on the same path", async () => {
@@ -339,23 +344,85 @@ describe("tunnels collector", () => {
       { service: "http://localhost:8081" },
     ]);
     expect(nodes).toEqual({
-      "app.example.com": hostProps("app.example.com", "", "http://localhost:8080", true, false),
-      "web.example.com^/debug": hostProps(
+      "app.example.com:": hostProps("app.example.com", "", "http://localhost:8080", true, false),
+      "web.example.com:^/debug": hostProps(
         "web.example.com",
         "^/debug",
         "http://localhost:6060",
         false,
         true,
       ),
-      "web.example.com^/api": hostProps(
+      "web.example.com:^/api": hostProps(
         "web.example.com",
         "^/api",
         "http://localhost:7001",
         false,
         false,
       ),
-      "web.example.com": hostProps("web.example.com", "", "http://localhost:8081", false, true),
+      "web.example.com:": hostProps("web.example.com", "", "http://localhost:8081", false, true),
     });
+  });
+
+  it("R5-04: a hostname and a path never combine into another hostname's ID", async () => {
+    // Case 1 of the review: both rules had the ID <tid>:ssh.example.com, so
+    // the SSH origin got no node.
+    expect(
+      await blogHostnames([
+        { hostname: "ssh", path: ".example.com", service: "http_status:404" },
+        { hostname: "ssh.example.com", service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      "ssh:.example.com": hostProps("ssh", ".example.com", "http_status:404", false, false),
+      "ssh.example.com:": hostProps("ssh.example.com", "", "ssh://localhost:22", false, false),
+    });
+    // Case 2: the rule with a token check took the ID of the one without.
+    expect(
+      await blogHostnames([
+        {
+          hostname: "app.example.co",
+          path: "m",
+          service: "http://localhost:8080",
+          originRequest: required,
+        },
+        { hostname: "app.example.com", service: "ssh://localhost:22" },
+        { service: "http_status:404" },
+      ]),
+    ).toEqual({
+      "app.example.co:m": hostProps("app.example.co", "m", "http://localhost:8080", true, false),
+      "app.example.com:": hostProps("app.example.com", "", "ssh://localhost:22", false, false),
+    });
+  });
+
+  it("R5-04: shadows by hostname and path, and gives a pair whose ID is taken a hashed one", async () => {
+    // A hostname with ':' still meets another pair's ID. The first pair keeps
+    // it; the next one gets a hash of hostname and path instead of no node.
+    const nodes = await blogHostnames([
+      { hostname: "a.example.com:x", service: "http://localhost:1" },
+      { hostname: "a.example.com", path: "x:", service: "ssh://localhost:22" },
+      { service: "http_status:404" },
+    ]);
+    expect(nodes).toEqual({
+      "a.example.com:x:": hostProps("a.example.com:x", "", "http://localhost:1", false, false),
+      [await pairHash("a.example.com", "x:")]: hostProps(
+        "a.example.com",
+        "x:",
+        "ssh://localhost:22",
+        false,
+        false,
+      ),
+    });
+  });
+
+  it("R5-04: fails the chunk when a crafted rule holds the hashed ID too", async () => {
+    const taken = await pairHash("a.example.com", "x:");
+    const ingress = [
+      { hostname: "sha256", path: taken.slice("sha256:".length), service: "http://localhost:1" },
+      { hostname: "a.example.com:x", service: "http://localhost:2" },
+      { hostname: "a.example.com", path: "x:", service: "ssh://localhost:22" },
+      { service: "http_status:404" },
+    ];
+    await expect(run(tunnelsCollector, withBlogConfig({ ingress }))).rejects.toThrow(RangeError);
   });
 
   it("parses the origin scheme of every service type", async () => {

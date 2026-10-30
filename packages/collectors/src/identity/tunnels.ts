@@ -1,3 +1,4 @@
+import { sha256 } from "@virga/graph";
 import {
   chunk,
   GraphBuilder,
@@ -180,16 +181,36 @@ function ingressRules(ingress: unknown): IngressRule[] {
 }
 
 /**
+ * Native IDs of one tunnel's hostname nodes: `<tunnel_id>:<hostname>:<path>`.
+ * The tunnel ID keeps two tunnels that serve the same hostname apart, and the
+ * ':' keeps a hostname and a path from combining into another hostname's ID
+ * (review R5-04). A hostname may still hold a ':' itself, so a pair whose ID
+ * an earlier pair holds gets a hash of hostname and path instead; a crafted
+ * rule that holds that one too fails the chunk rather than hide a node.
+ */
+function hostnameIds(tunnelId: string): (hostname: string, path: string) => Promise<string> {
+  const used = new Set<string>();
+  return async (hostname, path) => {
+    let id = `${tunnelId}:${hostname}:${path}`;
+    if (used.has(id)) {
+      id = `${tunnelId}:sha256:${await sha256(JSON.stringify([hostname, path]))}`;
+      if (used.has(id)) throw new RangeError("two tunnel ingress rules share a node ID");
+    }
+    used.add(id);
+    return id;
+  };
+}
+
+/**
  * One `tunnel_hostname` per rule and hostname it can take a request for.
  * cloudflared takes the first rule that matches the hostname and path, and a
  * rule without a hostname matches every hostname (review R3-02). Such a rule
  * yields a `via_fallthrough` node for every hostname in the ingress, unless
- * it answers with a status code. The ID is `<tunnel_id>:<hostname><path>` for
- * both kinds: for one hostname and path only the first rule applies, so the
- * ID stays unique and does not depend on the rule's position. A rule never
- * applies to a hostname after an earlier rule took that hostname on the same
- * path or on every path (no path); hostnames that only DNS sends to the
- * tunnel stay unknown to the collector.
+ * it answers with a status code. A rule never applies to a hostname after an
+ * earlier rule took that hostname on the same path or on every path (no
+ * path), so each hostname and path has one node whatever the rule's
+ * position. Hostnames that only DNS sends to the tunnel stay unknown to the
+ * collector.
  */
 async function collectIngress(
   ctx: CollectorContext,
@@ -201,29 +222,46 @@ async function collectIngress(
   const result = await unlessGone(ctx.api.get<CfTunnelConfig | null>(path));
   const config = isObject(result?.config) ? result.config : {};
   const rules = ingressRules(config.ingress);
-  const hostnames = sortedUnique(rules.map((r) => r.hostname));
-  const taken = new Set<string>();
-  const takenWhole = new Set<string>();
+  const nextId = hostnameIds(id);
+  // Hostnames that no earlier rule took on every path, in sorted order.
+  const open = new Set(sortedUnique(rules.map((r) => r.hostname)));
+  // Paths that a rule without a hostname took for every hostname.
+  const takenPaths = new Set<string>();
+  // Hostname and path pairs that a hostname rule took.
+  const takenPairs = new Set<string>();
+  const pair = (hostname: string, path: string) => JSON.stringify([hostname, path]);
+
+  const emit = async (rule: IngressRule, hostname: string) => {
+    const nativeId = await nextId(hostname, rule.path);
+    if (!fitsId(nativeId)) return;
+    const hostId = g.node("tunnel_hostname", nativeId, hostname, {
+      hostname,
+      path: rule.path,
+      service: withoutCredentials(rule.service),
+      origin_scheme: originScheme(rule.service),
+      tunnel_id: id,
+      access_required: rule.accessRequired,
+      via_fallthrough: rule.hostname === null,
+    });
+    g.edge("ROUTES_TO", hostId, tunnelNode);
+  };
+
   for (const rule of rules) {
-    const fallthrough = rule.hostname === null;
-    for (const hostname of rule.hostname === null ? hostnames : [rule.hostname]) {
-      // The tunnel ID keeps two tunnels that serve the same hostname apart.
-      const nativeId = `${id}:${hostname}${rule.path}`;
-      if (takenWhole.has(hostname) || taken.has(nativeId)) continue;
-      taken.add(nativeId);
-      if (rule.path === "") takenWhole.add(hostname);
-      if (fallthrough && originScheme(rule.service) === "http_status") continue;
-      if (!fitsId(nativeId)) continue;
-      const hostId = g.node("tunnel_hostname", nativeId, hostname, {
-        hostname,
-        path: rule.path,
-        service: withoutCredentials(rule.service),
-        origin_scheme: originScheme(rule.service),
-        tunnel_id: id,
-        access_required: rule.accessRequired,
-        via_fallthrough: fallthrough,
-      });
-      g.edge("ROUTES_TO", hostId, tunnelNode);
+    if (takenPaths.has(rule.path)) continue;
+    if (rule.hostname !== null) {
+      const key = pair(rule.hostname, rule.path);
+      if (!open.has(rule.hostname) || takenPairs.has(key)) continue;
+      takenPairs.add(key);
+      if (rule.path === "") open.delete(rule.hostname);
+      await emit(rule, rule.hostname);
+      continue;
     }
+    if (originScheme(rule.service) !== "http_status") {
+      for (const hostname of open) {
+        if (!takenPairs.has(pair(hostname, rule.path))) await emit(rule, hostname);
+      }
+    }
+    takenPaths.add(rule.path);
+    if (rule.path === "") open.clear();
   }
 }

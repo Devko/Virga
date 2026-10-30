@@ -183,7 +183,7 @@ export class Graph {
       config_src: "cloudflare",
     });
     const scheme = service.slice(0, service.indexOf(":"));
-    const id = this.node("tunnel_hostname", `${tunnelId}:${hostname}${path}`, hostname, {
+    const id = this.node("tunnel_hostname", `${tunnelId}:${hostname}:${path}`, hostname, {
       hostname,
       path,
       service,

@@ -19,7 +19,8 @@ import {
 } from "./graph.ts";
 
 const CD = (h: string) => `worker_custom_domain:${h}`;
-const TH = (h: string, tunnel = "tun-1") => `tunnel_hostname:${tunnel}:${h}`;
+const TH = (host: string, path = "", tunnel = "tun-1") =>
+  `tunnel_hostname:${tunnel}:${host}:${path}`;
 const APP = (id: string) => `access_app:${id}`;
 const POLICY = (id: string) => `access_policy:${id}`;
 const EMAIL: Selector = { kind: "email_domain", value: "example.com" };
@@ -448,7 +449,7 @@ const cases: Case[] = [
       g.tunnelHostname("web.example.com", "^/admin/", "http://localhost:8080");
       allowApp(g, "admin", [host("web.example.com", "/admin")]);
     },
-    expect: [[TH("web.example.com^/admin/"), "/admin/*", "access", 2, APP("admin")]],
+    expect: [[TH("web.example.com", "^/admin/"), "/admin/*", "access", 2, APP("admin")]],
   },
   {
     name: "an unanchored tunnel path is read as all paths with lower confidence",
@@ -457,8 +458,8 @@ const cases: Case[] = [
       allowApp(g, "private", [host("img.example.com", "/private")]);
     },
     expect: [
-      [TH("img.example.com\\.(jpg|png)$"), "/", "public", 1, null],
-      [TH("img.example.com\\.(jpg|png)$"), "/private", "access", 1, APP("private")],
+      [TH("img.example.com", "\\.(jpg|png)$"), "/", "public", 1, null],
+      [TH("img.example.com", "\\.(jpg|png)$"), "/private", "access", 1, APP("private")],
     ],
   },
   {
@@ -488,7 +489,7 @@ const cases: Case[] = [
     },
     expect: [
       [TH("ssh.example.com"), "/", "public", 2, null],
-      [TH("ssh.example.com", "tun-2"), "/", "public", 2, null],
+      [TH("ssh.example.com", "", "tun-2"), "/", "public", 2, null],
     ],
   },
   {
@@ -697,7 +698,7 @@ const cases: Case[] = [
     },
     expect: [
       [TH("app.example.com"), "/", "public", 2, null],
-      [TH("app.example.com^/admin"), "/admin*", "access", 1, TH("app.example.com^/admin")],
+      [TH("app.example.com", "^/admin"), "/admin*", "access", 1, TH("app.example.com", "^/admin")],
     ],
   },
   {
@@ -710,7 +711,7 @@ const cases: Case[] = [
     },
     expect: [
       [TH("app.example.com"), "/", "access", 1, TH("app.example.com")],
-      [TH("app.example.com^/debug"), "/debug*", "public", 2, null],
+      [TH("app.example.com", "^/debug"), "/debug*", "public", 2, null],
     ],
   },
   {
@@ -730,10 +731,10 @@ const cases: Case[] = [
     },
     expect: [
       // The regex path is read approximately, so split prefixes have lower confidence.
-      [TH("api.example.com^/v1"), "/v1*", "public", 1, null],
-      [TH("api.example.com^/v1"), "/v1/admin", "access", 1, APP("v1")],
-      [TH("kb.example.com^/debug"), "/debug*", "access", 2, APP("kb")],
-      [TH("open.example.com^/debug"), "/debug*", "public", 2, POLICY("open-bypass")],
+      [TH("api.example.com", "^/v1"), "/v1*", "public", 1, null],
+      [TH("api.example.com", "^/v1"), "/v1/admin", "access", 1, APP("v1")],
+      [TH("kb.example.com", "^/debug"), "/debug*", "access", 2, APP("kb")],
+      [TH("open.example.com", "^/debug"), "/debug*", "public", 2, POLICY("open-bypass")],
       [TH("ops.example.com"), "/", "access", 1, TH("ops.example.com")],
     ],
   },
