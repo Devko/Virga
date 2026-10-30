@@ -21,5 +21,12 @@ export {
   readOsvRecord,
 } from "./osv.ts";
 export { type NpmPurl, parseNpmPurl } from "./purl.ts";
+export {
+  type RematchInput,
+  type RematchResult,
+  rematch,
+  type UnknownMatch,
+  type UnparsedPackage,
+} from "./rematch.ts";
 export { compareSemver, parseSemver, type SemVer } from "./semver.ts";
 export { type SeverityRank, severityRank } from "./severity.ts";
