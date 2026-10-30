@@ -362,7 +362,7 @@ export function RemovalResult({ result }: { result: RemovalView }) {
       {token !== null && (
         <p>
           {account === null
-            ? "The account could not be removed from the index. Try again: removal is safe to repeat."
+            ? "Virga could not finish removing the account. It stays listed as removing until the removal is repeated, and no scan of it begins. Repeating the removal is safe: it finishes what is left."
             : account.removed
               ? "The account, its scan history and its graph were deleted."
               : "The account was not in the index; its graph was cleared."}

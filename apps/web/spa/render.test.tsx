@@ -133,9 +133,20 @@ describe("SPA views render account strings as text", () => {
     expect(brokerFailed).toContain('class="problem"');
     expect(brokerFailed).toContain("the account was kept");
     expect(brokerFailed).not.toContain("cannot revoke");
-    const coreFailed = html(true, null);
-    expect(coreFailed).toContain('class="problem"');
-    expect(coreFailed).toContain("removal is safe to repeat");
+  });
+
+  it("a removal that core did not finish stays removing until it is repeated (R5-08)", () => {
+    for (const removed of [true, false]) {
+      const html = renderToStaticMarkup(
+        <RemovalResult result={{ token: { removed }, account: null }} />,
+      );
+      expectInert(html);
+      expect(html).toContain('class="problem"');
+      expect(html).toContain("Virga could not finish removing the account.");
+      expect(html).toContain("It stays listed as removing until the removal is repeated");
+      expect(html).toContain("Repeating the removal is safe");
+      expect(html).not.toContain("cannot revoke");
+    }
   });
 
   it("caps deep and long JSON", () => {
