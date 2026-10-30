@@ -22,3 +22,5 @@ The exposure evaluator decided an app `access` when a Bypass policy's include he
 ## Consequences
 
 A Bypass for an office network is reported as public. That is a false positive the operator can suppress with a reason; the alternative, a false "protected", cannot be seen at all.
+
+On a tunnel hostname with `access_required`, a Service Auth policy for every address keeps the hostname public next to any Bypass, in any order (review R4-01, round 5). That can be a false positive: a Bypass for everyone without require or exclude rules that is evaluated first takes every request, so Access issues no token and cloudflared refuses the request. The evaluator does not model require and exclude rules or the exact order of Bypass and Service Auth policies, so it errs toward public here too.
