@@ -6,7 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@10.28.0",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.18"
   },
   "scripts": {
     "lint": "biome check .",
@@ -15,7 +15,11 @@
     "test": "pnpm -r test",
     "rules:build": "node packages/rules/src/cli.ts build",
     "rules:check": "node packages/rules/src/cli.ts check",
-    "ci": "pnpm lint && pnpm rules:check && pnpm typecheck && pnpm test"
+    "ci": "pnpm lint && pnpm rules:check && pnpm typecheck && pnpm test && pnpm test:scripts",
+    "build": "pnpm -r --if-present build",
+    "deploy": "node scripts/deploy.ts",
+    "deploy:dry-run": "node scripts/deploy.ts --dry-run",
+    "test:scripts": "tsc -p scripts && vitest run --root scripts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

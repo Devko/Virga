@@ -29,10 +29,7 @@ jobs:
       - run: pnpm rules:check
       - run: pnpm typecheck
       - run: pnpm test
-      - name: Typecheck and test scripts
-        run: |
-          pnpm exec tsc -p scripts
-          pnpm exec vitest run --root scripts
+      - run: pnpm test:scripts
 
   # Bundles every Worker with `wrangler deploy --dry-run` and checks the
   # configs against each other. Uses no Cloudflare credentials.

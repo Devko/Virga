@@ -38,6 +38,23 @@ Status (2026-10-29): all six are merged. Integration fixes: the broker's refusal
 | `deploy` | `scripts/deploy.ts` (idempotent setup and deploy in dependency order, dry-run mode), dry-run deploys in CI, operator guide | `scripts/**`, `docs/operator/**`, `.github/workflows/ci.yml` | `wrangler deploy --dry-run` passes for every Worker in CI; the guide covers deployment, Access for the UI, creating tokens per profile with the exact permission list, and onboarding |
 | `review` | Read-only security review of everything merged | none (report only) | A report of verified findings with severity, location and a proposed fix |
 
+Round 2 status (2026-10-30): all five builders are merged, CI is green, and the end-to-end scan test passes on top of `access-v2` and `undecided`. The security review is in [docs/reviews/2026-10-30-security-review.md](../reviews/2026-10-30-security-review.md): 2 high, 3 medium, 5 low.
+
+- R2-02 is fixed by `undecided`, and R2-05 by `access-v2`.
+- R2-10 is fixed by the integrator: `minimumReleaseAge` in `pnpm-workspace.yaml`.
+- R2-01 is decided in [decision 0003](../decisions/0003-bypass-and-service-auth-exposure.md).
+- The rest goes to round 3.
+
+## Packages for phase 1, round 3
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `fix-exposure` | R2-01 (decision 0003) and R2-03 in the exposure evaluator | `packages/exposure/**` | Tests reproduce each finding's scenario and pass with the fix; the graph contract's exposure semantics hold |
+| `fix-collectors` | R2-04, R2-06, R2-09; `Pages Metadata Read` as the pages permission | `packages/collectors/src/**`, `packages/collectors/test/**` | Tests reproduce each finding and pass |
+| `fix-rules` | R2-08 (CF-003); the rule changes `access-v2` asked for: CF-011 covers a whole host for hostname paths `""`, `/` and `/*`, `all_workers` reach in CF-010, CF-011 and CF-002, CF-004 fixtures with `<tunnel_id>:` IDs and `access_required`; compiler fixture checks by prefix (`positive-`, `negative-`, `undecided-`; rules that read exposure need an undecided fixture); export `decidedOf` | `rules/**`, `packages/rules/src/` except `evaluate.ts`, `packages/rules/test/` except `evaluate*.test.ts`, `packages/rules/src/*.gen.ts` | `pnpm rules:build` passes with the stricter checks; every changed rule has fixtures for the new cases |
+| `fix-core` | R2-07 (a stale or superseded scan cannot write); `GraphReader.listAccounts`; `Admin.removeAccount` (index rows and the account's graph storage); migration 2 adding `undecided` and `error` to `rule_runs`, written by `evaluateRules` and summed in the scan counters | `apps/core/**`, `packages/graph/src/schema.ts`, `packages/graph/test/**`, `packages/rules/src/evaluate.ts`, `packages/rules/test/evaluate*.test.ts` | Tests cover each item; the web Worker's account list works against the real `GraphReader` signature |
+| `review-2` | Read-only security review of what round 2 added: `apps/web`, `scripts/`, the `access-v2` and `undecided` changes | none (report only) | A report of verified findings |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.

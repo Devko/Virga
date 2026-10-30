@@ -158,16 +158,19 @@ Emitted for the managed `r2.dev` domain only when it is enabled.
 
 - `{ kind: "hostname", host, path, overrides }`.
   - `host` is lowercase and may start with `*.`.
-  - `path` is the Access path as configured, wildcards included (`/admin`, `/alpha/*`, `/foo*`), or `""` when absent. Evaluators apply Access path semantics: `/alpha/*` does not cover `/alpha` itself.
-  - `overrides` lists the destination's overrides as `{ behavior, path_pattern }[]`, empty when there are none. `behavior: "public"` makes those paths reachable without Access.
+  - `path` is the Access path as configured, wildcards and a trailing slash included (`/admin`, `/admin/`, `/alpha/*`, `/foo*`, `/foo*/bar`), or `""` when absent. Evaluators apply Access path semantics: a path without a wildcard covers its subpaths, `/alpha/*` does not cover `/alpha` itself, and `/*` covers the whole host. A port, a query, a fragment, or a host wildcard other than a leading `*.` makes the destination `other`.
+  - `overrides` lists the destination's overrides as `{ behavior, path_pattern }[]`, sorted and deduplicated, empty when there are none.
+    - Both are strings as the API returns them; `path_pattern` is verbatim, at most 512 characters.
+    - `behavior: "public"` makes those paths reachable without Access; the API documents no other behavior.
+    - Unlike `path`, an override path without a wildcard matches that exact path only.
+    - A destination whose overrides cannot be read becomes `other`, so no public path is lost. That covers overrides that are not a list, more than 100 of them, or an item without a string `behavior` or `path_pattern`.
 - `{ kind: "worker", script, scope, overrides }`. Worker-level Access.
   - `script` is the script name, resolved from the API's `worker_id` through the Workers list. If it cannot be resolved, the collector emits `other` instead.
   - `scope` is `all` or `previews`.
-- `{ kind: "all_workers", scope }`. Account-level Worker Access (API destinations `all_workers` and `all_preview_workers`). It ranks below Worker-level targets.
+  - `overrides` as for `hostname`.
+- `{ kind: "all_workers", scope, overrides }`. Account-level Worker Access: the API destination `all_workers` has scope `all`, `all_preview_workers` has scope `previews`. Overrides are read as for `worker`. It ranks below Worker-level targets.
 - `{ kind: "private", cidr, hostname, port_range }`. Private destinations; used from phase 3.
 - `{ kind: "other", raw }`. Anything the collector cannot normalize. A collector never drops a destination: a dropped destination would turn `unknown` into `public` or `access`.
-
-Round 1 status: the identity collector still emits `other` for overrides and for `all_workers` / `all_preview_workers`, and it strips a trailing `/*` from paths. The exposure evaluator reads both forms. Round 2 moves both to the shapes above.
 
 `access_policy` — native ID: policy ID; name: policy name.
 
@@ -202,7 +205,7 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 
 `access_group` — native ID: group ID. Props: `include`, `require`, `exclude` (`Selector[]`).
 
-`service_token` — native ID: token ID; name: token name. Props: `expires_at` (string \| null), `duration` (string \| null), `enabled` (boolean, round 2). Signal: `last_seen_at` (epoch ms, `null` when never seen). Client IDs and secrets are never stored.
+`service_token` — native ID: token ID; name: token name. Props: `expires_at` (string \| null), `duration` (string \| null), `enabled` (boolean \| null; `false` means the token cannot authenticate, for example after a leak report; `null` when the API omits the field). Signal: `last_seen_at` (epoch ms, `null` when never seen). Client IDs and secrets are never stored.
 
 `identity_provider` — native ID: IdP ID; name: IdP name. Props: `idp_type` (`onetimepin`, `azureAD`, `okta`, `github`, ...).
 
@@ -218,7 +221,7 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
 
-`tunnel_hostname` — native ID: `<hostname><path>` (round 2: `<tunnel_id>:<hostname><path>`, so two tunnels serving the same hostname stay apart); name: hostname.
+`tunnel_hostname` — native ID: `<tunnel_id>:<hostname><path>`, so two tunnels serving the same hostname stay apart; name: hostname.
 
 | Prop | Type | Meaning |
 | --- | --- | --- |
@@ -227,7 +230,7 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `service` | string | Origin as configured, for example `http://localhost:8080` or `ssh://localhost:22` |
 | `origin_scheme` | string | `http`, `https`, `ssh`, `rdp`, `tcp`, `smb`, `unix`, `http_status`, `other` |
 | `tunnel_id` | string | |
-| `access_required` | boolean | Round 2: cloudflared itself requires an Access JWT (`originRequest.access.required`) |
+| `access_required` | boolean | cloudflared validates an Access JWT before it proxies a request (`originRequest.access.required`). Read from the rule's own `originRequest.access` if it has one, otherwise from the top-level `config.originRequest.access`; anything but `true` is `false` |
 
 Emitted from the remotely managed ingress configuration. Catch-all rules without a hostname and rules shadowed by an earlier rule are skipped. Credentials in a service URL are removed. Locally managed tunnels yield `tunnel` nodes but no `tunnel_hostname`.
 
@@ -255,7 +258,7 @@ Signal: `last_used_on` (epoch ms, `null` when never used).
 | `status` | string | `accepted`, `pending` |
 | `roles` | string[] | Role names |
 | `super_admin` | boolean | Has the Super Administrator role |
-| `two_factor_enabled` | boolean \| null | Round 2 |
+| `two_factor_enabled` | boolean \| null | `user.two_factor_authentication_enabled`: two-factor authentication for dashboard login (the API says it does not apply to API authentication); `null` when the member has no user object or the field is absent |
 
 `roles` holds the legacy role names plus the permission groups of allow policies.
 
@@ -315,20 +318,37 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
    - Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one.
    - When host specificity and path length point to different apps, the result is `unknown`.
    - A `worker` target covers every entry point of that Worker; `scope: previews` covers only `worker_preview_url`.
-   - `all_workers` covers every Worker below Worker-level targets.
+   - `all_workers` covers every Worker below Worker-level targets. Targets of one tier that disagree are `unknown`. The order:
+     - on preview URLs: `worker` with scope `previews`, `worker` with scope `all`, `all_workers` with scope `previews`, `all_workers` with scope `all`
+     - elsewhere: `worker` with scope `all`, then `all_workers` with scope `all`
    - Hostname and path apps take precedence over Worker-level Access.
-   - Override paths with `behavior: "public"` are `public`.
+   - Override paths with `behavior: "public"` are `public`. Overrides with any other behavior are `unknown` on their paths, unless the app is `public` there anyway. An override path without a wildcard is read with its subpaths, which errs toward `public`. An override path wildcard the evaluator cannot place is `unknown`.
+   - Access paths:
+     - `/admin` covers itself and everything below `/admin/`
+     - `/api*` covers every path that starts with `/api`
+     - `/alpha/*` covers everything below `/alpha/`, but not `/alpha`
+     - `/*` covers the whole host
+     - A wildcard elsewhere in the path, or a trailing slash (the docs do not say whether `/admin/` covers `/admin`), cannot be placed: the evaluator returns `unknown` below its literal start.
 3. **Decision per covered prefix**, from the app's policies:
-   - A `bypass` policy whose include is `everyone` → `public`, with the reason, even when require rules (for example an IP range) narrow it. That can be a false positive for an office-IP bypass, but never a false "protected".
-   - Only `non_identity` policies → `service_auth`. A Service Auth policy with include `everyone` → `unknown`.
+   - **Bypass** never asks for an identity ([decision 0003](../decisions/0003-bypass-and-service-auth-exposure.md)):
+     - A Bypass whose include holds `everyone`, or only non-identity selectors (`ip`, `geo`, `certificate`, `common_name`, `device_posture`, `service_token`, `any_valid_service_token`), → `public` with the reason. That holds even when require rules narrow it, for example to an office IP range. It can be a false positive, but never a false "protected".
+     - A Bypass with an `other` selector, or with identity selectors that a Bypass cannot evaluate (`email`, `group`, `idp_group`, `login_method`, ...), → `unknown`.
+   - **Service Auth** (`non_identity`):
+     - Includes of `service_token`, `any_valid_service_token`, `certificate` or `common_name` → `service_auth`.
+     - An include of `everyone`, `ip`, `geo` or `other` → `unknown`, except an IP include of `0.0.0.0/0` or `::/0`, which is `public`.
    - Otherwise → `access`, including an app without any allow, bypass or Service Auth policy (deny by default). CF-010 judges how broad the allowed audience is, not the evaluator.
-4. **No matching app** → `public`.
-5. **Unsupported input** → `unknown`. That covers a target of kind `other`, a wildcard the evaluator cannot place, or missing coverage for `access` while the entry point exists.
-6. **Confidence:**
+4. **Origin-enforced Access.** A `tunnel_hostname` with `access_required: true` is never `public`. cloudflared rejects requests to that rule without a valid Access application token. Access issues one only after an Allow or Service Auth policy admits the request; Bypass enforces nothing.
+   - Where the Access evaluation alone yields `public` (no app, a Bypass for everyone, a public override), the row is `access` with confidence at most 1, and `reason_id` is set to the tunnel hostname, because the audience tags that cloudflared checks are not collected.
+   - `access`, `service_auth` and `unknown` rows stay as they are, and missing `access` coverage still makes the entry point `unknown`.
+5. **No matching app** → `public`. This also holds for a wildcard entry point (for example `*.<project>.pages.dev` or a `*.zone` route), with confidence 2: the decision does not depend on which hosts exist under the wildcard.
+6. **Unsupported input** → `unknown`.
+   - That covers a target of kind `other`, a target without the shape above (for example without `overrides`), a wildcard the evaluator cannot place, and missing coverage for `access` while the entry point exists.
+   - An `other` target only makes the entry points it might cover `unknown`: API type `all_workers` only Worker entry points, `all_preview_workers` only preview URLs, `worker` or `preview_worker` only that Worker's.
+7. **Confidence:**
    - 2 when the decision follows from complete data with exact matching
    - 1 with wildcard matching
    - 0 when a coverage gap is involved
-7. **`path_prefix`** in exposure rows:
+8. **`path_prefix`** in exposure rows:
 
    | Value | Covers |
    | --- | --- |
@@ -344,6 +364,7 @@ Known limits of v1, all of which err toward reporting exposure:
 - Route shadowing is not modeled (a more specific route to another Worker, a route without a script, a Custom Domain on the same host).
 - Zone-level Access apps are not collected.
 - Tunnel path regexes are read approximately.
+- `access_required` holds per ingress rule. Before cloudflared 2026.10.0, or with URL normalization off, a request with dot segments or repeated slashes can match another rule of the same hostname. That rule is its own entry point and is evaluated on its own.
 
 ## Scan semantics
 
@@ -357,3 +378,4 @@ What the scan records, and what rules and the evaluator may rely on:
 - **Sweep** runs only for `complete` classes.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
+- **Undecided.** Where the exposure that decides a rule is `unknown`, the rule returns an undecided row (`decided = 0`). An undecided row changes no finding and is not a hit.

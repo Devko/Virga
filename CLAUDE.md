@@ -4,7 +4,7 @@ Guidance for agents working in this repository.
 
 ## Project
 
-Virga is an agentless, read-only CNAPP for Cloudflare accounts that runs on Cloudflare itself. Phase 1 is under way as work packages (`docs/team/work-packages.md`). Merged so far: graph store, rule compiler with CF-001, core Worker, credential broker, platform collectors. No UI yet; nothing has scanned a real account.
+Virga is an agentless, read-only CNAPP for Cloudflare accounts that runs on Cloudflare itself. Phase 1 is under way as work packages (`docs/team/work-packages.md`). Merged: graph store, rules engine with 11 rules, broker, all phase 1 collectors, exposure evaluator, scan Workflow, web Worker (UI, API, MCP), deploy script and an end-to-end scan test. Nothing has scanned a real account yet.
 
 Read before changing anything:
 
@@ -15,6 +15,8 @@ Read before changing anything:
 - `docs/decisions/` and `docs/spikes/`: accepted decisions and spike results
 - `docs/architecture/graph-contract.md`: what collectors emit and what evaluators and rules may read; change it before the code
 - `docs/team/work-packages.md`: work packages, owned paths and integration order
+- `docs/operator/guide.md`: deploying and operating an instance
+- `docs/reviews/`: security review reports and their findings
 
 ## Non-negotiables
 
@@ -34,12 +36,14 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 - The inventory token profile uses the Workers Metadata Read-Only role. Workers Scripts Read reads code; D1 Read and KV Read reach data.
 - Worker versions carry `package_dependencies` (`name`, `packageJsonVersion`, `installedVersion`) in the Workers API (beta). It does not separate dev from production dependencies.
 - MCP: `createMcpHandler` from `agents/mcp/server`. `McpAgent` is deprecated.
+- A Worker with Static Assets does not receive `ctx.access` (an internal router Worker sits in front), and `ctx.access` does not cross service bindings or RPC. The web Worker therefore verifies the Access JWT itself and only compares `ctx.access` when present (S-08).
 
 ## Commands
 
 - `pnpm install`, then `pnpm ci` runs lint, `rules:check`, typecheck and all tests. Run it before every push.
 - `pnpm rules:build` after any change in `rules/`; it regenerates `packages/rules/src/*.gen.ts`, which are committed.
 - `pnpm format` applies Biome formatting.
+- `pnpm build` builds the web UI; `pnpm deploy:dry-run` bundles every Worker and checks their configs against each other without credentials; `pnpm deploy` deploys (see the operator guide).
 - `apps/core` tests run in workerd through `@cloudflare/vitest-plugin`; `packages/*` tests run in Node.
 
 ## Code layout
@@ -51,7 +55,9 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 - `packages/rules`: parser and compiler (Node only: `parse.ts`, `compile.ts`, `cli.ts`), runtime (`runtime.ts`, `fixtures.ts`) used by the Worker.
 - `rules/CF-xxx/`: `rule.sql` with YAML front matter, `fixtures/positive-*.yaml` and `negative-*.yaml`, `fix/`.
 - `apps/broker`: credential broker Worker: token vault, onboarding write check, `ApiCaller` with allowlist, rate budget. The only code that holds tokens.
-- `apps/core`: Worker and `AccountGraph` Durable Object. No routes, `workers_dev` and previews off.
+- `apps/core`: Worker and `AccountGraph` Durable Object, scan and dispatch Workflows, `GraphReader` and `Admin` entrypoints, account index D1; `test/e2e/` scans a fake account end to end. No routes, `workers_dev` and previews off.
+- `apps/web`: UI (React, Vite), JSON API and MCP server behind Access.
+- `scripts/`: `deploy.ts` and its helpers.
 - `spikes/`: throwaway code; not product code.
 
 ## Conventions
