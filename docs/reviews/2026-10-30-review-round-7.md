@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: review of the round 7 changes (merges of `collectors-4`, `deploy-env` and `web-removing`), at commit b8a29c1
-- Status: R7-01 and R7-02 fixed in round 8 by the integrator; not yet verified by a review
+- Status: R7-01 and R7-02 fixed in round 8 by the integrator, verified as fixed by the [round 8 verification](2026-10-30-verification-round-8.md)
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |

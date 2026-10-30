@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 4 verification](2026-10-30-verification-round-4.md) (R4-01 to R4-07, fixed in round 5) and the [round 5 verification](2026-10-30-verification-round-5.md) (R5-01 to R5-08, fixed in round 6) fixed? (2) review of the round 5 and round 6 changes, at commit 3617367
-- Status: round 8 of the [work packages](../team/work-packages.md) fixed all seven: R6-01 (`deploy-build`), R6-02 (compiler half `rules-5`, run-time half the local integrator), R6-03 and R6-04 (`supply-chain-2`), R6-05 and R6-06 (`collectors-5-shapes`, plus the integrator for R6-06 entries), R6-07 (`core-web-5`); not yet verified by a review
+- Status: round 8 of the [work packages](../team/work-packages.md) fixed all seven: R6-01 (`deploy-build`), R6-02 (compiler half `rules-5`, run-time half the local integrator), R6-03 and R6-04 (`supply-chain-2`), R6-05 and R6-06 (`collectors-5-shapes`, plus the integrator for R6-06 entries), R6-07 (`core-web-5`). The [round 8 verification](2026-10-30-verification-round-8.md) confirms R6-01, R6-02, R6-03, R6-05, R6-06 and R6-07 as fixed and R6-04 as partly fixed (R8-02)
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |

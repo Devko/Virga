@@ -128,12 +128,13 @@ Round 7 status (2026-10-30): all four packages are merged.
 | `core-web-5` | R6-07 (`last_scan_at` only for a run the index holds); the MCP and SPA text for a `partial` class with resources left out; removal offered for a `removing` account whose summary fails | `apps/core/**` except `test/e2e/**` and `test/rules-runtime.test.ts`, `apps/web/**` except `vite.config.ts` | Tests per case |
 | `review-7` | Read-only review of the round 7 changes | none (report only) | New findings verified with a concrete input |
 
-Round 8 status (2026-10-30): stopped part way when the cloud session was handed over to a local agent.
+Round 8 status (2026-10-30): all packages are merged and verified. The cloud session stopped part way and handed over to a local agent, which finished the round.
 
-- Merged: `deploy-build` (R6-01), `supply-chain-2` (R6-03, R6-04), and the compiler half of `rules-5` (R6-02: bracket identifiers in the parameter scan, no statement tail). Not yet verified by a review.
+- Merged: `deploy-build` (R6-01), `supply-chain-2` (R6-03, R6-04), and the compiler half of `rules-5` (R6-02: bracket identifiers in the parameter scan, no statement tail).
 - The local integrator added the run-time half of `rules-5` (45b6c73): rules run through `SqlRunner.queryReadOnly`, which rolls back any change of rows, schema or connection settings and ends the run `error` ([decision 0006](../decisions/0006-read-only-rule-runs.md)). `cursor.rowsWritten` alone would not do: it counts only the last statement.
-- The local integrator ran `collectors-5` as two packages in parallel worktrees, `collectors-5-shapes` (R6-05, R6-06, e2e) and `collectors-5-tunnels` (a node over the props limit is left out and counts as truncation), next to `core-web-5` (R6-07, the MCP and SPA text for a `partial` class, removal for a `removing` account whose summary fails). All three are merged. The integrator added the R6-06 case of a custom entry without a domain (93a0d4e). Not yet verified by a review.
+- The local integrator ran `collectors-5` as two packages in parallel worktrees, `collectors-5-shapes` (R6-05, R6-06, e2e) and `collectors-5-tunnels` (a node over the props limit is left out and counts as truncation), next to `core-web-5` (R6-07, the MCP and SPA text for a `partial` class, removal for a `removing` account whose summary fails). All three are merged. The integrator added the R6-06 case of a custom entry without a domain (93a0d4e).
 - The [round 7 review](../reviews/2026-10-30-review-round-7.md) found R7-01 (`NODE_DEBUG` prints the token) and R7-02 (`LD_LIBRARY_PATH` and the macOS `DYLD_*` paths load code into the deploy). The local integrator fixed both in `UNSAFE_VARS` (58e72bd), with `NODE_COMPILE_CACHE`; `processRunner` refuses them too.
+- The [round 8 verification](../reviews/2026-10-30-verification-round-8.md) (two read-only reviewers and a scoped security audit) confirms R6-01, R6-02, R6-03, R6-05, R6-06, R6-07, R7-01 and R7-02 as fixed and R6-04 as partly fixed. It found R8-01 to R8-03, all in the release-age gate, and eight leads that need a Cloudflare API shape or GitHub settings to settle (R8-04 to R8-11). Decision 0006 and the graph contract overstated the run-time guard; both are corrected.
 
 ## Rules for every work package
 
