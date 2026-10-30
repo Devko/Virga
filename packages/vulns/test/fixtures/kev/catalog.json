@@ -1,0 +1,31 @@
+{
+  "title": "Hand-written test catalog in the CISA KEV schema",
+  "catalogVersion": "2099.01.01",
+  "dateReleased": "2099-01-01T12:00:00.000Z",
+  "count": 2,
+  "vulnerabilities": [
+    {
+      "cveID": "CVE-2099-0002",
+      "vendorProject": "Virga test",
+      "product": "virga-test lib",
+      "vulnerabilityName": "Test entry, not a real vulnerability",
+      "dateAdded": "2099-01-01",
+      "shortDescription": "Hand-written test entry.",
+      "requiredAction": "None, this is a test entry.",
+      "dueDate": "2099-01-22",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "",
+      "cwes": ["CWE-444"]
+    },
+    {
+      "cveID": "CVE-2099-12345",
+      "vendorProject": "Virga test",
+      "product": "other",
+      "vulnerabilityName": "Second test entry",
+      "dateAdded": "2099-01-01",
+      "shortDescription": "Hand-written test entry.",
+      "requiredAction": "None, this is a test entry.",
+      "dueDate": "2099-01-22"
+    }
+  ]
+}

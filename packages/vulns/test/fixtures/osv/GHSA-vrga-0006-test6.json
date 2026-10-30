@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.6.0",
+  "id": "GHSA-vrga-0006-test6",
+  "modified": "2026-10-06T12:00:00Z",
+  "aliases": ["CVE-2099-0006"],
+  "summary": "Hand-written test record: npm and Maven packages, package-level severity",
+  "affected": [
+    {
+      "package": { "ecosystem": "Maven", "name": "test.virga:fixture" },
+      "ranges": [{ "type": "ECOSYSTEM", "events": [{ "introduced": "0" }] }]
+    },
+    {
+      "package": { "ecosystem": "npm", "name": "virga-fixture-c" },
+      "severity": [{ "type": "CVSS_V3", "score": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H" }],
+      "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "3.0.0" }, { "limit": "4.0.0" }] }]
+    }
+  ]
+}
