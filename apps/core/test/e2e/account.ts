@@ -17,6 +17,8 @@
 //   https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/subresources/policies/methods/list/
 // - Tunnel ingress:
 //   https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get/
+// - Pages env vars (`deployment_configs.<env>.env_vars`, `{ type, value }`):
+//   https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
 
 import type { CfQuery } from "@virga/cf-api";
 import { envelope, type FixtureRoute, type FixtureTransportOptions } from "@virga/cf-api/testing";
@@ -376,34 +378,68 @@ const KV_NAMESPACES: [string, string][] = [
 
 // Pages -----------------------------------------------------------------------
 
-const pagesEnv = (d1Databases: Record<string, { id: string }>) => ({
+/** Test values for Pages env vars, split like FAKE_TOKEN so secret scanners skip the source. */
+const PAGES_TOKEN = `${"cfat"}_${"Hk3Zr8Wq1Lm6Tp9Xc2Vb5Nd7Fs0Gj4Ya8Re1Ui6O"}x9Y8z`;
+const PAGES_KEY = `${"cfk"}_${"Wd4Rt7Yp2Ks9Lx3Mv6Bn1Qc8Fh5Gz0Ja7Ue2Io4E"}m3N6b`;
+
+const plainVar = (value: string) => ({ type: "plain_text", value });
+const secretVar = (value: string) => ({ type: "secret_text", value });
+
+const pagesEnv = (
+  d1Databases: Record<string, { id: string }>,
+  envVars: Record<string, { type: string; value: string }> = {},
+) => ({
   always_use_latest_compatibility_date: false,
   build_image_major_version: 3,
   compatibility_date: "2026-10-01",
   compatibility_flags: [],
-  env_vars: {},
+  env_vars: envVars,
   fail_open: true,
   usage_model: "standard",
   d1_databases: d1Databases,
 });
 
-const pagesProject = (name: string, id: string, preview: string, production: string) => ({
+type PagesEnv = ReturnType<typeof pagesEnv>;
+
+const pagesProject = (name: string, id: string, preview: PagesEnv, production: PagesEnv) => ({
   ...gitProject,
   id,
   name,
   domains: [],
   subdomain: `${name}.pages.dev`,
-  deployment_configs: {
-    preview: pagesEnv({ DB: { id: preview } }),
-    production: pagesEnv({ DB: { id: production } }),
-  },
+  deployment_configs: { preview, production },
 });
+
+const withDb = (id: string) => pagesEnv({ DB: { id } });
+
+// The key as a secret env var. It carries a value here, which the collector
+// never reads, so the value must not show up anywhere (SECRET_VALUES).
+const landingEnv = pagesEnv({}, { API_BASE: plainVar(PLAIN_URL), API_KEY: secretVar(PAGES_KEY) });
 
 const PAGES_PROJECTS = [
   // CF-022 seeded: previews for every branch, and they bind the production database.
-  pagesProject("storefront", "0c9e5a7b-1d3f-4b6a-8c2e-4f6a8b0c2d4e", D1_ORDERS, D1_ORDERS),
+  pagesProject(
+    "storefront",
+    "0c9e5a7b-1d3f-4b6a-8c2e-4f6a8b0c2d4e",
+    withDb(D1_ORDERS),
+    withDb(D1_ORDERS),
+  ),
   // CF-022 clean: previews for every branch, with a database of their own.
-  pagesProject("blog", "5e7a9c1b-3d5f-4a7b-9c1d-3e5f7a9b1c3d", D1_BLOG_PREVIEW, D1_BLOG),
+  pagesProject(
+    "blog",
+    "5e7a9c1b-3d5f-4a7b-9c1d-3e5f7a9b1c3d",
+    withDb(D1_BLOG_PREVIEW),
+    withDb(D1_BLOG),
+  ),
+  // CF-024 seeded: an API token in a plain-text env var of the production environment.
+  pagesProject(
+    "handbook",
+    "0d83c20a-0b90-4a4e-9c48-f284882c3071",
+    pagesEnv({}),
+    pagesEnv({}, { API_BASE: plainVar(PLAIN_URL), CF_API_TOKEN: plainVar(PAGES_TOKEN) }),
+  ),
+  // CF-024 clean: a URL as plain text and the key as a secret env var, in both environments.
+  pagesProject("landing", "25507196-ff59-435e-9f6e-87d5ed25721a", landingEnv, landingEnv),
 ];
 
 // Access ----------------------------------------------------------------------
@@ -804,10 +840,17 @@ export function fakeAccount(
 
 /**
  * Credentials in the API responses: the token in mailer's plain-text variable,
- * the IdP client and SCIM secrets, and the service token's client ID. None of
- * them may reach the graph.
+ * the token and key in Pages env vars, the IdP client and SCIM secrets, and
+ * the service token's client ID. None of them may reach the graph.
  */
-export const SECRET_VALUES = [FAKE_TOKEN, FAKE_SECRET, FAKE_SCIM_PASSWORD, FAKE_CLIENT_ID];
+export const SECRET_VALUES = [
+  FAKE_TOKEN,
+  PAGES_TOKEN,
+  PAGES_KEY,
+  FAKE_SECRET,
+  FAKE_SCIM_PASSWORD,
+  FAKE_CLIENT_ID,
+];
 
 /**
  * A tunnel hostname node ID in the form of the graph contract as of round 1,
@@ -905,6 +948,12 @@ export const SEEDED: SeededCase[] = [
     fingerprint: "CF-024:worker_script:mailer",
     severity: "medium",
   },
+  {
+    rule: "CF-024",
+    case: "API token in a plain-text env var of a Pages project's production environment",
+    fingerprint: "CF-024:pages_project:handbook",
+    severity: "medium",
+  },
 ];
 
 export interface CleanCase {
@@ -987,6 +1036,11 @@ export const CLEAN: CleanCase[] = [
     rule: "CF-024",
     case: "URL as plain text, key as a secret binding",
     subject: "worker_script:shop",
+  },
+  {
+    rule: "CF-024",
+    case: "Pages project with a URL as plain text and the key as a secret env var",
+    subject: "pages_project:landing",
   },
 ];
 
