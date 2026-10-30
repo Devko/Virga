@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -1233,6 +1233,117 @@ describe("R8-01: config dependencies are refused", () => {
     const settings = parseWorkspace(readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"));
     expect(settings.get("packages")).toContain("apps/*");
     expect(settings.get("minimumReleaseAge")).toBe("20160");
+  });
+});
+
+describe("R8-02: only the root names the package manager", () => {
+  /** The review's pin: pnpm 10.33.2, published three days before NOW. */
+  const YOUNG = "pnpm@10.33.2";
+  const ONLY_ROOT =
+    /only the root package\.json may name the package manager: corepack takes the nearest package\.json that names one/;
+  const web = (fields: Record<string, unknown>) => ({
+    "apps/web/package.json": manifest({ name: "@virga/web", ...fields }),
+  });
+
+  it("R8-02: refuses packageManager in apps/web/package.json", async () => {
+    await refusedBy(
+      checkout(web({ packageManager: YOUNG })),
+      new RegExp(`^error: apps/web/package\\.json names packageManager; ${ONLY_ROOT.source}`),
+    );
+    await refusedBy(
+      checkout(web({ packageManager: "pnpm@https://example.com/pnpm.tgz" })),
+      /^error: apps\/web\/package\.json names packageManager/,
+    );
+  });
+
+  it("R8-02: refuses devEngines.packageManager in apps/web/package.json", async () => {
+    await refusedBy(
+      checkout(web({ devEngines: { packageManager: { name: "pnpm", version: "10.33.2" } } })),
+      new RegExp(
+        `^error: apps/web/package\\.json names devEngines\\.packageManager; ${ONLY_ROOT.source}`,
+      ),
+    );
+    await refusedBy(
+      checkout(web({ devEngines: "pnpm" })),
+      /^error: apps\/web\/package\.json devEngines is not an object/,
+    );
+  });
+
+  it("R8-02: refuses .corepack.env at the root, in apps and in apps/web", async () => {
+    const env = "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\n";
+    for (const path of [".corepack.env", "apps/.corepack.env", "apps/web/.corepack.env"]) {
+      await refusedBy(
+        checkout({ ...web({}), [path]: env }),
+        new RegExp(
+          `^error: ${path.replaceAll(".", "\\.")}: corepack loads \\.corepack\\.env files`,
+        ),
+      );
+    }
+    await refusedBy(
+      checkout({ "apps/web/.COREPACK.ENV": env }),
+      /^error: apps\/web\/\.COREPACK\.ENV: corepack loads/,
+    );
+  });
+
+  it("R8-02: refuses a pnpm-workspace.yaml other than the root", async () => {
+    await refusedBy(
+      checkout({ "apps/web/pnpm-workspace.yaml": "configDependencies: {}\n" }),
+      /^error: apps\/web\/pnpm-workspace\.yaml: only the root may hold pnpm-workspace\.yaml/,
+    );
+  });
+
+  it("R8-02: refuses a package.json it cannot read", async () => {
+    await refusedBy(
+      checkout({ "apps/web/package.json": "{" }),
+      /^error: apps\/web\/package\.json is not valid JSON/,
+    );
+    await refusedBy(
+      checkout({ "apps/web/package.json": "[]" }),
+      /^error: apps\/web\/package\.json is not a JSON object/,
+    );
+  });
+
+  it("R8-02: does not follow symbolic links, and refuses them", async () => {
+    // Outside the checkout, with a young pin that corepack would read through the links.
+    const target = checkout({ "package.json": manifest({ packageManager: YOUNG }) });
+    const linkedFile = checkout();
+    mkdirSync(join(linkedFile, "apps", "web"), { recursive: true });
+    symlinkSync(join(target, "package.json"), join(linkedFile, "apps", "web", "package.json"));
+    await refusedBy(
+      linkedFile,
+      /^error: apps\/web\/package\.json is a symbolic link, which the check does not follow; corepack and pnpm would/,
+    );
+    const linkedDirectory = checkout();
+    mkdirSync(join(linkedDirectory, "apps"));
+    symlinkSync(target, join(linkedDirectory, "apps", "web"));
+    await refusedBy(linkedDirectory, /^error: apps\/web is a symbolic link/);
+  });
+
+  it("R8-02: leaves out node_modules and .git", async () => {
+    const pinned = manifest({ packageManager: YOUNG });
+    const root = checkout({
+      "node_modules/.corepack.env": "",
+      "node_modules/x/package.json": pinned,
+      "apps/web/node_modules/.corepack.env": "",
+      "apps/web/node_modules/.pnpm/x@1.0.0/node_modules/x/package.json": pinned,
+      ".git/package.json": pinned,
+      ...web({ scripts: { build: "vite build" } }),
+    });
+    symlinkSync("../../../elsewhere", join(root, "apps", "web", "node_modules", "y"));
+    expect(await runMain(root)).toEqual(PASSES);
+  });
+
+  it("R8-02: accepts package.json files without a package manager, and the real checkout", async () => {
+    const root = checkout({
+      ...web({ scripts: { build: "vite build" }, devEngines: { runtime: { name: "node" } } }),
+      "packages/graph/package.json": manifest({ name: "@virga/graph" }),
+    });
+    expect(await runMain(root)).toEqual(PASSES);
+    const real = await runMain(REPO_ROOT, {
+      lockfile: lockfile([]),
+      packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
+    });
+    expect(real).toEqual(PASSES);
   });
 });
 

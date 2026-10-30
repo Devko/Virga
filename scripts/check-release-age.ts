@@ -10,10 +10,12 @@
 // registry error) fails too, and so does a locked integrity that is not the
 // registry's digest for the version dated (R6-03). pnpm also installs config
 // dependencies outside the lockfile, so the check reads pnpm-workspace.yaml
-// strictly and refuses them (R8-01). Needs network access to
-// registry.npmjs.org and nothing else; CI runs it before anything is installed.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// strictly and refuses them (R8-01), and corepack reads the nearest
+// packageManager and any .corepack.env from the directory a command runs in,
+// so only the root may name the package manager (R8-02). Needs network access
+// to registry.npmjs.org and nothing else; CI runs it before anything is installed.
+import { type Dirent, readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -709,6 +711,105 @@ export function parsePackageManager(text: string): PackageManagerPin[] {
   return pins;
 }
 
+export class CheckoutError extends CheckError {}
+
+/** ` (ENOENT)` for a Node file system error, for messages. */
+const errorCode = (cause: unknown) =>
+  isRecord(cause) && typeof cause.code === "string" ? ` (${cause.code})` : "";
+
+const ONLY_ROOT =
+  "only the root package.json may name the package manager: corepack takes the nearest package.json that names one, starting from the directory a command runs in";
+
+/** A package.json below the root: it must not name a package manager (R8-02). */
+function checkNestedManifest(path: string, shown: string): void {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (cause) {
+    throw new CheckoutError(`${shown} cannot be read${errorCode(cause)}`);
+  }
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new CheckoutError(
+      `${shown} is not valid JSON, so the check cannot tell whether it names a package manager`,
+    );
+  }
+  if (!isRecord(manifest)) {
+    throw new CheckoutError(
+      `${shown} is not a JSON object, so the check cannot tell whether it names a package manager`,
+    );
+  }
+  if (Object.hasOwn(manifest, "packageManager")) {
+    throw new CheckoutError(`${shown} names packageManager; ${ONLY_ROOT}`);
+  }
+  const { devEngines } = manifest;
+  if (devEngines === undefined) return;
+  if (!isRecord(devEngines)) {
+    throw new CheckoutError(
+      `${shown} devEngines is not an object, so the check cannot tell whether it names a package manager`,
+    );
+  }
+  if (Object.hasOwn(devEngines, "packageManager")) {
+    throw new CheckoutError(`${shown} names devEngines.packageManager; ${ONLY_ROOT}`);
+  }
+}
+
+/**
+ * Package-manager inputs below the root (R8-02). Corepack takes the nearest
+ * package.json that names packageManager or devEngines.packageManager, and
+ * loads .corepack.env files, starting from the directory a command runs in;
+ * pnpm takes the nearest pnpm-workspace.yaml in the same way. So only the root
+ * package.json may name the package manager, only the root may hold
+ * pnpm-workspace.yaml, and no directory may hold .corepack.env. Walks the
+ * checkout without node_modules and .git, and refuses symbolic links rather
+ * than follow them, since corepack and pnpm would. Names are compared without
+ * case, as a case-insensitive file system opens them.
+ */
+export function checkCheckout(root: string): void {
+  const top = resolve(root);
+  const shownPath = (path: string) => relative(top, path).split(sep).join("/") || ".";
+  const walk = (dir: string) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (cause) {
+      throw new CheckoutError(`${shownPath(dir)} cannot be read${errorCode(cause)}`);
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const path = join(dir, entry.name);
+      const shown = shownPath(path);
+      const name = entry.name.toLowerCase();
+      const atRoot = dir === top;
+      if (entry.isSymbolicLink()) {
+        throw new CheckoutError(
+          `${shown} is a symbolic link, which the check does not follow; corepack and pnpm would`,
+        );
+      }
+      if (name === ".corepack.env") {
+        throw new CheckoutError(
+          `${shown}: corepack loads .corepack.env files from the directories it walks, and their variables change which pnpm it runs and where it fetches it from; the project uses none`,
+        );
+      }
+      if (name === "pnpm-workspace.yaml" && !(atRoot && entry.name === name)) {
+        throw new CheckoutError(
+          `${shown}: only the root may hold pnpm-workspace.yaml; pnpm takes the nearest one, starting from the directory a command runs in, with its settings and config dependencies`,
+        );
+      }
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (name === "package.json" && !(atRoot && entry.name === name)) {
+        if (!entry.isFile()) throw new CheckoutError(`${shown} is not a regular file`);
+        checkNestedManifest(path, shown);
+      }
+    }
+  };
+  walk(top);
+}
+
 export interface CheckOptions {
   /** package.json's text, whose pnpm versions are dated too; main always passes it. */
   packageJson?: string;
@@ -1026,8 +1127,7 @@ function readText(root: string, name: string): string {
   try {
     return readFileSync(join(root, name), "utf8");
   } catch (cause) {
-    const code = isRecord(cause) && typeof cause.code === "string" ? ` (${cause.code})` : "";
-    throw new CheckError(`${name} cannot be read${code}`);
+    throw new CheckError(`${name} cannot be read${errorCode(cause)}`);
   }
 }
 
@@ -1052,6 +1152,8 @@ export async function main(options: MainOptions = {}): Promise<number> {
     // R8-01: config dependencies and settings that make pnpm read another
     // lockfile or a pnpmfile are refused before anything is fetched.
     parseWorkspace(readText(root, "pnpm-workspace.yaml"));
+    // R8-02: corepack and pnpm read these from the directory a command runs in.
+    checkCheckout(root);
     result = await checkReleaseAge(lockfile, { ...options, packageJson, now, minAgeDays });
   } catch (cause) {
     if (!(cause instanceof CheckError)) throw cause;

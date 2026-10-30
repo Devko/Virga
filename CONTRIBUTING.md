@@ -32,6 +32,8 @@ pnpm also installs config dependencies outside the lockfile, before it reads the
 - `pnpm-workspace.yaml` is read as strictly as the lockfile: block layout only, with comments on their own lines. It may hold only `packages`, `onlyBuiltDependencies`, `minimumReleaseAge` and `minimumReleaseAgeExclude`. Any other setting is refused with its line number: `configDependencies`, and also settings such as `pnpmfile`, `lockfileDir` or `gitBranchLockfile` that make pnpm run code or read another lockfile. To add a setting, extend the check first.
 - The `pnpm` field in `package.json`, if present, must be an object without `configDependencies`.
 
+Corepack takes the nearest `package.json` that names `packageManager` or `devEngines.packageManager`, and loads `.corepack.env` files, starting from the directory a command runs in; pnpm finds `pnpm-workspace.yaml` the same way. So only the root `package.json` may name a package manager, only the root holds `pnpm-workspace.yaml`, and the project uses no `.corepack.env` at all (review R8-02). The check walks the checkout, without `node_modules` and `.git`, and refuses any of these elsewhere. It does not follow symbolic links and refuses them too, since corepack and pnpm would follow them.
+
 - Run it after any change to `pnpm-lock.yaml` or `packageManager`. It needs network access to `registry.npmjs.org` and nothing else, so `pnpm run ci` does not run it.
 - CI runs it in the `release-age` job before anything is installed: every job that installs packages or pnpm needs that job, and pnpm/action-setup gets no `version` input, so it follows `packageManager`. The `release-age` job installs nothing and runs no package code, and the script imports only Node built-ins.
 

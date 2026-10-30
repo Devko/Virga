@@ -19,8 +19,10 @@ jobs:
   # that packageManager names (so it gets no version input), so every job that
   # installs needs this one. R8-01: pnpm-workspace.yaml holds only the settings
   # the check knows, and no config dependencies, which pnpm installs outside
-  # the lockfile. The only job that needs the registry; it installs nothing and
-  # runs no package code.
+  # the lockfile. R8-02: only the root package.json names the package manager,
+  # and no directory holds .corepack.env, since corepack reads both from the
+  # directory a command runs in. The only job that needs the registry; it
+  # installs nothing and runs no package code.
   release-age:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
