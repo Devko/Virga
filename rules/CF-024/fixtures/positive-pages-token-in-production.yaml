@@ -1,0 +1,26 @@
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# (deployment_configs.preview / .production, env_vars: { NAME: { type: plain_text | secret_text, value } })
+# Graph shape: docs/architecture/graph-contract.md, pages_project.plain_text_vars
+description: >
+  The production environment of a Pages project keeps a Cloudflare API
+  token in a plain-text variable, and the preview environment a
+  high-entropy key, next to harmless variables. Both land in one finding
+  for the project, each with its environment.
+nodes:
+  - type: pages_project
+    id: shop
+    name: shop
+    props:
+      production_branch: main
+      subdomain: shop.pages.dev
+      preview_deployments: all
+      plain_text_vars:
+        - { name: SEARCH_KEY, environment: preview, kind: plain_text, looks_secret: true, secret_pattern: high_entropy }
+        - { name: SITE_URL, environment: preview, kind: plain_text, looks_secret: false, secret_pattern: null }
+        - { name: CF_API_TOKEN, environment: production, kind: plain_text, looks_secret: true, secret_pattern: cfat_ }
+        - { name: SITE_URL, environment: production, kind: plain_text, looks_secret: false, secret_pattern: null }
+  - { type: pages_domain, id: shop.pages.dev, name: shop.pages.dev, props: { project: shop, status: null } }
+edges:
+  - { type: ROUTES_TO, src: "pages_domain:shop.pages.dev", dst: "pages_project:shop", props: { environment: production } }
+expect:
+  - { fingerprint: "CF-024:pages_project:shop", severity: medium }

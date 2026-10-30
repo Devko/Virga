@@ -9140,6 +9140,62 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-024",
+    "name": "negative-pages-clean-vars",
+    "description": "Pages projects whose plain-text variables the collector inspected and did not flag in either environment, and a project without plain-text variables: its keys are secret env vars.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all",
+          "plain_text_vars": [
+            {
+              "name": "NODE_VERSION",
+              "environment": "preview",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            },
+            {
+              "name": "NODE_VERSION",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            },
+            {
+              "name": "SITE_URL",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "vault-ui",
+        "name": "vault-ui",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "vault-ui.pages.dev",
+          "preview_deployments": "none",
+          "plain_text_vars": []
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-024",
     "name": "negative-secret-binding",
     "description": "The token is a secret_text binding, and the plain-text variables hold values the collector did not flag.\n",
     "nodes": [
@@ -9253,6 +9309,81 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-024",
+    "name": "positive-pages-token-in-production",
+    "description": "The production environment of a Pages project keeps a Cloudflare API token in a plain-text variable, and the preview environment a high-entropy key, next to harmless variables. Both land in one finding for the project, each with its environment.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all",
+          "plain_text_vars": [
+            {
+              "name": "SEARCH_KEY",
+              "environment": "preview",
+              "kind": "plain_text",
+              "looks_secret": true,
+              "secret_pattern": "high_entropy"
+            },
+            {
+              "name": "SITE_URL",
+              "environment": "preview",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            },
+            {
+              "name": "CF_API_TOKEN",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": true,
+              "secret_pattern": "cfat_"
+            },
+            {
+              "name": "SITE_URL",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_domain",
+        "id": "shop.pages.dev",
+        "name": "shop.pages.dev",
+        "props": {
+          "project": "shop",
+          "status": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "pages_domain:shop.pages.dev",
+        "dst": "pages_project:shop",
+        "props": {
+          "environment": "production"
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-024:pages_project:shop",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-024",
     "name": "positive-token-in-plain-text",
     "description": "The deployed version keeps a Cloudflare API token in a plain-text variable next to a harmless one. An older version behind a version URL holds an AWS access key. Both land in one finding for the Worker.\n",
     "nodes": [
@@ -9340,6 +9471,231 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "fingerprint": "CF-024:worker_script:billing",
         "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-024",
+    "name": "positive-worker-and-pages-apart",
+    "description": "A Worker and a Pages project share the name docs, and each keeps a secret in plain text: two findings, one per subject. A second project stores its key as a secret env var, which the collector never reads, so only a harmless plain-text variable is listed for it.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "docs",
+        "name": "docs"
+      },
+      {
+        "type": "worker_version",
+        "id": "2f6c8a1e-5b3d-4e7f-9a1c-3d5e7f9b1c3e",
+        "props": {
+          "script_node_id": "worker_script:docs",
+          "plain_text_vars": [
+            {
+              "name": "GITHUB_TOKEN",
+              "kind": "plain_text",
+              "looks_secret": true,
+              "secret_pattern": "high_entropy"
+            }
+          ],
+          "secret_names": []
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "docs",
+        "name": "docs",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "docs.pages.dev",
+          "preview_deployments": "none",
+          "plain_text_vars": [
+            {
+              "name": "AWS_ACCESS_KEY_ID",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": true,
+              "secret_pattern": "aws_access_key"
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "blog",
+        "name": "blog",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "blog.pages.dev",
+          "preview_deployments": "all",
+          "plain_text_vars": [
+            {
+              "name": "LOG_LEVEL",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:docs",
+        "dst": "worker_version:2f6c8a1e-5b3d-4e7f-9a1c-3d5e7f9b1c3e",
+        "props": {
+          "percentage": 100
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-024:worker_script:docs",
+        "severity": "medium"
+      },
+      {
+        "fingerprint": "CF-024:pages_project:docs",
+        "severity": "medium"
+      }
+    ]
+  },
+  {
+    "rule": "CF-024",
+    "name": "undecided-uninspected-values",
+    "description": "The API returned no value for some plain-text variables, so the collector could not inspect them. A Pages project and a Worker with only such variables are undecided. A project with one uninspected variable and one that looks like a secret is decided. A project whose other variables were inspected and are clean, plus one uninspected, stays undecided.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all",
+          "plain_text_vars": [
+            {
+              "name": "PAYMENT_KEY",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": null,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "admin",
+        "name": "admin",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "admin.pages.dev",
+          "preview_deployments": "none",
+          "plain_text_vars": [
+            {
+              "name": "CF_API_TOKEN",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": true,
+              "secret_pattern": "cfat_"
+            },
+            {
+              "name": "SESSION_SECRET",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": null,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "blog",
+        "name": "blog",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "blog.pages.dev",
+          "preview_deployments": "all",
+          "plain_text_vars": [
+            {
+              "name": "LOG_LEVEL",
+              "environment": "preview",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            },
+            {
+              "name": "COMMENTS_KEY",
+              "environment": "preview",
+              "kind": "plain_text",
+              "looks_secret": null,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api"
+      },
+      {
+        "type": "worker_version",
+        "id": "7d9f1b3a-5c7e-4a9b-8d1f-3a5c7e9b1d3f",
+        "props": {
+          "script_node_id": "worker_script:api",
+          "plain_text_vars": [
+            {
+              "name": "UPSTREAM_KEY",
+              "kind": "plain_text",
+              "looks_secret": null,
+              "secret_pattern": null
+            },
+            {
+              "name": "LOG_LEVEL",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ],
+          "secret_names": []
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:7d9f1b3a-5c7e-4a9b-8d1f-3a5c7e9b1d3f",
+        "props": {
+          "percentage": 100
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-024:pages_project:admin",
+        "severity": "medium"
+      },
+      {
+        "fingerprint": "CF-024:pages_project:shop",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-024:pages_project:blog",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-024:worker_script:api",
+        "decided": false
       }
     ]
   }

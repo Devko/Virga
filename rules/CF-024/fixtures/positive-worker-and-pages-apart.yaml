@@ -1,0 +1,40 @@
+# Source: https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/
+# Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/
+# Graph shape: docs/architecture/graph-contract.md, pages_project.plain_text_vars, worker_version.plain_text_vars
+description: >
+  A Worker and a Pages project share the name docs, and each keeps a
+  secret in plain text: two findings, one per subject. A second project
+  stores its key as a secret env var, which the collector never reads, so
+  only a harmless plain-text variable is listed for it.
+nodes:
+  - { type: worker_script, id: docs, name: docs }
+  - type: worker_version
+    id: 2f6c8a1e-5b3d-4e7f-9a1c-3d5e7f9b1c3e
+    props:
+      script_node_id: "worker_script:docs"
+      plain_text_vars:
+        - { name: GITHUB_TOKEN, kind: plain_text, looks_secret: true, secret_pattern: high_entropy }
+      secret_names: []
+  - type: pages_project
+    id: docs
+    name: docs
+    props:
+      production_branch: main
+      subdomain: docs.pages.dev
+      preview_deployments: none
+      plain_text_vars:
+        - { name: AWS_ACCESS_KEY_ID, environment: production, kind: plain_text, looks_secret: true, secret_pattern: aws_access_key }
+  - type: pages_project
+    id: blog
+    name: blog
+    props:
+      production_branch: main
+      subdomain: blog.pages.dev
+      preview_deployments: all
+      plain_text_vars:
+        - { name: LOG_LEVEL, environment: production, kind: plain_text, looks_secret: false, secret_pattern: null }
+edges:
+  - { type: DEPLOYS, src: "worker_script:docs", dst: "worker_version:2f6c8a1e-5b3d-4e7f-9a1c-3d5e7f9b1c3e", props: { percentage: 100 } }
+expect:
+  - { fingerprint: "CF-024:worker_script:docs", severity: medium }
+  - { fingerprint: "CF-024:pages_project:docs", severity: medium }
