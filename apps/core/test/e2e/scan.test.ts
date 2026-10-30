@@ -34,12 +34,14 @@ import {
 // A full scan of a fake account: the real collectors over fixtureTransport,
 // the real scan orchestration (runScan), and an AccountGraph Durable Object
 // running the real exposure evaluator and findings lifecycle over all rules.
-// Six scans: the seeded account, the same account unchanged, the account
+// Eight scans: the seeded account, the same account unchanged, the account
 // whose r2.dev flag on one bucket and env vars of one Pages project cannot be
-// read, the account with r2.dev turned off on that bucket, the account with
-// 1,000 harmless ingress rules before the edge tunnel's own rules, which then
-// fall past the cap, and the account with those rules gone again (decision
-// 0005).
+// read, two scans in which the API returns that project's token as null, then
+// as an object, and that bucket's r2.dev response without its domain, then
+// its custom domains response without the list (R6-05, R6-06), the account
+// with r2.dev turned off on that bucket, the account with 1,000 harmless
+// ingress rules before the edge tunnel's own rules, which then fall past the
+// cap, and the account with those rules gone again (decision 0005).
 //
 // A case marked `mismatch` in account.ts fails because two packages disagree
 // on the graph contract; it runs as `it.fails` until the mismatch is fixed.
@@ -107,6 +109,8 @@ let state: AccountState;
 let first: Snapshot;
 let second: Snapshot;
 let unreadable: Snapshot;
+let noDomain: Snapshot;
+let noDomains: Snapshot;
 let third: Snapshot;
 let fourth: Snapshot;
 let fifth: Snapshot;
@@ -205,6 +209,15 @@ beforeAll(async () => {
   state.handbookEnvVars = false;
   unreadable = await scan("unreadable", NOW + DAY + DAY / 2);
   state.handbookEnvVars = true;
+  state.publicAssetsR2Dev = true;
+  state.handbookTokenValue = "null";
+  state.publicAssetsLeftOut = "domain";
+  noDomain = await scan("token-null-no-domain", NOW + DAY + (2 * DAY) / 3);
+  state.handbookTokenValue = "object";
+  state.publicAssetsLeftOut = "domains";
+  noDomains = await scan("token-object-no-domains", NOW + DAY + (5 * DAY) / 6);
+  state.handbookTokenValue = "string";
+  state.publicAssetsLeftOut = null;
   state.publicAssetsR2Dev = false;
   third = await scan("r2-dev-off", NOW + 2 * DAY);
   state.edgeIngressFlood = true;
@@ -213,7 +226,7 @@ beforeAll(async () => {
   fifth = await scan("ingress-fits", NOW + 4 * DAY);
 }, 60_000);
 
-const ALL = () => [first, second, unreadable, third, fourth, fifth];
+const ALL = () => [first, second, unreadable, noDomain, noDomains, third, fourth, fifth];
 
 describe("every scan", () => {
   it("seeds cases and clean counterparts for every phase 1 rule but CF-001", () => {
@@ -523,6 +536,81 @@ describe("scan after the r2.dev flag and the handbook env vars can no longer be 
     });
   });
 });
+
+// R6-05 and R6-06: in each scan the API returns handbook's token as a value
+// that is not a string, and an R2 response of public-assets that does not
+// say which domains there are.
+const LEFT_OUT = [
+  {
+    snapshot: () => noDomain,
+    value: "null",
+    response: "managed",
+    expected: "a domain or enabled false",
+  },
+  {
+    snapshot: () => noDomains,
+    value: "an object",
+    response: "custom",
+    expected: "a domains array",
+  },
+];
+
+for (const c of LEFT_OUT) {
+  describe(`scan with handbook's token value ${c.value} and an R2 ${c.response} response that names no domains`, () => {
+    it("R6-05: leaves the open Pages finding of CF-024 open as undecided", () => {
+      const s = c.snapshot();
+      // The Worker finding (mailer) is still decided; handbook is undecided.
+      expect(s.ruleRuns.find((r) => r.rule_id === "CF-024")).toMatchObject({
+        status: "evaluated",
+        hits: 1,
+        undecided: 1,
+      });
+      expect(byFingerprint(s, "CF-024:pages_project:handbook")).toMatchObject({ status: "open" });
+    });
+
+    it("R6-06: fails the storage chunk, so storage coverage is not complete", async () => {
+      const s = c.snapshot();
+      const path = `/accounts/${accountId}/r2/buckets/public-assets/domains/${c.response}`;
+      const detail = `CfApiError: expected ${c.expected} on ${path}`;
+      const storage = s.summary.classes.storage;
+      expect(storage).toMatchObject({ status: "partial", detail });
+      expect(storage?.done).toBe((storage?.chunks ?? 0) - 1);
+      expect(storage?.swept).toBeUndefined();
+      expect(s.coverage).toEqual(
+        [...RESOURCE_CLASSES, "exposure"]
+          .sort()
+          .map((resource_class) =>
+            resource_class === "storage"
+              ? { resource_class, status: "partial", detail }
+              : { resource_class, status: "complete", detail: null },
+          ),
+      );
+      expect(s.summary.status).toBe("partial");
+      expect((await scanRun(s.scanId))?.status).toBe("partial");
+    });
+
+    it("R6-06: leaves CF-021 not evaluated and its open finding open", () => {
+      const s = c.snapshot();
+      expect(s.ruleRuns.find((r) => r.rule_id === "CF-021")).toEqual({
+        rule_id: "CF-021",
+        status: "not_evaluated",
+        hits: 0,
+        undecided: 0,
+        missing: JSON.stringify(["storage"]),
+        error: null,
+      });
+      expect(byFingerprint(s, "CF-021:r2_bucket:public-assets")).toMatchObject({
+        status: "open",
+      });
+    });
+
+    it("changes no finding", () => {
+      const s = c.snapshot();
+      expect(s.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
+      expect(s.findings).toEqual(second.findings);
+    });
+  });
+}
 
 describe("third scan, after r2.dev is turned off on public-assets", () => {
   const fingerprint = "CF-021:r2_bucket:public-assets";
