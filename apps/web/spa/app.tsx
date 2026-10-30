@@ -19,6 +19,16 @@ export function Header({ me }: { me: Me | undefined }) {
   );
 }
 
+/** The non-affiliation notice (D-01), on every page. Text only: no Cloudflare logo. */
+export function Footer() {
+  return (
+    <footer>
+      Virga is an independent open source project. It is not affiliated with, endorsed by, or
+      sponsored by Cloudflare, Inc.
+    </footer>
+  );
+}
+
 export function App() {
   const location = useLocation();
   const me = useLoad(() => api.me(), []);
@@ -36,6 +46,7 @@ export function App() {
         {route.page === "audit" && <AuditPage me={me.data} />}
         {route.page === "not_found" && <p className="problem">This page does not exist.</p>}
       </main>
+      <Footer />
     </>
   );
 }

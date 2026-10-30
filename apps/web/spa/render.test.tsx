@@ -25,7 +25,7 @@ import {
   type Me,
   nextExportPart,
 } from "./api.ts";
-import { Header } from "./app.tsx";
+import { Footer, Header } from "./app.tsx";
 import { graphElements } from "./graph.tsx";
 import type { Loaded } from "./load.tsx";
 import {
@@ -38,6 +38,13 @@ import {
 } from "./pages.tsx";
 import { match } from "./router.tsx";
 import { JsonView, shown } from "./text.tsx";
+
+const sources = import.meta.glob(["./**/*.ts", "./**/*.tsx", "!./**/*.test.tsx"], {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
 import {
   AccountsTable,
   AuditTable,
@@ -548,13 +555,31 @@ describe("audit trail page", () => {
   });
 });
 
-describe("SPA sources", () => {
-  const sources = import.meta.glob(["./**/*.ts", "./**/*.tsx", "!./**/*.test.tsx"], {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  }) as Record<string, string>;
+describe("non-affiliation notice (D-01)", () => {
+  it("says in the footer that Virga is not affiliated with or endorsed by Cloudflare", () => {
+    const html = renderToStaticMarkup(<Footer />);
+    expect(html).toMatch(/^<footer>[^<]*<\/footer>$/);
+    expect(html).toContain("Virga is an independent open source project.");
+    expect(html).toContain("not affiliated with, endorsed by, or sponsored by Cloudflare, Inc.");
+  });
 
+  it("is on every page, and no Cloudflare logo is", () => {
+    const app = sources["./app.tsx"] ?? "";
+    expect(app).toMatch(/<\/main>\s*<Footer \/>/);
+    const assets = import.meta.glob(["./**/*", "!./**/*.ts", "!./**/*.tsx"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(assets)).toContain("./public/favicon.svg");
+    for (const [file, text] of Object.entries(assets)) {
+      expect(file.toLowerCase(), file).not.toContain("cloudflare");
+      expect(text.toLowerCase(), file).not.toContain("cloudflare");
+    }
+  });
+});
+
+describe("SPA sources", () => {
   it("never write HTML or evaluate strings", () => {
     expect(Object.keys(sources).length).toBeGreaterThan(5);
     for (const [file, source] of Object.entries(sources)) {

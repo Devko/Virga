@@ -58,6 +58,15 @@ main {
   padding: 1rem 1.5rem 3rem;
 }
 
+footer {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 2rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 button.link {
   background: none;
   border: none;
