@@ -1,7 +1,18 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   API_VARS,
   apiOverrides,
@@ -11,10 +22,14 @@ import {
   parseJsonOutput,
   processRunner,
   proxyNotice,
+  type RunnerOptions,
   redact,
   unsafeVars,
+  type WranglerCommand,
   wranglerEnv,
 } from "../lib/run.ts";
+import { recordWranglers, type WranglerInstall } from "../lib/wrangler.ts";
+import { type FakeWrangler, fakeWrangler, put } from "./helpers.ts";
 
 describe("redact", () => {
   it("removes known secrets and Cloudflare credential shapes", () => {
@@ -39,8 +54,6 @@ describe("parseJsonOutput", () => {
     expect(() => parseJsonOutput("nothing here")).toThrow(/no JSON/);
   });
 });
-
-const CONFIG = "/repo/apps/web/wrangler.jsonc";
 
 describe("configOverrides", () => {
   it("R3-03: names the variables that make Wrangler deploy something else", () => {
@@ -330,31 +343,45 @@ describe("dotEnvFiles", () => {
   });
 });
 
+/** Source of a stand-in Wrangler bin file that logs its call and prints what it received. */
+const PRINTING_BIN = String.raw`const { appendFileSync } = require("node:fs");
+const { resolve } = require("node:path");
+const e = process.env;
+const orUnset = (v) => (v === undefined || v === "" ? "unset" : v);
+const ifUnset = (v) => (v === undefined ? "unset" : v);
+appendFileSync(resolve(__dirname, "../../../../../..", "calls.log"), process.argv.slice(2).join(" ") + "\n");
+console.log("args=" + process.argv.slice(2).join(" "));
+console.log("token=" + orUnset(e.CLOUDFLARE_API_TOKEN) + " key=" + orUnset(e.CLOUDFLARE_API_KEY) + " metrics=" + (e.WRANGLER_SEND_METRICS ?? ""));
+console.log("env=" + ifUnset(e.CLOUDFLARE_ENV) + " name=" + ifUnset(e.WRANGLER_CI_OVERRIDE_NAME));
+console.log("api=" + ifUnset(e.CLOUDFLARE_API_BASE_URL) + " cf=" + ifUnset(e.CF_API_BASE_URL) + " apienv=" + ifUnset(e.WRANGLER_API_ENVIRONMENT) + " region=" + ifUnset(e.CLOUDFLARE_COMPLIANCE_REGION));
+console.log("sanitize=" + ifUnset(e.WRANGLER_LOG_SANITIZE) + " reports=" + ifUnset(e.WRANGLER_SEND_ERROR_REPORTS));
+console.error("warning cfat_0123456789abcdefghij");
+process.exitCode = 3;
+`;
+
+/** Source of a stand-in Wrangler bin file that lists the names of its environment, one per line. */
+const NAMES_BIN = "for (const name of Object.keys(process.env)) console.log(name);\n";
+
+const CONFIG_TEXT = '{ "name": "virga-web" }\n';
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
 describe("processRunner", () => {
   let dir = "";
+  /** apps/web with the printing Wrangler. */
+  let app = "";
+  /** An app whose Wrangler lists its environment. */
+  let names = "";
+  let config = "";
+  let wranglers: Map<string, WranglerInstall>;
   beforeAll(() => {
-    // A stand-in for Wrangler that prints what it received.
-    dir = mkdtempSync(join(tmpdir(), "virga-run-"));
-    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
-    const bin = join(dir, "node_modules", ".bin", "wrangler");
-    writeFileSync(
-      bin,
-      [
-        "#!/bin/sh",
-        'echo "args=$*"',
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
-        'echo "token=${CLOUDFLARE_API_TOKEN:-unset} key=${CLOUDFLARE_API_KEY:-unset} metrics=$WRANGLER_SEND_METRICS"',
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
-        'echo "env=${CLOUDFLARE_ENV-unset} name=${WRANGLER_CI_OVERRIDE_NAME-unset}"',
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
-        'echo "api=${CLOUDFLARE_API_BASE_URL-unset} cf=${CF_API_BASE_URL-unset} apienv=${WRANGLER_API_ENVIRONMENT-unset} region=${CLOUDFLARE_COMPLIANCE_REGION-unset}"',
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
-        'echo "sanitize=${WRANGLER_LOG_SANITIZE-unset} reports=${WRANGLER_SEND_ERROR_REPORTS-unset}"',
-        'echo "warning cfat_0123456789abcdefghij" >&2',
-        "exit 3",
-      ].join("\n"),
-    );
-    chmodSync(bin, 0o755);
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "virga-run-")));
+    app = join(dir, "apps", "web");
+    fakeWrangler(dir, [app], PRINTING_BIN);
+    names = join(dir, "names", "apps", "web");
+    fakeWrangler(join(dir, "names"), [names], NAMES_BIN);
+    config = join(app, "wrangler.jsonc");
+    writeFileSync(config, CONFIG_TEXT);
+    wranglers = recordWranglers([app, names]);
     // A stand-in for pnpm, found through PATH, that lists the Cloudflare variables it sees.
     mkdirSync(join(dir, "path"));
     const pnpm = join(dir, "path", "pnpm");
@@ -367,15 +394,22 @@ describe("processRunner", () => {
       ].join("\n"),
     );
     chmodSync(pnpm, 0o755);
-    // A stand-in for Wrangler that lists the names of its environment, one per line.
-    mkdirSync(join(dir, "names", "node_modules", ".bin"), { recursive: true });
-    const names = join(dir, "names", "node_modules", ".bin", "wrangler");
-    writeFileSync(names, ["#!/bin/sh", "env | cut -d= -f1"].join("\n"));
-    chmodSync(names, 0o755);
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
     vi.unstubAllEnvs();
+  });
+
+  const runner = (options: Partial<RunnerOptions> = {}) =>
+    processRunner({ credentials: "token", secrets: () => [], wranglers, ...options });
+  const wrangler = (args: string[], extra: Partial<WranglerCommand> = {}): WranglerCommand => ({
+    bin: "wrangler",
+    cwd: app,
+    config,
+    configSha256: sha256(CONFIG_TEXT),
+    args,
+    capture: true,
+    ...extra,
   });
 
   it("R3-05: runs builds without the deploy token or any other CLOUDFLARE_ variable", async () => {
@@ -383,38 +417,25 @@ describe("processRunner", () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef");
     vi.stubEnv("CF_API_TOKEN", "another-token-value");
-    const run = processRunner({ credentials: "token", secrets: () => [], print: () => {} });
+    const run = runner({ print: () => {} });
     const build = await run({ bin: "pnpm", cwd: dir, args: ["run", "build"], capture: true });
     expect(build.stdout).toBe("args=run build\nvars=\n");
-    const wrangler = await run({
-      bin: "wrangler",
-      cwd: dir,
-      config: CONFIG,
-      args: [],
-      capture: true,
-    });
-    expect(wrangler.stdout).toContain("token=the-deploy-token-value");
+    const result = await run(wrangler([]));
+    expect(result.stdout).toContain("token=the-deploy-token-value");
   });
 
   it("R3-03: passes the checked config, and no credentials in a dry run", async () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_API_KEY", "a-global-api-key");
     const printed: string[] = [];
-    const run = processRunner({
+    const run = runner({
       credentials: "none",
-      secrets: () => [],
       print: (stream, line) => printed.push(`${stream}:${line}`),
     });
-    const result = await run({
-      bin: "wrangler",
-      cwd: dir,
-      config: CONFIG,
-      args: ["deploy", "--dry-run"],
-      capture: true,
-    });
+    const result = await run(wrangler(["deploy", "--dry-run"]));
     expect(result.code).toBe(3);
     expect(result.stdout.split("\n")).toEqual([
-      `args=deploy --dry-run --config ${CONFIG} --env-file ${devNull}`,
+      `args=deploy --dry-run --config ${config} --env-file ${devNull}`,
       "token=unset key=unset metrics=false",
       "env=unset name=unset",
       "api=https://api.cloudflare.com/client/v4 cf=unset apienv=production region=public",
@@ -429,18 +450,17 @@ describe("processRunner", () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "the-deploy-token-value");
     vi.stubEnv("CLOUDFLARE_API_KEY", "a-global-api-key");
     const printed: string[] = [];
-    const run = processRunner({
-      credentials: "token",
+    const run = runner({
       secrets: () => ["the-deploy-token-value"],
       print: (_stream, line) => printed.push(line),
     });
-    const result = await run({ bin: "wrangler", cwd: dir, config: CONFIG, args: [] });
+    const result = await run(wrangler([], { capture: false }));
     expect(result.stdout).toContain("token=[redacted] key=unset metrics=false");
     expect(printed.join("\n")).not.toContain("the-deploy-token-value");
   });
 
   it("R3-03: refuses arguments that choose another config or environment", async () => {
-    const run = processRunner({ credentials: "none", secrets: () => [] });
+    const run = runner({ credentials: "none" });
     for (const extra of [
       ["--env", "prod"],
       ["-e", "prod"],
@@ -452,26 +472,19 @@ describe("processRunner", () => {
       ["--env-file=.env"],
       ["--cwd", "/tmp"],
     ]) {
-      await expect(
-        run({ bin: "wrangler", cwd: dir, config: CONFIG, args: ["deploy", ...extra] }),
-      ).rejects.toThrow(/chooses the config or environment/);
+      await expect(run(wrangler(["deploy", ...extra]))).rejects.toThrow(
+        /chooses the config or environment/,
+      );
     }
-    await expect(
-      run({ bin: "wrangler", cwd: dir, config: "wrangler.jsonc", args: ["deploy"] }),
-    ).rejects.toThrow(/absolute/);
+    await expect(run(wrangler(["deploy"], { config: "wrangler.jsonc" }))).rejects.toThrow(
+      /absolute/,
+    );
   });
 
   it("R3-03: never passes a named environment or another Worker name to Wrangler", async () => {
     vi.stubEnv("CLOUDFLARE_ENV", "prod");
     vi.stubEnv("WRANGLER_CI_OVERRIDE_NAME", "");
-    const run = processRunner({ credentials: "token", secrets: () => [] });
-    const result = await run({
-      bin: "wrangler",
-      cwd: dir,
-      config: CONFIG,
-      args: [],
-      capture: true,
-    });
+    const result = await runner()(wrangler([]));
     expect(result.stdout).toContain("env=unset name=unset");
   });
 
@@ -480,14 +493,7 @@ describe("processRunner", () => {
     vi.stubEnv("CF_API_BASE_URL", "http://127.0.0.1:18787/client/v4");
     vi.stubEnv("WRANGLER_API_ENVIRONMENT", "staging");
     vi.stubEnv("WRANGLER_LOG_SANITIZE", "false");
-    const run = processRunner({ credentials: "token", secrets: () => [] });
-    const result = await run({
-      bin: "wrangler",
-      cwd: dir,
-      config: CONFIG,
-      args: [],
-      capture: true,
-    });
+    const result = await runner()(wrangler([]));
     expect(result.stdout).toContain(
       "api=https://api.cloudflare.com/client/v4 cf=unset apienv=production region=public",
     );
@@ -495,15 +501,15 @@ describe("processRunner", () => {
   });
 
   it("R5-03: refuses to run Wrangler where it would load a .env, .env.local or .dev.vars file", async () => {
-    const run = processRunner({ credentials: "token", secrets: () => [] });
+    const run = runner();
     for (const name of [".env", ".env.local", ".dev.vars"]) {
-      writeFileSync(join(dir, name), "CLOUDFLARE_API_BASE_URL=http://127.0.0.1:18787/client/v4\n");
+      writeFileSync(join(app, name), "CLOUDFLARE_API_BASE_URL=http://127.0.0.1:18787/client/v4\n");
       try {
-        await expect(run({ bin: "wrangler", cwd: dir, config: CONFIG, args: [] })).rejects.toThrow(
-          `${join(dir, name)}: Wrangler would load it into its environment`,
+        await expect(run(wrangler([]))).rejects.toThrow(
+          `${join(app, name)}: Wrangler would load it into its environment`,
         );
       } finally {
-        rmSync(join(dir, name));
+        rmSync(join(app, name));
       }
     }
   });
@@ -511,32 +517,105 @@ describe("processRunner", () => {
   it("R5-03: gives Wrangler the allowlisted environment, not the operator's", async () => {
     try {
       for (const [name, value] of Object.entries(SHELL)) vi.stubEnv(name, value);
-      const run = processRunner({ credentials: "token", secrets: () => [] });
-      const result = await run({
-        bin: "wrangler",
-        cwd: join(dir, "names"),
-        config: CONFIG,
-        args: [],
-        capture: true,
-      });
-      // The shell adds its own.
-      const names = result.stdout
-        .split("\n")
-        .filter((name) => name !== "" && !/^(?:PWD|OLDPWD|SHLVL|_)$/.test(name));
-      expect(names.sort()).toEqual(Object.keys(wranglerEnv(process.env, "token")).sort());
+      writeFileSync(join(names, "wrangler.jsonc"), CONFIG_TEXT);
+      const result = await runner()(
+        wrangler([], { cwd: names, config: join(names, "wrangler.jsonc") }),
+      );
+      const listed = result.stdout.split("\n").filter((name) => name !== "");
+      expect(listed.sort()).toEqual(Object.keys(wranglerEnv(process.env, "token")).sort());
       for (const name of ["WRANGLER_LOG", "CF_API_TOKEN", "NODE_PATH", "GITHUB_TOKEN", "DEBUG"]) {
-        expect(names).not.toContain(name);
+        expect(listed).not.toContain(name);
       }
-      expect(names).toContain("HTTPS_PROXY");
+      expect(listed).toContain("HTTPS_PROXY");
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it("asks for pnpm install when the app has no Wrangler", async () => {
-    const run = processRunner({ credentials: "none", secrets: () => [] });
-    await expect(
-      run({ bin: "wrangler", cwd: join(dir, "nothing"), config: CONFIG, args: [] }),
-    ).rejects.toThrow(/pnpm install/);
+  it("R6-01: refuses an app whose Wrangler was not recorded before the builds", async () => {
+    await expect(runner()(wrangler([], { cwd: join(dir, "nothing") }))).rejects.toThrow(
+      `${join(dir, "nothing")}: no Wrangler was recorded for it before the builds`,
+    );
+  });
+});
+
+describe("processRunner and what the builds can change (R6-01)", () => {
+  let root = "";
+  let app = "";
+  let config = "";
+  let fake: FakeWrangler;
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "virga-run-r601-")));
+    app = join(root, "apps", "web");
+    fake = fakeWrangler(root, [app], PRINTING_BIN);
+    config = join(app, "wrangler.jsonc");
+    writeFileSync(config, CONFIG_TEXT);
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const calls = () =>
+    existsSync(join(root, "calls.log")) ? readFileSync(join(root, "calls.log"), "utf8") : "";
+  const run = (wranglers: Map<string, WranglerInstall>) =>
+    processRunner({ credentials: "token", secrets: () => [], wranglers, print: () => {} })({
+      bin: "wrangler",
+      cwd: app,
+      config,
+      configSha256: sha256(CONFIG_TEXT),
+      args: ["deploy"],
+      capture: true,
+    });
+
+  it("R6-01: runs the recorded package's bin file with this node, never a shim or another node", async () => {
+    // A `node` first on PATH, as the pnpm shim would find it.
+    put(join(root, "path", "node"), '#!/bin/sh\necho "path node ran"\n', 0o755);
+    vi.stubEnv("PATH", `${join(root, "path")}:${process.env.PATH ?? ""}`);
+    try {
+      const result = await run(recordWranglers([app]));
+      expect(result.stdout).toContain(`args=deploy --config ${config} --env-file ${devNull}`);
+      expect(result.stdout).not.toMatch(/shim ran|path node ran/);
+      expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("R6-01: refuses a config whose bytes differ from the bytes that were checked", async () => {
+    const wranglers = recordWranglers([app]);
+    for (const text of [
+      '{ "name": "virga-web", "unsafe": { "bindings": [{ "name": "API", "type": "service", "service": "virga-broker", "entrypoint": "ApiCaller" }] } }\n',
+      '{ "name": "virga-web", "build": { "command": "node steal.js" } }\n',
+      CONFIG_TEXT.replace("\n", " \n"),
+    ]) {
+      writeFileSync(config, text);
+      await expect(run(wranglers)).rejects.toThrow(
+        `${config} changed after the deploy checked it; refusing to pass it to Wrangler`,
+      );
+    }
+    rmSync(config);
+    await expect(run(wranglers)).rejects.toThrow(`${config} cannot be read`);
+    expect(calls()).toBe("");
+  });
+
+  it("R6-01: refuses to run Wrangler once a file it runs has changed", async () => {
+    const shim = fake.shims[0] as string;
+    for (const file of [
+      fake.bin,
+      join(fake.wrangler, "wrangler-dist", "cli.js"),
+      join(fake.esbuild, "lib", "main.js"),
+      join(fake.platform, "bin", "esbuild"),
+      shim,
+    ]) {
+      const wranglers = recordWranglers([app]);
+      const before = readFileSync(file);
+      appendFileSync(file, "\n// planted\n");
+      await expect(run(wranglers), file).rejects.toThrow(
+        `the Wrangler of ${app} changed after the deploy recorded it before the builds: ${file}.`,
+      );
+      writeFileSync(file, before);
+    }
+    expect(calls()).toBe("");
+    // Unchanged, it runs.
+    await run(recordWranglers([app]));
+    expect(calls()).not.toBe("");
   });
 });

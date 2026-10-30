@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
-import { dotEnvFiles, dotEnvProblem } from "./run.ts";
+import { dotEnvFiles, dotEnvProblem, sha256 } from "./run.ts";
 
 export interface ServiceBinding {
   binding: string;
@@ -40,6 +40,8 @@ export interface WorkerConfig {
   app: string;
   dir: string;
   configPath: string;
+  /** sha256 of the config's bytes as the script read and checked them (R6-01). */
+  configSha256: string;
   /** Config path relative to the repository root, for messages. */
   displayPath: string;
   name: string;
@@ -108,38 +110,108 @@ export function configsAbove(dir: string): string[] {
   return found;
 }
 
-/** Reads apps/<app>/wrangler.jsonc. Returns null when the app or its config does not exist. */
-export function readWorkerConfig(root: string, app: string): WorkerConfig | null {
-  const dir = join(root, "apps", app);
-  const configPath = findConfigFile(dir);
-  if (configPath === null) return null;
+/** Symlinks named in a message; the rest are counted. */
+const SHOWN_LINKS = 5;
+
+/** A path relative to the repository root, or as it is when outside it. */
+const shown = (root: string, path: string) => {
+  const inside = relative(root, path);
+  return inside.startsWith("..") ? path : inside;
+};
+
+/** Refuses a Wrangler config above the app and a .env file Wrangler would load. */
+function checkSurroundings(root: string, app: string, configPath: string) {
+  const dir = dirname(configPath);
   const where = relative(root, configPath);
-  const show = (path: string) => {
-    const inside = relative(root, path);
-    return inside.startsWith("..") ? path : inside;
-  };
   const above = configsAbove(dir);
   if (above.length > 0) {
     throw new ConfigError(
       above
         .map(
           (path) =>
-            `${where}: ${show(path)} is a Wrangler config above the app; Wrangler run in apps/${app} without --config would use it. Remove it`,
+            `${where}: ${shown(root, path)} is a Wrangler config above the app; Wrangler run in apps/${app} without --config would use it. Remove it`,
         )
         .join("\n"),
     );
   }
   const dotEnv = dotEnvFiles(dir);
   if (dotEnv.length > 0) {
-    throw new ConfigError(dotEnv.map((path) => dotEnvProblem(show(path))).join("\n"));
+    throw new ConfigError(dotEnv.map((path) => dotEnvProblem(shown(root, path))).join("\n"));
   }
-  let raw: unknown;
+}
+
+/**
+ * Symlinks under `dir`, the directory itself included, but not in its own
+ * node_modules: pnpm links every dependency there, as the lockfile says.
+ */
+function appLinks(dir: string): string[] {
+  if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) return [dir];
+  const links: string[] = [];
+  const pending = [dir];
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (current === dir && entry.name === "node_modules") continue;
+      if (entry.isSymbolicLink()) links.push(path);
+      else if (entry.isDirectory()) pending.push(path);
+    }
+  }
+  return links.sort();
+}
+
+/**
+ * The checks of apps/<app> that need no parsed config: one Wrangler config,
+ * none above the app, no .env file, and no symlink outside node_modules.
+ * Wrangler bundles, migrates and uploads what a link points to, and Vite
+ * copies it, from wherever that is. The deploy runs these before the builds
+ * and again after them (R6-01). Returns the config's path, or null when the
+ * app has none.
+ */
+export function checkAppDir(root: string, app: string): string | null {
+  const dir = join(root, "apps", app);
+  const configPath = findConfigFile(dir);
+  if (configPath === null) return null;
+  checkSurroundings(root, app, configPath);
+  let links: string[];
   try {
-    raw = parseJsonc(readFileSync(configPath, "utf8"));
+    links = appLinks(dir);
+  } catch (error) {
+    throw new ConfigError(
+      `apps/${app} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (links.length > 0) {
+    const list = links.slice(0, SHOWN_LINKS).map((path) => shown(root, path));
+    const more = links.length > SHOWN_LINKS ? ` and ${links.length - SHOWN_LINKS} more` : "";
+    throw new ConfigError(
+      `apps/${app} holds symlinks outside node_modules: ${list.join(", ")}${more}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
+    );
+  }
+  return configPath;
+}
+
+/**
+ * Reads apps/<app>/wrangler.jsonc, and records the sha256 of the bytes it
+ * checked. Returns null when the app or its config does not exist.
+ */
+export function readWorkerConfig(root: string, app: string): WorkerConfig | null {
+  const dir = join(root, "apps", app);
+  const configPath = findConfigFile(dir);
+  if (configPath === null) return null;
+  const where = relative(root, configPath);
+  checkSurroundings(root, app, configPath);
+  let raw: unknown;
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(configPath);
+    raw = parseJsonc(bytes.toString("utf8"));
   } catch (error) {
     throw new ConfigError(`${where}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const config = parseWorkerConfig(raw, { app, dir, configPath, where });
+  const config = {
+    ...parseWorkerConfig(raw, { app, dir, configPath, where }),
+    configSha256: sha256(bytes),
+  };
   const assets = assetsDirectoryProblem(config);
   if (assets !== null) throw new ConfigError(`${where}: ${assets}`);
   return config;
@@ -201,8 +273,6 @@ export function assetsDirectoryProblem(worker: AssetsSource): string | null {
   return null;
 }
 
-const SHOWN_LINKS = 5;
-
 /**
  * Symlinks in the assets directory, once the build has filled it. Wrangler
  * uploads the file a link points to and the files under a linked directory,
@@ -244,7 +314,10 @@ interface Source {
 }
 
 /** Validates the fields the checks rely on and collects every problem before failing. */
-export function parseWorkerConfig(raw: unknown, source: Source): WorkerConfig {
+export function parseWorkerConfig(
+  raw: unknown,
+  source: Source,
+): Omit<WorkerConfig, "configSha256"> {
   const problems: string[] = [];
   const fail = (message: string) => problems.push(message);
   if (!isRecord(raw)) throw new ConfigError(`${source.where}: the configuration is not an object`);

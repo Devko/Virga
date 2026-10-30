@@ -1,6 +1,6 @@
 # Operator guide
 
-Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md), then R5-01 to R5-03 of the [round 5 verification](../reviews/2026-10-30-verification-round-5.md), and in round 7 Wrangler's environment and the assets directory), offboarding the same day (account removal in the UI and API). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
+Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md), then R5-01 to R5-03 of the [round 5 verification](../reviews/2026-10-30-verification-round-5.md), in round 7 Wrangler's environment and the assets directory, and in round 8 the order of builds and checks, R6-01 of the [round 6 verification](../reviews/2026-10-30-verification-round-6.md)), offboarding the same day (account removal in the UI and API). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
 
 Virga is an independent project. It is not affiliated with or endorsed by Cloudflare (D-01).
 
@@ -40,7 +40,7 @@ Every read from a scanned account goes through the broker, which allows only rea
 
 - Node.js 22.18 or later. The scripts run as TypeScript without a build step, and Node 22 strips types by default from 22.18.
 - pnpm through corepack, and a checkout of this repository.
-- Linux or macOS. The deploy script runs each app's own Wrangler from `apps/<app>/node_modules/.bin`.
+- Linux or macOS. The deploy script runs each app's own Wrangler, the package in `apps/<app>/node_modules/wrangler`, with the Node that runs the script.
 
 ```sh
 corepack enable
@@ -116,13 +116,18 @@ The script:
    - `CF_API_BASE_URL` is set, or `CLOUDFLARE_API_BASE_URL`, `WRANGLER_API_ENVIRONMENT` or `CLOUDFLARE_COMPLIANCE_REGION` is set to anything but `https://api.cloudflare.com/client/v4`, `production` and `public`: the token goes only to the public API.
 
    Then it prints the proxy settings it passes to Wrangler (see [Behind a proxy](#behind-a-proxy)) and names the other `CLOUDFLARE_`, `CF_` and `WRANGLER_` variables that Wrangler does not get, so that a setting such as `WRANGLER_LOG` does not seem to have worked. The script itself takes no option but `--dry-run`.
-2. Reads `apps/broker`, `apps/core` and `apps/web` (`wrangler.jsonc` or `wrangler.json`; `apps/web` may be missing, then it deploys broker and core only). It stops if:
+2. Checks the app directories `apps/broker`, `apps/core` and `apps/web` before the builds (`apps/web` may be missing, then it deploys broker and core only). It stops if:
    - an app has more than one of `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`;
    - any of them sits in a directory above an app, up to the filesystem root, including the repository root and your home directory: Wrangler run in an app directory without `--config` takes the first `wrangler.json` above it before the app's own config;
    - an app directory holds `.env`, `.env.local` or `.dev.vars`: Wrangler loads `.env` and `.env.local` from the directory it runs in into its environment, where a file could change the API host (and so where the token goes), the Worker name or the environment that is deployed;
+   - an app directory, or anything under it outside its own `node_modules`, is a symlink. Wrangler bundles, migrates and uploads what a link points to, and Vite copies it into the assets, wherever it is. `node_modules` is left out because pnpm links every dependency there, as `pnpm-lock.yaml` says.
+
+   Then it records the Wrangler each app runs: `apps/<app>/node_modules/wrangler` with symlinks followed, the bin file its `package.json` names, and the SHA-256 of every file of that package and of every package it depends on, found the way Node finds them. It also records the `wrangler` shims in `apps/<app>/node_modules/.bin`, which the `npx wrangler` commands in this guide run, and the list of packages in every `node_modules` directory Node searches from these packages, so that a package planted where Wrangler would load it counts too. It prints the Wrangler version and path it recorded.
+3. Runs each app's `build` script, if it has one (`apps/web` builds the UI with Vite). Every build runs before any config is read, without credentials (see "What it never does"). The UI build itself fails on a symlink in `apps/web/spa/public`, which Vite would otherwise copy into the assets with the file it points to.
+4. After the builds, compares Wrangler with what step 2 recorded and stops on any file that was added, removed or changed, then runs the checks of step 2 again. Then it reads each config (`wrangler.jsonc` or `wrangler.json`), remembers the SHA-256 of the bytes it read, and stops if:
    - a config has a `__proto__`, `constructor` or `prototype` key at any depth, or a key twice. The script reads each config the way Wrangler does (JSON with comments and trailing commas), and these are where the two readings, or Wrangler and a reviewer, could differ: Wrangler deploys the keys under `__proto__` as the config's own;
-   - `assets.directory` is not a directory below the app directory. Wrangler resolves it against the config's directory and uploads whatever it holds, so the script resolves it the same way, follows every symlink on the way, and refuses a path that climbs out (`../..`), an absolute path elsewhere, a symlink that leads elsewhere or nowhere, and the app directory itself. A directory the build has yet to create is checked as written.
-3. Checks the configs against each other and stops on any error:
+   - `assets.directory` is not a directory below the app directory. Wrangler resolves it against the config's directory and uploads whatever it holds, so the script resolves it the same way, follows every symlink on the way, and refuses a path that climbs out (`../..`), an absolute path elsewhere, a symlink that leads elsewhere or nowhere, and the app directory itself.
+5. Checks the configs against each other and stops on any error:
    - each Worker sets only keys the checks cover for it (`CONFIG_KEYS` and `NESTED_KEYS` in `scripts/lib/topology.ts`). Anything else, for example `unsafe`, `build`, `previews`, `tail_consumers` or a service binding's `props`, would deploy unchecked and is an error;
    - each Worker has its expected name (`virga-broker`, `virga-core`, `virga-web`);
    - every service binding names an entrypoint that the target's main module exports, and is one the [topology](../implementation-plan.md#deployment-topology-proposal) allows: core binds `virga-broker#ApiCaller`; web binds `virga-broker#TokenIntake`, `virga-core#GraphReader` and `virga-core#Admin`, and never `ApiCaller`;
@@ -131,28 +136,49 @@ The script:
    - only the broker binds Secrets Store, each D1 database belongs to one Worker by `database_name` and by `database_id` (D-08), and the web Worker binds no D1 database, no Durable Object and no Workflow;
    - Durable Object and Workflow classes are exported, and no Worker binds a class of another Worker (`script_name`);
    - no config has named environments (`env` blocks), and no `secrets.required` lists a `CLOUDFLARE_` or `CF_` name.
-4. Lists the D1 databases of the account. Before it creates or migrates anything, it checks that every `database_id` exists and is the database its `database_name` names, and that no database, by ID, is bound by two Workers. Then it creates `virga-vault` and `virga-index` if they are missing and applies their migrations (`wrangler d1 migrations apply --remote`).
-5. Checks the master key.
-6. Checks the web settings, if `apps/web` declares required secrets.
-7. Runs each app's `build` script, if it has one, and deploys `virga-broker`, `virga-core` and `virga-web`, in this order. Right before each `wrangler deploy` it checks `assets.directory` again, now that the build has filled it, and refuses any symlink in it: Wrangler uploads the file a link points to and the files under a linked directory, wherever they are.
-8. Prints what is still to do as `ACTION:` lines.
+6. Lists the D1 databases of the account. Before it creates or migrates anything, it checks that every `database_id` exists and is the database its `database_name` names, and that no database, by ID, is bound by two Workers. Then it creates `virga-vault` and `virga-index` if they are missing and applies their migrations (`wrangler d1 migrations apply --remote`).
+7. Checks the master key.
+8. Checks the web settings, if `apps/web` declares required secrets.
+9. Deploys `virga-broker`, `virga-core` and `virga-web`, in this order. Right before each `wrangler deploy` it checks `assets.directory` again and refuses any symlink in it: Wrangler uploads the file a link points to and the files under a linked directory, wherever they are.
+10. Prints what is still to do as `ACTION:` lines.
+
+Before every Wrangler call, in steps 6 to 9 and in a dry run alike, the script also checks that the config still holds the bytes it checked in step 4, that the app directory holds no `.env` file, and that every file recorded in step 2 is unchanged. It refuses the call otherwise, so Wrangler never reads a config, or runs code, that the script has not checked. A failing build stops the deploy before anything in the account changes.
 
 It is safe to run again: existing databases are reused, applied migrations are skipped, and each Worker gets a new version.
 
 What it never does:
 
 - It reaches the Cloudflare API only through Wrangler, which acts on the account of `CLOUDFLARE_ACCOUNT_ID`. Apart from Wrangler it runs only the apps' `build` scripts.
+- It never runs Wrangler through `node_modules/.bin`: the shim there is a shell script that anything can append to, and it runs whichever `node` comes first on `PATH`. The script runs the recorded bin file of the Wrangler package with the Node that runs the script itself.
 - It never lets Wrangler choose a config: every Wrangler call gets `--config` with the absolute path of the file it checked, so Wrangler neither searches for a config nor follows a `.wrangler/deploy` redirect, and it never selects a named environment.
 - It never lets Wrangler load a `.env` file: every Wrangler call gets `--env-file` with the null device (`/dev/null`) in place of `.env` and `.env.local`. Wrangler 4.151.0 has no flag that turns the loading off.
 - It sends the token only to `https://api.cloudflare.com/client/v4`: Wrangler gets `CLOUDFLARE_API_BASE_URL` set to it, `WRANGLER_API_ENVIRONMENT=production` and `CLOUDFLARE_COMPLIANCE_REGION=public`, and never `CF_API_BASE_URL`. A variable that is set wins over a `.env` file.
 - It gives Wrangler only these variables of its environment: `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `LANG`, `LANGUAGE`, the `LC_` variables, `TZ`, `TERM`, `COLORTERM` and `NO_COLOR` (on Windows also the usual system variables such as `SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP` and `USERPROFILE`), the proxy variables `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (each also in lowercase) and `NODE_EXTRA_CA_CERTS`, `CLOUDFLARE_ACCOUNT_ID`, and for a real deploy `CLOUDFLARE_API_TOKEN`. It sets the API variables (above) and the telemetry variables (below) itself. Everything else stays out, including every other `CLOUDFLARE_`, `CF_` and `WRANGLER_` variable (credentials, bundling, logs, output files), `NODE_PATH`, `NODE_ENV` and `DEBUG`; without them, the checked config and Wrangler's defaults decide what is deployed where.
-- It passes only `CLOUDFLARE_API_TOKEN` to Wrangler: a Global API Key in the environment is not used. A dry run passes no credentials at all. The `build` scripts get no `CLOUDFLARE_` or `CF_` variable at all, so no build-time package can read the token. No config may have a custom build (`build.command`): Wrangler would run it with the token in its environment.
+- It passes only `CLOUDFLARE_API_TOKEN` to Wrangler: a Global API Key in the environment is not used. A dry run passes no credentials at all. The `build` scripts get no `CLOUDFLARE_` or `CF_` variable in their environment; see [What the build checks cover](#what-the-build-checks-cover) for what that does not prevent. No config may have a custom build (`build.command`): Wrangler would run it with the token in its environment.
 - It takes only `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS` from its environment to upload as secrets of `virga-web`; never the token or any other variable.
 - It runs Wrangler with stdin closed, so Wrangler never prompts and never writes resource IDs into a `wrangler.jsonc`.
 - It never prints the token or a setting it uploads: all output passes through a filter that also removes anything shaped like a Cloudflare credential (`cfat_`, `cfut_`, `cfk_`, `cfoat_`). It never reads the master key.
 - It sends no Wrangler telemetry or error reports (`WRANGLER_SEND_METRICS=false`, `WRANGLER_SEND_ERROR_REPORTS=false`) and keeps Wrangler's debug log sanitized (`WRANGLER_LOG_SANITIZE=true`).
 
-The `npx wrangler` commands in this guide run in an app directory without `--config`. Wrangler then uses that app's own config only while no other Wrangler config sits next to or above it, which step 2 checks, and only while `CLOUDFLARE_ENV` is unset. It also loads `.env` and `.env.local` from that directory, which step 2 refuses too: keep them out of the app directories. And it gets your whole environment, not the allowlist above: unset the variables step 1 refuses before you run one with a token. Run the dry run first if in doubt.
+The `npx wrangler` commands in this guide run in an app directory without `--config`. Wrangler then uses that app's own config only while no other Wrangler config sits next to or above it, which step 2 checks, and only while `CLOUDFLARE_ENV` is unset. It also loads `.env` and `.env.local` from that directory, which step 2 refuses too: keep them out of the app directories. It runs the shim in `node_modules/.bin`, which the deploy compares with its record only while a deploy runs. And it gets your whole environment, not the allowlist above: unset the variables step 1 refuses before you run one with a token. Run the dry run first if in doubt.
+
+### What the build checks cover
+
+The `build` scripts and everything they load (Vite, its plugins, `vite.config.ts` and their dependencies) run as your user. The script keeps the token out of their environment, but it cannot keep their code from doing what your user can do. The checks above make sure that what the builds change is either refused or checked before Wrangler gets the token:
+
+- A build that rewrites a `wrangler.jsonc`, for example to add `unsafe` bindings, a `build.command` or a `__proto__` member, is caught by the config checks, which run after every build (steps 4 and 5).
+- A build that writes to Wrangler, its dependencies or a `wrangler` shim, or plants a package where Wrangler would load it, is caught by the comparison with the record of step 2.
+- A build that leaves a `.env` file or a symlink in an app directory is caught after the builds, a `.env` file again before each Wrangler call, and a link in the assets again before each `wrangler deploy`.
+- Something that changes a config after it was checked, such as a process a build left running, is caught before the Wrangler call that would read it.
+
+They do not protect against build code that:
+
+- reads the token anyway. The deploy process holds it in its environment while the builds run, and a process of the same user can read that environment (on Linux, `/proc/<pid>/environ` of the deploy) or attach to the process with a debugger where the system allows it;
+- reads or changes anything else your user can reach: SSH keys, other tokens, Wrangler's own login in your home directory, your shell profile, the `node` binary on `PATH` or the one that runs the deploy, or another checkout;
+- changes the app's sources or migrations. Wrangler bundles and applies what is there after the builds; the bindings stay checked, but the code inside a Worker is what the build left;
+- keeps running and changes a file between the last check and the moment Wrangler reads it.
+
+So the build code must be trusted as far as the token is, and it is covered by the supply chain checks instead: `pnpm install --frozen-lockfile` installs exactly the versions and integrity hashes in `pnpm-lock.yaml`, and the release-age check (`pnpm check:release-age`, run in CI before any job installs) refuses versions younger than 14 days ([CONTRIBUTING.md](../../CONTRIBUTING.md)). Prefer to deploy from [CI](#deploy-from-ci). The builds run there in the same step as the token too, but each run starts on a fresh runner from a fresh checkout, nothing a build leaves behind reaches a later run, and the runner holds no other credentials of yours. On a workstation, deploy from a fresh clone, as a user that holds no other credentials you care about.
 
 ### Behind a proxy
 
@@ -410,7 +436,12 @@ What stays behind:
 | `secrets.required names CLOUDFLARE_…` | Remove the name. The deploy token and the other `CLOUDFLARE_` and `CF_` variables never become Worker secrets |
 | `D1 binding … has database_id …, which is …, not …` | The `database_id` belongs to another database than `database_name`. Correct it, or remove `database_id`: the script finds databases by name |
 | `D1 database … is also bound by …` | Two Workers bind one database, by name or by ID. Each database belongs to one Worker (D-08); the vault only to `virga-broker` |
-| `… not found; run pnpm install first` | The app has no Wrangler installed. Run `pnpm install` at the repository root |
+| `… not found; run pnpm install first`, `… is not the wrangler package` or `the wrangler bin file is missing or outside the package` | The app has no Wrangler installed, or `apps/<app>/node_modules/wrangler` is something else. Run `pnpm install` at the repository root |
+| `apps/<app> holds symlinks outside node_modules: …` | Replace each link with the file or directory itself. Wrangler and Vite read what a link points to, also from outside the repository, into the bundle, the migrations and the assets. Before the builds, the link is in your checkout; after them, a build created it |
+| `…/spa/public/…: the public directory holds a symlink, and Vite would copy what it points to into the assets` (from the build of `apps/web`) | Replace the link with the file. Vite copies the file a link points to into the published assets |
+| `the Wrangler of …/apps/<app> changed after the deploy recorded it before the builds: …` | A file of Wrangler, of a package it loads, or a `wrangler` shim in `node_modules/.bin` was added, removed or changed, or a package appeared where Wrangler would load it; the message names the paths. Unless you changed them yourself, treat the checkout as compromised: find what wrote them, starting with the `build` scripts and their dependencies, and deploy from a fresh clone after `pnpm install --frozen-lockfile`. Do not run `npx wrangler` in that checkout with a token |
+| `…/wrangler.jsonc changed after the deploy checked it; refusing to pass it to Wrangler` | The config changed between the check and a Wrangler call, for example from your editor or a process a build left running. Find what changed it, then run the deploy again; it checks the new bytes |
+| `apps/<app>: its Wrangler config was removed during the builds` | A build deleted the config. Restore it from git and find out why |
 | `store_id is a placeholder` | Set `store_id` in `apps/broker/wrangler.jsonc`, or use the `MASTER_KEY` fallback. A dry run only reports it |
 | `Secrets Store … has no secret virga-master-key` or `has no MASTER_KEY secret` | Create the key as in [Master key](#master-key), then run the deploy again |
 | `secret virga-master-key lacks the workers scope` | Add the `workers` scope to the secret in the Secrets Store dashboard |
@@ -421,6 +452,7 @@ What stays behind:
 | A migration fails | D1 rolls back the failed migration; earlier ones stay applied. Fix the cause and run the deploy again |
 | `virga-web does not exist yet and requires the secrets …` or `virga-web requires the secrets …` | `apps/web` lists them under `secrets.required`. Set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS` as environment variables of the deploy; create any other name with the `npx wrangler secret put` command the message prints |
 | The dry run of `virga-web` fails on missing assets | The app's `build` script did not produce them. Run `pnpm run build` in `apps/web` to see why |
+| `building virga-web failed` | The build runs before any config is read or anything remote changes. Run `pnpm run build` in `apps/web` to see the error |
 | `ACTION:` lines | Not errors. Things left to do, such as settings of `virga-web` |
 
 ### UI and onboarding
