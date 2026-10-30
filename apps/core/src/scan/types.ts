@@ -1,5 +1,6 @@
 import type { CollectorOutput } from "@virga/collectors";
 import type { CoverageStatus, SweepResult } from "@virga/graph";
+import type { Untrusted } from "../untrusted.ts";
 
 export type Awaitable<T> = T | Promise<T>;
 
@@ -11,6 +12,12 @@ export interface ChunkCounters {
   changed: number;
   signals: number;
   insights: number;
+  /**
+   * Set when the chunk left resources of its class out, one reason per unit
+   * (decision 0005); bounded by TRUNCATED_LIMITS. Reasons can name IDs from
+   * the scanned account.
+   */
+  truncated?: Untrusted<string>[];
 }
 
 export interface ExposureCounters {
@@ -86,7 +93,16 @@ export interface ClassSummary {
   changed: number;
   signals: number;
   insights: number;
-  /** Why the class is not complete. May quote API error messages: untrusted. */
+  /**
+   * Reasons the written chunks gave for resources they left out (decision
+   * 0005). Any makes the class `partial`, even when every chunk was written.
+   */
+  truncated?: number;
+  /**
+   * Why the class is not complete: the error of the chunk that failed, and
+   * the first truncated reasons. May quote API error messages and IDs from
+   * the scanned account: untrusted.
+   */
   detail?: string;
   swept?: { nodes: number; edges: number } | { error: string };
 }

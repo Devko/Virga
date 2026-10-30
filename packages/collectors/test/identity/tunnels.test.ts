@@ -1,5 +1,5 @@
 import { envelope } from "@virga/cf-api/testing";
-import { sha256 } from "@virga/graph";
+import { canonicalJson, LIMITS, prepareBatch, sha256 } from "@virga/graph";
 import { describe, expect, it } from "vitest";
 import {
   accessRequired,
@@ -14,6 +14,7 @@ import {
   DELETED,
   LEGACY,
   LOCAL,
+  legacyConfig,
   local,
   MESH,
   ORIGIN_PASSWORD,
@@ -46,6 +47,10 @@ const withBlogConfig = (config: object) => ({
 });
 
 const required = { access: { required: true, teamName: "acme", audTag: ["aud1"] } };
+
+const encoder = new TextEncoder();
+/** Size of props as the graph's write path counts it: UTF-8 bytes of the canonical JSON. */
+const propsBytes = (props: object | undefined) => encoder.encode(canonicalJson(props ?? {})).length;
 
 /** The part after the tunnel ID for a pair whose contract ID another pair holds. */
 const pairHash = async (host: string, path: string) =>
@@ -499,7 +504,7 @@ describe("tunnels collector", () => {
     });
   });
 
-  describe("R5-06: at most 1,000 entry points per tunnel", () => {
+  describe("R5-06: at most 1,000 entry points and 1 MiB of their props per tunnel", () => {
     const pathRules = (n: number) =>
       Array.from({ length: n }, (_, i) => ({ path: `^/p${i}`, service: "http://localhost:8080" }));
     const hostRules = (n: number) =>
@@ -525,6 +530,9 @@ describe("tunnels collector", () => {
         count: hostnames.length,
         truncated: node(output, `tunnel:${BLOG}`).props?.ingress_truncated,
         ids: hostnames.map((n) => n.nativeId.slice(BLOG.length + 1)),
+        bytes: hostnames.reduce((sum, n) => sum + propsBytes(n.props), 0),
+        reasons: output.truncated,
+        output,
       };
     }
 
@@ -550,9 +558,91 @@ describe("tunnels collector", () => {
 
     it("R5-06: is not truncated at exactly 1,000 entry points, and is at 1,001", async () => {
       const at = await blogIngress([...hostRules(1000), { service: "http_status:404" }]);
-      expect(at).toMatchObject({ count: 1000, truncated: false });
+      expect(at).toMatchObject({ count: 1000, truncated: false, reasons: [] });
       const over = await blogIngress([...hostRules(1001), { service: "http_status:404" }]);
       expect(over).toMatchObject({ count: 1000, truncated: true });
+    });
+
+    describe("R5-06: byte budget", () => {
+      const BUDGET = 1024 * 1024;
+      const OVER_BUDGET = `tunnel ${BLOG}: ingress has more than 1048576 bytes of entry point props`;
+      const service = "http://localhost:8080";
+      const host = (i: number) => `b${String(i).padStart(2, "0")}.example.com`;
+      const bytesOf = (hostname: string, path: string, fallthrough = false) =>
+        propsBytes(hostProps(hostname, path, service, false, fallthrough));
+      // 3 UTF-8 bytes but one UTF-16 unit each: counting characters would undercount.
+      const EURO = "€".repeat(1000);
+
+      /** 20 hostname rules whose nodes' props add up to `total` bytes. */
+      function rules(total: number) {
+        const each = Math.floor(total / 20);
+        return Array.from({ length: 20 }, (_, i) => {
+          const size = i < 19 ? each : total - 19 * each;
+          const path = `^/${EURO}${"a".repeat(size - bytesOf(host(i), `^/${EURO}`))}`;
+          expect(bytesOf(host(i), path)).toBe(size);
+          return { hostname: host(i), path, service };
+        });
+      }
+
+      it("R5-06: emits every entry point when their props take exactly 1 MiB", async () => {
+        const at = await blogIngress([...rules(BUDGET), { service: "http_status:404" }]);
+        expect(at).toMatchObject({ count: 20, truncated: false, bytes: BUDGET, reasons: [] });
+      });
+
+      it("R5-06: leaves out the node one byte over 1 MiB and every node after it", async () => {
+        const small = { hostname: "z.example.com", service };
+        const over = await blogIngress([
+          ...rules(BUDGET + 1),
+          small,
+          { service: "http_status:404" },
+        ]);
+        expect(over).toMatchObject({ count: 19, truncated: true, reasons: [OVER_BUDGET] });
+        expect(over.bytes).toBe(19 * Math.floor((BUDGET + 1) / 20));
+        expect(over.ids.filter((id) => id.startsWith(host(19)) || id.startsWith("z."))).toEqual([]);
+      });
+
+      it("R5-06: stops the review's path near the props limit, expanded over 1,000 hostnames, at 1 MiB", async () => {
+        // The longest hostname of h0 to h999 gets props of exactly the graph's 64 KB limit.
+        const longest = "h999.example.com";
+        const path = `^/${"a".repeat(LIMITS.propsBytes - bytesOf(longest, "^/", true))}`;
+        expect(bytesOf(longest, path, true)).toBe(LIMITS.propsBytes);
+        // Without the budget this one tunnel made about 64 MB of props.
+        expect(1000 * bytesOf("h0.example.com", path, true)).toBeGreaterThan(64_000_000);
+        const ingress = [{ path, service }, ...hostRules(1000), { service: "http_status:404" }];
+        const { count, truncated, bytes, ids, reasons, output } = await blogIngress(ingress);
+        expect({ count, truncated, reasons }).toEqual({
+          count: 16,
+          truncated: true,
+          reasons: [OVER_BUDGET],
+        });
+        expect(bytes).toBeLessThanOrEqual(BUDGET);
+        // All from the path-only rule, whose path makes the IDs too long to keep.
+        expect(ids.every((id) => id.includes(":sha256:"))).toBe(true);
+        // The graph's write path takes every node of the chunk.
+        const batch = await prepareBatch({ scanId: "s", resourceClass: "tunnels", ...output });
+        expect(batch.nodes.length).toBe(output.nodes.length);
+      });
+    });
+
+    it("0005: reports a truncated reason for each tunnel with ingress_truncated", async () => {
+      const ingress = [...hostRules(1001), { service: "http_status:404" }];
+      const { output } = await run(tunnelsCollector, {
+        ...withBlogConfig({ ingress }),
+        [`${BASE}/cfd_tunnel/${LEGACY}/configurations`]: envelope({
+          ...legacyConfig,
+          config: { ingress },
+        }),
+      });
+      for (const id of [BLOG, LEGACY]) {
+        expect(node(output, `tunnel:${id}`).props?.ingress_truncated).toBe(true);
+      }
+      // One chunk, tunnels in ID order.
+      expect(output.truncated).toEqual([
+        `tunnel ${LEGACY}: ingress has more than 1000 entry points`,
+        `tunnel ${BLOG}: ingress has more than 1000 entry points`,
+      ]);
+      // The fixture's own configurations truncate nothing.
+      expect((await run(tunnelsCollector, routes)).output.truncated).toEqual([]);
     });
 
     it("R5-06: does not count rules that yield no node, and stops expanding after a catch-all", async () => {

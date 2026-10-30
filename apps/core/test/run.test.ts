@@ -242,6 +242,94 @@ describe("runScan", () => {
     expect(await liveNodes(h, "worker_script")).toEqual(["worker_script:api"]);
   });
 
+  it("0005: a chunk that left resources out makes its class partial without a sweep, and collection goes on", async () => {
+    const h = await harness();
+    const tunnel = (id: string) => ({ type: "tunnel" as const, nativeId: id, name: id });
+    const all = scriptedStub("tunnels", [
+      { nodes: [tunnel("a"), tunnel("b")], edges: [] },
+      { nodes: [tunnel("c")], edges: [] },
+    ]);
+    expect((await h.scan("s1", { collectors: [all] })).summary.status).toBe("complete");
+
+    // Tunnel b is left out of the first chunk, which says so.
+    const reason = "tunnel a: ingress has more than 1000 entry points";
+    const leftOut = scriptedStub("tunnels", [
+      { nodes: [tunnel("a")], edges: [], truncated: [reason] },
+      { nodes: [tunnel("c")], edges: [] },
+    ]);
+    const { summary, steps } = await h.scan("s2", {
+      collectors: [leftOut],
+      now: NOW + 3_600_000,
+    });
+    expect(steps.names()).toEqual([
+      "begin",
+      "plan:tunnels",
+      "collect:tunnels:1",
+      "collect:tunnels:2",
+      "coverage:tunnels",
+      "exposure",
+      "rules",
+      "finish",
+    ]);
+    expect(steps.record("collect:tunnels:1")?.result).toEqual({
+      status: "ok",
+      nodes: 1,
+      edges: 0,
+      changed: 0,
+      signals: 0,
+      insights: 0,
+      truncated: [reason],
+    });
+    expect(summary.classes.tunnels).toEqual({
+      status: "partial",
+      chunks: 2,
+      done: 2,
+      nodes: 2,
+      edges: 0,
+      changed: 0,
+      signals: 0,
+      insights: 0,
+      truncated: 1,
+      detail: `truncated (1): ${reason}`,
+    });
+    expect(summary.status).toBe("partial");
+    expect(
+      await sql(
+        h.stub,
+        "SELECT * FROM coverage WHERE scan_id = ? ORDER BY resource_class DESC",
+        h.id("s2"),
+      ),
+    ).toEqual([
+      {
+        scan_id: h.id("s2"),
+        resource_class: "tunnels",
+        status: "partial",
+        chunks_total: 2,
+        chunks_done: 2,
+        detail: `truncated (1): ${reason}`,
+      },
+      expect.objectContaining({ resource_class: "exposure", status: "complete" }),
+    ]);
+    expect(await liveNodes(h, "tunnel")).toEqual(["tunnel:a", "tunnel:b", "tunnel:c"]);
+    expect((await scanRun(h.id("s2")))?.status).toBe("partial");
+  });
+
+  it("0005: names a failed chunk and bounded truncated reasons in the detail of a partial class", async () => {
+    const h = await harness();
+    const reasons = Array.from({ length: 100 }, (_, i) => `tunnel t${i}: `.padEnd(1024, "x"));
+    const tunnels = scriptedStub("tunnels", [
+      { nodes: [], edges: [], truncated: reasons },
+      serverError("/z"),
+    ]);
+    const { summary } = await h.scan("s1", { collectors: [tunnels] });
+    expect(summary.classes.tunnels).toMatchObject({ status: "partial", done: 1, truncated: 100 });
+    const [failed, leftOut] = summary.classes.tunnels?.detail?.split("; truncated ") ?? [];
+    expect(failed).toMatch(/^CfApiError: 500 /);
+    // 100 reasons of 1,024 characters: the count and the start of the first.
+    expect(leftOut).toMatch(/^\(100\): tunnel t0: x+…$/);
+    expect(`truncated ${leftOut}`).toHaveLength(1001);
+  });
+
   it("does not retry errors a retry cannot fix", async () => {
     const h = await harness();
     // Unknown node type: rejected by the write path inside the graph object.

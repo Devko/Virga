@@ -1,4 +1,4 @@
-import { nodeId, sha256 } from "@virga/graph";
+import { canonicalJson, nodeId, sha256 } from "@virga/graph";
 import {
   chunk,
   GraphBuilder,
@@ -33,13 +33,22 @@ interface CfTunnelConfig {
 }
 
 const TUNNEL_TYPES = ["cfd_tunnel", "warp_connector"];
+const encoder = new TextEncoder();
 /**
  * Rules without a hostname are expanded per hostname, so one tunnel's
  * ingress can describe about a million entry points in 96 KB (review R5-06).
  * Past this many the tunnel is marked `ingress_truncated`.
  */
 export const MAX_HOSTNAMES_PER_TUNNEL = 1000;
-// At most 10,000 tunnel_hostname nodes per chunk.
+/**
+ * The props of one tunnel's `tunnel_hostname` nodes add up to at most this
+ * many bytes. One path near the 64 KB props limit, expanded over 1,000
+ * hostnames, would otherwise make about 64 MB for one tunnel (R5-06).
+ */
+export const MAX_HOSTNAME_BYTES_PER_TUNNEL = 1024 * 1024;
+const OVER_COUNT = `ingress has more than ${MAX_HOSTNAMES_PER_TUNNEL} entry points`;
+const OVER_BYTES = `ingress has more than ${MAX_HOSTNAME_BYTES_PER_TUNNEL} bytes of entry point props`;
+// At most 10,000 tunnel_hostname nodes and 10 MiB of their props per chunk.
 const TUNNELS_PER_CHUNK = 10;
 const TUNNELS_PER_PAGE = 1000;
 
@@ -143,6 +152,7 @@ export const tunnelsCollector: Collector<string> = {
       const id = str(t.id);
       if (id) tunnels.set(id, t);
     }
+    const truncated: string[] = [];
     for (const id of [...ids].sort()) {
       const tunnel = tunnels.get(id);
       // Absent when it was deleted after the plan step.
@@ -150,16 +160,18 @@ export const tunnelsCollector: Collector<string> = {
       const type = str(tunnel.tun_type);
       // Mesh nodes have no ingress configuration.
       const src = type === "warp_connector" ? null : configSource(tunnel);
-      const truncated =
-        src === "cloudflare" && (await collectIngress(ctx, id, nodeId("tunnel", id), g));
+      const leftOut =
+        src === "cloudflare" ? await collectIngress(ctx, id, nodeId("tunnel", id), g) : null;
+      // Entry points that were left out must not resolve findings (decision 0005).
+      if (leftOut) truncated.push(`tunnel ${id}: ${leftOut}`);
       g.node("tunnel", id, displayName(tunnel.name), {
         tunnel_type: type,
         status: str(tunnel.status),
         config_src: src,
-        ingress_truncated: truncated,
+        ingress_truncated: leftOut !== null,
       });
     }
-    return g.output();
+    return { ...g.output(), truncated };
   },
 };
 
@@ -227,18 +239,19 @@ function hostnameIds(tunnelId: string): (hostname: string, path: string) => Prom
  * position. Hostnames that only DNS sends to the tunnel stay unknown to the
  * collector.
  *
- * Returns true when the ingress has more than MAX_HOSTNAMES_PER_TUNNEL entry
- * points; those past the limit are not emitted (review R5-06). The work is
- * linear in the number of rules: a rule without a hostname visits only the
- * hostnames no earlier rule took whole, and a path such a rule took is never
- * expanded again.
+ * Returns why entry points were left out, or null when every one was
+ * emitted. Past MAX_HOSTNAMES_PER_TUNNEL nodes or MAX_HOSTNAME_BYTES_PER_TUNNEL
+ * bytes of their props nothing more is emitted (review R5-06), not even a
+ * smaller node that would still fit. The work is linear in the number of
+ * rules: a rule without a hostname visits only the hostnames no earlier rule
+ * took whole, and a path such a rule took is never expanded again.
  */
 async function collectIngress(
   ctx: CollectorContext,
   id: string,
   tunnelNode: string,
   g: GraphBuilder,
-): Promise<boolean> {
+): Promise<string | null> {
   const path = `/accounts/${ctx.accountId}/cfd_tunnel/${id}/configurations`;
   const result = await unlessGone(ctx.api.get<CfTunnelConfig | null>(path));
   const config = isObject(result?.config) ? result.config : {};
@@ -252,13 +265,12 @@ async function collectIngress(
   const takenPairs = new Set<string>();
   const pair = (hostname: string, path: string) => JSON.stringify([hostname, path]);
   let count = 0;
+  let bytes = 0;
 
-  /** False, and nothing emitted, when the tunnel already has its maximum. */
-  const emit = async (rule: IngressRule, hostname: string): Promise<boolean> => {
-    if (count === MAX_HOSTNAMES_PER_TUNNEL) return false;
-    count++;
-    const nativeId = await nextId(hostname, rule.path);
-    const hostId = g.node("tunnel_hostname", nativeId, displayName(hostname), {
+  /** Why nothing was emitted when the node would pass a limit, else null. */
+  const emit = async (rule: IngressRule, hostname: string): Promise<string | null> => {
+    if (count === MAX_HOSTNAMES_PER_TUNNEL) return OVER_COUNT;
+    const props = {
       hostname,
       path: rule.path,
       service: withoutCredentials(rule.service),
@@ -266,9 +278,16 @@ async function collectIngress(
       tunnel_id: id,
       access_required: rule.accessRequired,
       via_fallthrough: rule.hostname === null,
-    });
+    };
+    // Counted like the graph's write path: UTF-8 bytes of the canonical JSON.
+    const size = encoder.encode(canonicalJson(props)).length;
+    if (bytes + size > MAX_HOSTNAME_BYTES_PER_TUNNEL) return OVER_BYTES;
+    count++;
+    bytes += size;
+    const nativeId = await nextId(hostname, rule.path);
+    const hostId = g.node("tunnel_hostname", nativeId, displayName(hostname), props);
     g.edge("ROUTES_TO", hostId, tunnelNode);
-    return true;
+    return null;
   };
 
   for (const rule of rules) {
@@ -278,18 +297,20 @@ async function collectIngress(
       if (!open.has(rule.hostname) || takenPairs.has(key)) continue;
       takenPairs.add(key);
       if (rule.path === "") open.delete(rule.hostname);
-      if (!(await emit(rule, rule.hostname))) return true;
+      const over = await emit(rule, rule.hostname);
+      if (over) return over;
       continue;
     }
     if (originScheme(rule.service) !== "http_status") {
       for (const hostname of open) {
         if (takenPairs.has(pair(hostname, rule.path))) continue;
-        if (!(await emit(rule, hostname))) return true;
+        const over = await emit(rule, hostname);
+        if (over) return over;
       }
     }
     // A rule without a hostname or path takes every request: none after it applies.
     if (rule.path === "") break;
     takenPaths.add(rule.path);
   }
-  return false;
+  return null;
 }

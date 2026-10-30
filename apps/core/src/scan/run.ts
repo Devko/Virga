@@ -83,6 +83,16 @@ async function current<T>(call: () => Promise<T>): Promise<T | Stale> {
 const MAX_PLAN_BYTES = 512 * 1024;
 const encoder = new TextEncoder();
 
+// Truncated reasons are untrusted text from the account; the coverage row
+// lists a few of them, the count says how many there were.
+const LISTED_REASONS = 20;
+const MAX_TRUNCATED_DETAIL = 1000;
+
+function truncatedDetail(count: number, reasons: readonly string[]): string {
+  const text = `truncated (${count}): ${reasons.join("; ")}`;
+  return text.length > MAX_TRUNCATED_DETAIL ? `${text.slice(0, MAX_TRUNCATED_DETAIL)}…` : text;
+}
+
 function checkPlan(chunks: unknown): unknown[][] {
   if (!Array.isArray(chunks) || !chunks.every(Array.isArray)) {
     throw new TypeError("plan must return an array of chunks");
@@ -101,8 +111,11 @@ function checkPlan(chunks: unknown): unknown[][] {
  * Per class: plan, one step per chunk, then coverage. A class whose chunks all
  * succeed is `complete` and swept; a missing permission is `no_permission`
  * without retries; any other failure is retried by the step config and then
- * recorded as `error` (or `partial` if earlier chunks were written). Then
- * exposure, rules, and the end of the scan in the graph and the index.
+ * recorded as `error` (or `partial` if earlier chunks were written). A chunk
+ * that reports resources it left out (`truncated`) makes the class `partial`
+ * without a sweep, and collection goes on with the next chunk (decision
+ * 0005). Then exposure, rules, and the end of the scan in the graph and the
+ * index.
  *
  * Once the graph refuses a call because the scan is no longer the running
  * scan of the account (marked failed as stale, or taken over by a newer
@@ -171,6 +184,8 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
       );
 
       let failure: Failure | null = plan.status === "ok" ? null : plan;
+      let truncated = 0;
+      const reasons: string[] = [];
       if (plan.status === "ok") {
         result.chunks = plan.chunks.length;
         const singleChunk = plan.chunks.length === 1;
@@ -197,13 +212,24 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
           result.changed += outcome.changed;
           result.signals += outcome.signals;
           result.insights += outcome.insights;
+          // The chunk is written, but resources of the class are missing from
+          // it: the class must not be swept (decision 0005). The next chunk runs.
+          for (const reason of outcome.truncated ?? []) {
+            truncated++;
+            if (reasons.length < LISTED_REASONS) reasons.push(reason);
+          }
         }
       }
 
-      if (failure === null) result.status = "complete";
-      else if (result.done > 0) result.status = "partial";
+      if (failure === null && truncated === 0) result.status = "complete";
+      else if (failure === null || result.done > 0) result.status = "partial";
       else result.status = failure.status;
-      if (failure) result.detail = failure.detail;
+      const details = failure ? [failure.detail] : [];
+      if (truncated > 0) {
+        result.truncated = truncated;
+        details.push(truncatedDetail(truncated, reasons));
+      }
+      if (details.length > 0) result.detail = details.join("; ");
 
       const recorded = await step.do(`coverage:${cls}`, STORE_STEP, () =>
         current(async () => {

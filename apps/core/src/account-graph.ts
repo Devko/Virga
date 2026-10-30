@@ -109,14 +109,18 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     return applyBatch(this.db, prepared);
   }
 
-  /** Writes one collector chunk: nodes and edges, signals, and (single chunk only) insights. */
+  /**
+   * Writes one collector chunk: nodes and edges, signals, and (single chunk
+   * only) insights. Returns the chunk's reasons for resources it left out,
+   * checked, so the scan can record the class `partial` (decision 0005).
+   */
   async writeChunk(
     scanId: string,
     resourceClass: string,
     output: CollectorOutput,
     options: { singleChunk: boolean },
   ): Promise<ChunkCounters> {
-    const { signals, insights } = checkOutput(output, options.singleChunk);
+    const { signals, insights, truncated } = checkOutput(output, options.singleChunk);
     const batch = await prepareBatch({
       scanId,
       resourceClass,
@@ -127,7 +131,8 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     const written = applyBatch(this.db, batch);
     if (signals.length > 0) setSignals(this.db, signals, batch.at);
     if (insights) replaceInsights(this.db, insights, batch.at);
-    return { ...written, signals: signals.length, insights: insights?.length ?? 0 };
+    const counters = { ...written, signals: signals.length, insights: insights?.length ?? 0 };
+    return truncated.length > 0 ? { ...counters, truncated } : counters;
   }
 
   recordCoverage(
