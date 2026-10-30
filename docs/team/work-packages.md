@@ -187,6 +187,8 @@ From the [round 10 verification](../reviews/2026-10-30-verification-round-10.md)
 | `hardening-11` | Opus | Broker: a delete or mark after a recheck matches the token it checked, not only its ID; identity: lone surrogates refused on both sides (`isWellFormed`) | `apps/broker/**`, `apps/web/src/auth.ts` and its tests, `apps/core/src/audit.ts` and its tests | Tests per item |
 | `review-11` | Opus | Read-only review of the round 11 changes | none (report only) | A report per finding: fixed or not, with evidence |
 
+Round 11 status (2026-10-30): all three packages are merged, and the [round 11 verification](../reviews/2026-10-30-verification-round-11.md) confirms R10-01 to R10-04 and the round 10 hardening items as fixed, and the committed-`node_modules` lead as partly fixed (the guide's Updates steps). It found R11-01 and R11-02 (low: a lone CR, NEL, LS or PS that hides a line from the workflow guard; a Yarn PnP manifest written by a build that retargets `@virga/rules` past the R10-04 record), and hardening for the broker's recheck after a removal.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.

@@ -2,7 +2,17 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the round 9 findings fixed: R9-01 to R9-06, the leads L-1 and L-2, the hardening items H-1 to H-4 and the other round 9 hardening items that the round 10 packages claim to close? (2) review of every round 10 change at commit e33ffca: `broker-2`, `vulns-2`, `supply-chain-4`, `web-audit-2`, `core-6`, `deploy-4` and `scanner-io-2`, each diffed against afeef0c
-- Status: not yet fixed; R10-01 to R10-04 are open
+- Status: round 11 of the [work packages](../team/work-packages.md) fixed R10-01 to R10-04 and the hardening items; the [round 11 verification](2026-10-30-verification-round-11.md) confirms them, and the committed-`node_modules` lead as partly fixed
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R10-01 | `supply-chain-5` | 8ccf3c1 | `scripts/test/check-release-age.test.ts` (R10-01: the review's `.pnpmfile.cjs` with an `updateConfig` hook; pnpmfiles and `.pnp.cjs` in any spelling) |
+| R10-02 | `supply-chain-5` | 1bf346c | `check-release-age.test.ts` (R10-02: `apps/x/package.yaml` with `pnpm.executionEnv`; `package.yaml` and `package.json5` anywhere) |
+| R10-03 | `supply-chain-5` | 51114a1 | `scripts/test/workflow-guard.ts`, used by `check-release-age.test.ts` and `guide.test.ts` (R10-03: the 5-space job and the escaped `always()`) |
+| R10-04 | `deploy-5` | 3d19740, 319c1d8 | `scripts/test/workspace.test.ts`, `deploy.test.ts`, `run.test.ts` (R10-04: `paths` in `apps/core/tsconfig.json` or `tsconfig.base.json`, `exports` in `packages/rules/package.json`, a file changed before a Wrangler call) |
+| Broker, same token ID | `hardening-11` | 9aebbe1 | `apps/broker/test/recheck.test.ts`, `vault.test.ts` ("R10 hardening: broker same token ID") |
+| Identity check | `hardening-11` | 809590e | `apps/web/test/identity.test.ts`, `apps/core/test/audit.test.ts` (lone surrogates) |
+| `.npmrc` messages, committed `node_modules` | `supply-chain-5` | 261409d, a523e4f | `check-release-age.test.ts` (".npmrc messages: …", "Fresh checkout: …") |
 
 ## Summary
 
