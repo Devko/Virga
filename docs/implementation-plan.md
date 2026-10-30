@@ -180,12 +180,15 @@ packages/
   cf-api/        typed read client, pagination, rate budget client
   collectors/    one module per resource class: fetch -> normalize -> batch
   exposure/      exposure evaluator
+  vulns/         advisory matching and rematch (phase 2)
+  scanner-io/    scanner output readers, CycloneDX SBOMs (phase 2)
   zt/            Zero Trust evaluator (phase 3)
   rules/         rule compiler, fixture runner, findings lifecycle
   ocsf/          OCSF mapping
   shared/        types, crypto helpers, untrusted-string marking
 rules/           CF-xxx/rule.sql, fixtures/, fix/
-test-range/      Terraform for the seeded test account
+infra/
+  test-range/    Terraform for the seeded test account (cases.yaml lists the cases per rule)
 spikes/          throwaway code for phase 0 spikes
 scripts/         deploy and setup scripts
 docs/
