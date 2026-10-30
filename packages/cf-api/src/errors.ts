@@ -16,7 +16,11 @@ export class CfApiError extends Error {
   }
 }
 
-/** The token lacks permission. Collectors let it propagate; the scan records `no_permission`. */
+/**
+ * The token lacks permission, or the broker has no usable token: none is
+ * stored, or the stored one failed its recheck and was deleted (TM-04).
+ * Collectors let it propagate; the scan records `no_permission`.
+ */
 export class NoPermissionError extends CfApiError {
   constructor(status: number, path: string, errors: CfMessage[]) {
     super(status, path, errors);

@@ -28,6 +28,10 @@ export const MAX_WAIT_MS = 5_000;
 export const BUDGET_EXHAUSTED_CODE = 99002;
 export const NO_TOKEN_CODE = 99003;
 export const BROKER_ERROR_CODE = 99004;
+/** The stored token failed its recheck before use and was deleted (TM-04). */
+export const RECHECK_FAILED_CODE = 99005;
+/** The recheck before use could not run: the token is kept, the call is not sent (TM-04). */
+export const RECHECK_UNAVAILABLE_CODE = 99006;
 
 export const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 
