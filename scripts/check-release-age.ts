@@ -1,4 +1,4 @@
-// Usage: node scripts/check-release-age.ts
+// Usage: node scripts/check-release-age.ts [--fresh-checkout]
 //
 // Checks that every package version in pnpm-lock.yaml (R4-07), and the pnpm
 // version package.json pins in packageManager and devEngines.packageManager
@@ -15,8 +15,11 @@
 // so only the root may name the package manager (R8-02). The root .npmrc is
 // read as strictly, since lockfile-dir makes pnpm install from a lockfile the
 // check never dated, and no directory below the root may hold one (R9-01,
-// R9-02). Needs network access to registry.npmjs.org and nothing else; CI runs
-// it before anything is installed.
+// R9-02). No directory may hold a pnpmfile, whose hooks pnpm runs on every
+// command (R10-01), a .pnp.cjs, or a package.yaml or package.json5 (R10-02).
+// With --fresh-checkout, as in CI before anything is installed and on a fresh
+// clone, no directory may hold node_modules either. Needs network access to
+// registry.npmjs.org and nothing else.
 import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -660,9 +663,6 @@ const NPMRC_SETTINGS: ReadonlyMap<string, string> = new Map([
 const npmrcError = (line: number, problem: string) =>
   new NpmrcError(`.npmrc line ${line}: ${problem}`);
 
-/** A key shaped like a setting name, which the check prints; any other key could be a credential. */
-const SETTING_NAME = /^@?[a-z0-9][a-z0-9._-]{0,63}(?::[a-z0-9._-]{1,63})?$/;
-
 const LOCKFILE_SETTINGS = new Set([
   "lockfile",
   "lockfile-dir",
@@ -686,7 +686,9 @@ const CREDENTIAL_SETTINGS =
 
 /**
  * Why the check refuses a key of .npmrc. Never names a value, and names the
- * key only if it is shaped like a setting name.
+ * key only from the lists above, since any other key could be a secret: for a
+ * scoped registry or a mirror channel, only the setting (`@<scope>:registry`,
+ * `node-mirror:<channel>`).
  */
 function npmrcKeyProblem(key: string): string {
   const accepted = [...NPMRC_SETTINGS].map(([name, value]) => `${name}=${value}`).join(" and ");
@@ -695,23 +697,22 @@ function npmrcKeyProblem(key: string): string {
   if (lower.startsWith("//") || CREDENTIAL_SETTINGS.test(lower)) {
     return `a registry credential, token helper or client certificate (the check prints neither key nor value): the repository holds no credentials, and pnpm runs a token helper as a command; ${only}`;
   }
-  if (!SETTING_NAME.test(key)) {
-    return `the key on this line (not printed) is not a setting the check accepts; ${only}`;
-  }
-  const name = key.replace(/:.*$/, "");
   if (LOCKFILE_SETTINGS.has(key)) {
     return `${key} makes pnpm install from a lockfile other than the root pnpm-lock.yaml the check dates, or without one; ${only}`;
   }
-  if (RUNTIME_SETTINGS.has(name)) {
-    return `${key} makes pnpm download and run a Node.js runtime the check does not date; ${only}`;
+  const [name = "", channel] = key.split(":");
+  if (RUNTIME_SETTINGS.has(name) && (channel === undefined || name === "node-mirror")) {
+    const shown = channel === undefined ? name : `${name}:<channel>`;
+    return `${shown} makes pnpm download and run a Node.js runtime the check does not date; ${only}`;
   }
-  if (FETCH_SETTINGS.has(key) || key.endsWith(":registry")) {
-    return `${key} changes where or how pnpm fetches packages, and the check dates versions on registry.npmjs.org; ${only}`;
+  if (FETCH_SETTINGS.has(key) || /^@[^:]+:registry$/.test(key)) {
+    const shown = key.startsWith("@") ? "@<scope>:registry" : key;
+    return `${shown} changes where or how pnpm fetches packages, and the check dates versions on registry.npmjs.org; ${only}`;
   }
   if (CODE_SETTINGS.has(key)) {
     return `${key} makes pnpm run code the check does not read: a pnpmfile, a shell or Node.js options for scripts; ${only}`;
   }
-  return `${key} is not a setting the check accepts; a setting can make pnpm install from another lockfile, fetch from another registry or run code the check does not date; ${only}`;
+  return `an unknown setting, whose key the check does not print; a setting can make pnpm install from another lockfile, fetch from another registry or run code the check does not date; ${only}`;
 }
 
 /**
@@ -965,13 +966,17 @@ function checkNestedManifest(path: string, shown: string): void {
  * pnpm takes the nearest pnpm-workspace.yaml in the same way, and reads the
  * .npmrc of that directory too (R9-02). So only the root package.json may name
  * the package manager, only the root may hold pnpm-workspace.yaml and .npmrc,
- * and no directory may hold .corepack.env. Walks the checkout without
- * node_modules and .git, and refuses symbolic links rather than follow them,
+ * and no directory may hold .corepack.env. pnpm loads .pnpmfile.cjs on every
+ * command and .pnp.cjs into every script it runs, so no directory may hold
+ * either (R10-01), and it reads package.yaml and package.json5 as manifests,
+ * which the project does not use (R10-02). Walks the checkout without
+ * node_modules and .git; with freshCheckout, as before any install in CI, it
+ * refuses node_modules instead. Refuses symbolic links rather than follow them,
  * since corepack and pnpm would. Names are compared as a case-insensitive file
  * system may open them (L-1), and at the root the files main reads must have
  * their exact names.
  */
-export function checkCheckout(root: string): void {
+export function checkCheckout(root: string, options: { freshCheckout?: boolean } = {}): void {
   const top = resolve(root);
   const shownPath = (path: string) => relative(top, path).split(sep).join("/") || ".";
   const walk = (dir: string) => {
@@ -983,10 +988,16 @@ export function checkCheckout(root: string): void {
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
-      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      if (entry.name === ".git") continue;
       const path = join(dir, entry.name);
       const shown = shownPath(path);
       const name = foldedName(entry.name);
+      if (name === "node_modules" && options.freshCheckout) {
+        throw new CheckoutError(
+          `${shown}: a fresh checkout holds no node_modules (--fresh-checkout); pnpm could take committed package files, with their .modules.yaml and lock.yaml, as installed, and the check never dated them`,
+        );
+      }
+      if (entry.name === "node_modules") continue;
       const atRoot = dir === top;
       if (entry.isSymbolicLink()) {
         throw new CheckoutError(
@@ -996,6 +1007,23 @@ export function checkCheckout(root: string): void {
       if (name === ".corepack.env") {
         throw new CheckoutError(
           `${shown}: corepack loads .corepack.env files from the directories it walks, and their variables change which pnpm it runs and where it fetches it from; the project uses none`,
+        );
+      }
+      // R10-01: pnpm requires <root>/.pnpmfile.cjs, so Node also opens
+      // .pnpmfile.cjs.js, .json and .node, or a .pnpmfile.cjs directory.
+      if (name.startsWith(".pnpmfile")) {
+        throw new CheckoutError(
+          `${shown}: pnpm loads .pnpmfile.cjs on every command and runs its hooks, whose updateConfig can set lockfile-dir or any other setting the check refuses (R10-01); the project uses no pnpmfile, so the check refuses every name that starts with .pnpmfile`,
+        );
+      }
+      if (name === "package.yaml" || name === "package.json5") {
+        throw new CheckoutError(
+          `${shown}: pnpm reads package.yaml and package.json5 as project manifests, and the check reads package.json only; their pnpm field can make pnpm download and run a Node.js runtime (executionEnv) or change what it installs (R10-02), and the project uses neither`,
+        );
+      }
+      if (name.startsWith(".pnp.")) {
+        throw new CheckoutError(
+          `${shown}: pnpm run and pnpm exec load .pnp.cjs into every script they run (NODE_OPTIONS=--require), from the workspace root or the project, whatever node-linker says; the project does not use Plug'n'Play, so the check refuses every name that starts with .pnp.`,
         );
       }
       if (atRoot && ROOT_FILES.has(name) && entry.name !== name) {
@@ -1427,6 +1455,12 @@ export interface MainOptions extends CheckOptions {
   lockfile?: string;
   /** By default package.json under root. */
   packageJson?: string;
+  /**
+   * Refuse any node_modules in the checkout, which a fresh clone or a CI
+   * checkout before the install does not have; by default the walk leaves
+   * node_modules out.
+   */
+  freshCheckout?: boolean;
   log?: (line: string) => void;
   error?: (line: string) => void;
 }
@@ -1473,8 +1507,10 @@ export async function main(options: MainOptions = {}): Promise<number> {
     // lockfile or a pnpmfile are refused before anything is fetched.
     parseWorkspace(readText(root, "pnpm-workspace.yaml"));
     // R8-02, R9-02: corepack and pnpm read these from the directory a command
-    // runs in. The walk also refuses a root .npmrc that is a symbolic link.
-    checkCheckout(root);
+    // runs in. The walk also refuses a root .npmrc that is a symbolic link,
+    // a pnpmfile (R10-01), package.yaml (R10-02) and, on a fresh checkout,
+    // node_modules.
+    checkCheckout(root, { freshCheckout: options.freshCheckout === true });
     // R9-01: settings such as lockfile-dir make pnpm install from a lockfile
     // the check never dated.
     const npmrc = readOptional(root, ".npmrc");
@@ -1512,24 +1548,36 @@ export async function main(options: MainOptions = {}): Promise<number> {
   return 0;
 }
 
-const USAGE = "usage: node scripts/check-release-age.ts";
+const USAGE = "usage: node scripts/check-release-age.ts [--fresh-checkout]";
 
-async function cli(): Promise<number> {
+/**
+ * The command: main with the options of `args`. --fresh-checkout refuses any
+ * node_modules in the checkout, for CI and a fresh clone, where nothing has
+ * been installed yet.
+ */
+export async function cli(args: readonly string[], options: MainOptions = {}): Promise<number> {
+  const log = options.log ?? console.log;
+  const error = options.error ?? console.error;
+  let values: { help?: boolean; "fresh-checkout"?: boolean };
   try {
-    if (parseArgs({ options: { help: { type: "boolean" } } }).values.help) {
-      console.log(USAGE);
-      return 0;
-    }
+    ({ values } = parseArgs({
+      args: [...args],
+      options: { help: { type: "boolean" }, "fresh-checkout": { type: "boolean" } },
+    }));
   } catch {
-    console.error(USAGE);
+    error(USAGE);
     return 2;
   }
+  if (values.help) {
+    log(USAGE);
+    return 0;
+  }
   try {
-    return await main();
+    return await main({ ...options, freshCheckout: values["fresh-checkout"] === true });
   } catch (cause) {
-    console.error(`error: ${cause instanceof Error ? (cause.stack ?? cause.message) : cause}`);
+    error(`error: ${cause instanceof Error ? (cause.stack ?? cause.message) : cause}`);
     return 1;
   }
 }
 
-if (import.meta.main) process.exitCode = await cli();
+if (import.meta.main) process.exitCode = await cli(process.argv.slice(2));

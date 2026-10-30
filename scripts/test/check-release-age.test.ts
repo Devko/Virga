@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   type CheckOptions,
   checkReleaseAge,
+  cli,
   EXCEPTIONS,
   type Exception,
   LockfileError,
@@ -17,6 +18,19 @@ import {
   parseWorkspace,
 } from "../check-release-age.ts";
 import { put, REPO_ROOT } from "./helpers.ts";
+import {
+  actions,
+  gated,
+  gateProblems,
+  type Job,
+  needs,
+  nodeProblems,
+  parseWorkflow,
+  plain,
+  runs,
+  stringOf,
+  ungated,
+} from "./workflow-guard.ts";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const DAY = 86_400_000;
@@ -1744,6 +1758,7 @@ describe("R9-01: the root .npmrc is read strictly", () => {
     const CODE = "makes pnpm run code the check does not read";
     const CREDENTIAL =
       "a registry credential, token helper or client certificate \\(the check prints neither key nor value\\)";
+    const UNKNOWN = "an unknown setting, whose key the check does not print";
     const cases: [string, string][] = [
       ["lockfile-dir=other", `lockfile-dir ${LOCKFILE}`],
       ["git-branch-lockfile=true", `git-branch-lockfile ${LOCKFILE}`],
@@ -1755,24 +1770,21 @@ describe("R9-01: the root .npmrc is read strictly", () => {
       ["lockfile=false", `lockfile ${LOCKFILE}`],
       ["use-node-version=23.0.0", `use-node-version ${RUNTIME}`],
       ["node-version=23.0.0", `node-version ${RUNTIME}`],
-      ["node-mirror:release=http://127.0.0.1:8080/", `node-mirror:release ${RUNTIME}`],
+      ["node-mirror:release=http://127.0.0.1:8080/", `node-mirror:<channel> ${RUNTIME}`],
       ["registry=https://registry.invalid/", `registry ${FETCH}`],
-      ["@virga:registry=https://registry.invalid/", `@virga:registry ${FETCH}`],
+      ["@virga:registry=https://registry.invalid/", `@<scope>:registry ${FETCH}`],
       ["strict-ssl=false", `strict-ssl ${FETCH}`],
       ["https-proxy=http://proxy.invalid/", `https-proxy ${FETCH}`],
       [`//registry.npmjs.org/:_authToken=${SECRET}`, CREDENTIAL],
       [`_authToken=${SECRET}`, CREDENTIAL],
       [`_auth=${SECRET}`, CREDENTIAL],
       ["//registry.npmjs.org/:tokenHelper=/tmp/helper", CREDENTIAL],
-      [
-        `${SECRET}=true`,
-        `the key on this line \\(not printed\\) is not a setting the check accepts`,
-      ],
+      [`${SECRET}=true`, UNKNOWN],
       ["pnpmfile=.pnpmfile.cjs", `pnpmfile ${CODE}`],
       ["global-pnpmfile=/tmp/x.cjs", `global-pnpmfile ${CODE}`],
       ["node-options=--require=./x.cjs", `node-options ${CODE}`],
       ["script-shell=/tmp/sh", `script-shell ${CODE}`],
-      ["ignore-scripts=false", "ignore-scripts is not a setting the check accepts"],
+      ["ignore-scripts=false", UNKNOWN],
     ];
     for (const [line, message] of cases) {
       const err = await refuses(`${NPMRC}${line}\n`, 3, new RegExp(`${message}.*${ONLY}`));
@@ -1795,8 +1807,8 @@ describe("R9-01: the root .npmrc is read strictly", () => {
       ["lockfile-dir\n", 1, "expected one key=value per line"],
       ["[registry]\nsave-exact=true\n", 1, "expected one key=value per line"],
       ["save-exact=true\nsave-exact=true\n", 2, "save-exact appears twice"],
-      ["save-exact[]=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
-      ["SAVE-EXACT=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
+      ["save-exact[]=true\n", 1, "an unknown setting, whose key the check does not print"],
+      ["SAVE-EXACT=true\n", 1, "an unknown setting, whose key the check does not print"],
       ["save-exact=true\rlockfile-dir=other\n", 2, "lockfile-dir makes pnpm install"],
       ["\u00A0# not a comment line\n", 1, "expected one key=value per line"],
     ];
@@ -1834,6 +1846,53 @@ describe("R9-02: only the root holds .npmrc", () => {
       checkout({ "apps/web/.npmrc": "" }),
       /^error: apps\/web\/\.npmrc: only the root may hold \.npmrc/,
     );
+  });
+});
+
+describe(".npmrc messages (round 10 hardening): a refused key is printed only from the known lists", () => {
+  /** A lowercase hex secret, shaped like a setting name. */
+  const HEX = "0123456789abcdef0123456789abcdef01234567";
+  const run = (line: string) => runMain(checkout({ ".npmrc": `save-exact=true\n${line}\n` }));
+
+  it(".npmrc messages: says an unknown setting, with its line number, for a key on no list", async () => {
+    for (const line of [
+      `${HEX}=true`,
+      `node-mirror-${HEX}=x`,
+      "ignore-scripts=false",
+      "lockfile-dirx=other",
+      "npm_SYNTHETICr10token=true",
+    ]) {
+      const { code, out, err } = await run(line);
+      expect({ code, out, err }, line).toEqual({
+        code: 1,
+        out: [],
+        err: [
+          expect.stringMatching(
+            /^error: \.npmrc line 2: an unknown setting, whose key the check does not print; /,
+          ),
+        ],
+      });
+      expect(err.join("\n")).not.toContain(line.slice(0, line.indexOf("=")));
+    }
+  });
+
+  it(".npmrc messages: prints a key on a list, and for a scope or channel only the setting", async () => {
+    const cases: [string, RegExp][] = [
+      ["lockfile-dir=other", /^error: \.npmrc line 2: lockfile-dir makes pnpm install/],
+      [
+        `@${HEX}:registry=https://registry.invalid/`,
+        /^error: \.npmrc line 2: @<scope>:registry changes where or how pnpm fetches packages/,
+      ],
+      [
+        `node-mirror:${HEX}=http://127.0.0.1:8080/`,
+        /^error: \.npmrc line 2: node-mirror:<channel> makes pnpm download and run a Node\.js runtime/,
+      ],
+    ];
+    for (const [line, message] of cases) {
+      const { code, err } = await run(line);
+      expect({ code, err }, line).toEqual({ code: 1, err: [expect.stringMatching(message)] });
+      expect(err.join("\n")).not.toContain(HEX);
+    }
   });
 });
 
@@ -1886,6 +1945,179 @@ describe("L-1: names a case-insensitive file system opens as the files the check
   });
 });
 
+describe("R10-01: no pnpmfile, which pnpm loads on every command", () => {
+  /** The review's hook: pnpm then installs from other/pnpm-lock.yaml. */
+  const PNPMFILE =
+    "module.exports = { hooks: { updateConfig: (config) => ({ ...config, lockfileDir: 'other' }) } };\n";
+  const PNPMFILE_LOADED = "pnpm loads \\.pnpmfile\\.cjs on every command and runs its hooks";
+
+  it("R10-01: refuses a root .pnpmfile.cjs whose updateConfig hook sets lockfileDir to other", async () => {
+    // The review's case: the root lockfile locks yaml 2.8.0, 400 days old, and
+    // other/pnpm-lock.yaml locks 2.9.1, one day old, which pnpm would install.
+    const root = checkout({
+      "package.json": manifest({ packageManager: "pnpm@10.28.0", dependencies: { yaml: "2.9.1" } }),
+      "pnpm-lock.yaml": lockfile([registryEntry("yaml@2.8.0")]),
+      ".pnpmfile.cjs": PNPMFILE,
+      "other/pnpm-lock.yaml": lockfile([registryEntry("yaml@2.9.1")]),
+    });
+    const { fetch } = mockFetch({ ...PNPM_REGISTRY, yaml: { "2.8.0": ago(400), "2.9.1": ago(1) } });
+    expect(await runMain(root, { fetch })).toEqual({
+      code: 1,
+      out: [],
+      err: [expect.stringMatching(new RegExp(`^error: \\.pnpmfile\\.cjs: ${PNPMFILE_LOADED}`))],
+    });
+  });
+
+  it("R10-01: refuses .pnpmfile.cjs and .pnpmfile.mjs anywhere, however spelled", async () => {
+    for (const path of [
+      ".pnpmfile.mjs",
+      "apps/web/.pnpmfile.cjs",
+      "apps/web/.pnpmfile.mjs",
+      "packages/graph/.pnpmfile.cjs",
+      ".PNPMFILE.CJS",
+      "apps/web/.pnpm\u200Bfile.cjs",
+      "apps/web/.pnpmfile.\uFF43js",
+    ]) {
+      await refusedBy(
+        checkout({ [path]: PNPMFILE }),
+        new RegExp(`^error: ${path.replaceAll(".", "\\.")}: ${PNPMFILE_LOADED}`),
+      );
+    }
+  });
+
+  it("R10-01: refuses the names Node's require tries for .pnpmfile.cjs, and .pnp.cjs", async () => {
+    // pnpm requires <root>/.pnpmfile.cjs, so Node also opens .pnpmfile.cjs.js,
+    // .json and .node, or a .pnpmfile.cjs directory.
+    const required: [string, string][] = [
+      [".pnpmfile.cjs.js", ".pnpmfile.cjs.js"],
+      [".pnpmfile.cjs.json", ".pnpmfile.cjs.json"],
+      [".pnpmfile.cjs.node", ".pnpmfile.cjs.node"],
+      [".pnpmfile.cjs/index.js", ".pnpmfile.cjs"],
+    ];
+    for (const [path, shown] of required) {
+      await refusedBy(
+        checkout({ [path]: PNPMFILE }),
+        new RegExp(`^error: ${shown.replaceAll(".", "\\.")}: ${PNPMFILE_LOADED}`),
+      );
+    }
+    // pnpm run and pnpm exec require a .pnp.cjs of the workspace root or the
+    // project into every script, whatever node-linker says.
+    const pnp: [string, string][] = [
+      [".pnp.cjs", ".pnp.cjs"],
+      ["apps/web/.pnp.cjs", "apps/web/.pnp.cjs"],
+      [".pnp.cjs/index.js", ".pnp.cjs"],
+      ["apps/web/.PNP.CJS", "apps/web/.PNP.CJS"],
+    ];
+    for (const [path, shown] of pnp) {
+      await refusedBy(
+        checkout({ [path]: "console.log('loaded');\n" }),
+        new RegExp(
+          `^error: ${shown.replaceAll(".", "\\.")}: pnpm run and pnpm exec load \\.pnp\\.cjs into every script they run`,
+        ),
+      );
+    }
+  });
+});
+
+describe("R10-02: no package.yaml or package.json5", () => {
+  const MANIFEST =
+    "pnpm reads package\\.yaml and package\\.json5 as project manifests, and the check reads package\\.json only";
+
+  it("R10-02: refuses apps/x/package.yaml with pnpm.executionEnv.nodeVersion 23.0.0", async () => {
+    // The review's case: apps/* matches apps/x, and pnpm -r run build would
+    // fetch Node.js 23.0.0 and run the build with it.
+    await refusedBy(
+      checkout({
+        "apps/x/package.yaml": [
+          "name: x",
+          "scripts:",
+          "  build: node -v",
+          "pnpm:",
+          "  executionEnv:",
+          "    nodeVersion: 23.0.0",
+          "",
+        ].join("\n"),
+      }),
+      new RegExp(`^error: apps/x/package\\.yaml: ${MANIFEST}`),
+    );
+  });
+
+  it("R10-02: refuses package.yaml and package.json5 anywhere, however spelled", async () => {
+    for (const path of [
+      "package.yaml",
+      "package.json5",
+      "apps/web/package.json5",
+      "packages/graph/PACKAGE.YAML",
+      "apps/x/pac\u212Aage.yaml",
+    ]) {
+      await refusedBy(
+        checkout({ [path]: "{name: 'x'}\n" }),
+        new RegExp(`^error: ${path.replaceAll(".", "\\.")}: ${MANIFEST}`),
+      );
+    }
+  });
+});
+
+describe("Fresh checkout (round 10 lead): --fresh-checkout refuses node_modules", () => {
+  const FRESH =
+    "a fresh checkout holds no node_modules \\(--fresh-checkout\\); pnpm could take committed package files";
+  /** cli with the arguments given, on a checkout, with pnpm 10.28.0 in the registry. */
+  async function runCli(args: string[], root: string) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const { fetch } = mockFetch(PNPM_REGISTRY);
+    const code = await cli(args, {
+      root,
+      fetch,
+      now: NOW,
+      exceptions: [],
+      retryDelayMs: 0,
+      log: (line) => out.push(line),
+      error: (line) => err.push(line),
+    });
+    return { code, out, err };
+  }
+
+  it("Fresh checkout: refuses a committed node_modules anywhere, however spelled", async () => {
+    // The lead: pnpm could take a committed .modules.yaml and .pnpm/lock.yaml
+    // as an install that is up to date, and keep the committed package files.
+    const cases: [string, string][] = [
+      ["node_modules/.modules.yaml", "node_modules"],
+      ["node_modules/.pnpm/lock.yaml", "node_modules"],
+      ["apps/web/node_modules/yaml/package.json", "apps/web/node_modules"],
+      ["packages/graph/NODE_MODULES/x.js", "packages/graph/NODE_MODULES"],
+    ];
+    for (const [path, shown] of cases) {
+      const root = checkout({ [path]: "{}\n" });
+      expect(await runCli(["--fresh-checkout"], root), path).toEqual({
+        code: 1,
+        out: [],
+        err: [expect.stringMatching(new RegExp(`^error: ${shown}: ${FRESH}`))],
+      });
+      // Without the flag the walk leaves node_modules out, as on a workstation after pnpm install.
+      expect(await runCli([], root), path).toEqual(PASSES);
+    }
+    expect(await runCli(["--fresh-checkout"], checkout())).toEqual(PASSES);
+  });
+
+  it("Fresh checkout: the command line takes --fresh-checkout and nothing else", async () => {
+    const root = checkout({ "node_modules/.modules.yaml": "{}\n" });
+    const USAGE = "usage: node scripts/check-release-age.ts [--fresh-checkout]";
+    expect(await runCli(["--help"], root)).toEqual({ code: 0, out: [USAGE], err: [] });
+    for (const args of [["--fresh"], ["--fresh-checkout=yes"], ["node_modules"]]) {
+      expect(await runCli(args, root), args.join(" ")).toEqual({ code: 2, out: [], err: [USAGE] });
+    }
+  });
+
+  it("Fresh checkout: CI runs the check with --fresh-checkout, before anything is installed", () => {
+    const ci = parseWorkflow(
+      readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8"),
+    );
+    const check = ci.jobs.get("release-age");
+    expect(check && runs(check)).toEqual(["node scripts/check-release-age.ts --fresh-checkout"]);
+  });
+});
+
 describe("EXCEPTIONS", () => {
   it("names exact versions and says why", () => {
     for (const exception of EXCEPTIONS) {
@@ -1904,163 +2136,13 @@ describe("EXCEPTIONS", () => {
 describe("CI workflow", () => {
   const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
   const workflow = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
-
-  /**
-   * The text of each job under `jobs:`, by job name, and the lines under
-   * `jobs:` that belong to no job the guard can read, such as a quoted job name.
-   */
-  function readJobs(text: string): { jobs: Map<string, string>; unread: string[] } {
-    const jobs = new Map<string, string>();
-    const unread: string[] = [];
-    const lines = text.split(/\r\n|\r|\n/);
-    const start = lines.indexOf("jobs:");
-    if (start < 0) return { jobs, unread: ["(no jobs: line)"] };
-    let name: string | undefined;
-    for (const line of lines.slice(start + 1)) {
-      if (/^ *(?:#.*)?$/.test(line)) continue;
-      // The next top-level key ends jobs:.
-      if (/^[\w-]+:/.test(line)) break;
-      const header = /^ {2}([\w-]+):$/.exec(line);
-      if (header?.[1] !== undefined) {
-        name = header[1];
-        jobs.set(name, "");
-      } else if (name !== undefined && line.startsWith("    ")) {
-        jobs.set(name, `${jobs.get(name)}${line}\n`);
-      } else {
-        // The lines below belong to what the guard could not read, not to the job above.
-        name = undefined;
-        unread.push(line);
-      }
-    }
-    return { jobs, unread };
-  }
-
-  /** The text of each job under `jobs:`, by job name. */
-  const jobs = (text: string) => readJobs(text).jobs;
-
-  /** The jobs a job needs, from `needs: a` or `needs: [a, b]`. */
-  function needs(job: string): string[] {
-    const [, one, list] = /^ {4}needs: (?:([\w-]+)|\[([^\]]*)\])$/m.exec(job) ?? [];
-    if (one !== undefined) return [one];
-    return list === undefined ? [] : list.split(",").map((name) => name.trim());
-  }
-
-  /**
-   * A job that installs packages or runs a package manager: pnpm/action-setup
-   * (which installs pnpm itself), a setup-node package cache, any pnpm, npm,
-   * npx, yarn or corepack command, or a reusable workflow (job-level `uses:`),
-   * whose steps the guard cannot see.
-   */
-  const INSTALLS =
-    /uses: pnpm\/action-setup@|^ {4}uses:|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
-
-  /** Jobs other than release-age that install without waiting for it. */
-  const ungated = (text: string) =>
-    [...jobs(text)]
-      .filter(([name, job]) => name !== "release-age" && INSTALLS.test(job))
-      .filter(([, job]) => !needs(job).includes("release-age"))
-      .map(([name]) => name);
-
-  /** The keys the release-age job, and each of its steps, may have (H-1). */
-  const CHECK_JOB_KEYS = new Set(["name", "runs-on", "timeout-minutes", "steps"]);
-  const CHECK_STEP_KEYS = new Set(["name", "uses", "with", "run"]);
-
-  /**
-   * What could let the check in the release-age job fail without failing the
-   * job, or change what it runs (H-1): continue-on-error on the job or a
-   * step, and any key the guard does not know, such as shell,
-   * working-directory, env, if, defaults or container. Keys are read at
-   * indent 4 (the job) and, under steps:, at indent 6 after "- " or at indent 8.
-   */
-  function checkJobProblems(check: string): string[] {
-    const problems: string[] = [];
-    let steps = false;
-    for (const line of check.split("\n")) {
-      const jobKey = /^ {4}(\S[^:]*):/.exec(line)?.[1];
-      if (/^ {4}\S/.test(line)) steps = jobKey === "steps";
-      const stepKey = steps ? /^ {6}- (\S[^:]*):|^ {8}(\S[^:]*):/.exec(line) : null;
-      const key = jobKey ?? stepKey?.[1] ?? stepKey?.[2];
-      if (key === undefined) continue;
-      if (key === "continue-on-error") {
-        problems.push(
-          "release-age has continue-on-error, so the jobs that need it run when the check fails",
-        );
-      } else if (!(jobKey === undefined ? CHECK_STEP_KEYS : CHECK_JOB_KEYS).has(key)) {
-        problems.push(
-          `release-age has ${JSON.stringify(key)}, a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`,
-        );
-      }
-    }
-    return problems;
-  }
-
-  /**
-   * GitHub's status check functions. A job-level if: with one of them drops
-   * the implicit success(), so the job runs when a job it needs failed (H-1).
-   * Function names are not case-sensitive.
-   */
-  const STATUS_FUNCTION = /\b(?:always|failure|cancelled)\s*\(/i;
-
-  /** A job's own keys and values, without its steps, whose if: runs only in a started job. */
-  const jobLevel = (job: string) => job.replace(/^ {4}steps:\n(?: {5,}.*\n)*/m, "");
-
-  /**
-   * Lines with a YAML anchor, alias or merge key, which GitHub resolves and the
-   * guard does not: `if: *run` could name `&run always()` elsewhere.
-   */
-  const ANCHOR = /(?:^[ \t]*-|:)[ \t]+[&*][\w-]|^[ \t]*(?:- )?<<[ \t]*:/;
-
-  /**
-   * What lets a workflow install before the check (R8-04), or after a failed
-   * check (H-1): a job the guard cannot read, a job that installs without
-   * needing release-age, a release-age job that does not run the check alone
-   * or whose check can fail without failing it, workflow-level env or
-   * defaults, an installing job whose if: runs it when release-age failed,
-   * anchors and aliases, a pnpm/action-setup version input, or an action not
-   * pinned by commit SHA.
-   */
-  function gateProblems(text: string): string[] {
-    const { jobs: all, unread } = readJobs(text);
-    const problems = unread.map((line) => `cannot read ${JSON.stringify(line)} under jobs:`);
-    for (const name of ungated(text)) problems.push(`job ${name} installs before release-age`);
-    const check = all.get("release-age");
-    if (
-      [...all.values()].some((job) => INSTALLS.test(job)) &&
-      (check === undefined ||
-        !check.includes("      - run: node scripts/check-release-age.ts\n") ||
-        INSTALLS.test(check) ||
-        needs(check).length > 0)
-    ) {
-      problems.push("no release-age job that runs the check before anything else");
-    }
-    if (check !== undefined) problems.push(...checkJobProblems(check));
-    for (const [, key] of text.matchAll(/^(env|defaults):/gm)) {
-      problems.push(
-        `workflow-level ${key}: applies to the release-age job too; set it on the jobs that need it`,
-      );
-    }
-    for (const [name, job] of all) {
-      if (name !== "release-age" && INSTALLS.test(job) && STATUS_FUNCTION.test(jobLevel(job))) {
-        problems.push(`job ${name} has an if: that runs it when release-age failed`);
-      }
-    }
-    for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
-      if (ANCHOR.test(line)) {
-        problems.push(
-          `anchors, aliases or merge keys, which the guard does not resolve: line ${index + 1} could hide an if: or continue-on-error`,
-        );
-      }
-    }
-    for (const [, inputs] of text.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)) {
-      if (/\bversion:/.test(inputs ?? "")) problems.push("pnpm/action-setup has a version input");
-    }
-    for (const [, action] of text.matchAll(/uses: (\S+)/g)) {
-      if (!/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(action ?? "")) {
-        problems.push(`${action} is not pinned by commit SHA`);
-      }
-    }
-    return problems;
-  }
+  const ci = parseWorkflow(workflow);
+  /** A job of ci.yml. */
+  const job = (name: string): Job => {
+    const found = ci.jobs.get(name);
+    expect(found, name).toBeDefined();
+    return found as Job;
+  };
 
   /** gateProblems of every file in a workflow directory, prefixed with its name. */
   const workflowProblems = (dir: string) =>
@@ -2110,11 +2192,10 @@ describe("CI workflow", () => {
       ].join("\n"),
     );
     expect(workflowProblems(dir)).toEqual([
-      `deploy.yml: cannot read "  'quoted':" under jobs:`,
-      `deploy.yml: cannot read "    steps:" under jobs:`,
-      `deploy.yml: cannot read "      - run: npm ci" under jobs:`,
-      "deploy.yml: job reusable installs before release-age",
+      "deploy.yml: job quoted installs or deploys before release-age",
+      "deploy.yml: job reusable installs or deploys before release-age",
       "deploy.yml: no release-age job that runs the check before anything else",
+      `deploy.yml: line 11: release-age runs "echo ok", not the check; a command there could change the check's environment through $GITHUB_ENV or $GITHUB_PATH`,
       "deploy.yml: pnpm/action-setup has a version input",
       "deploy.yml: example/workflows/.github/workflows/deploy.yml@main is not pinned by commit SHA",
     ]);
@@ -2147,10 +2228,14 @@ describe("CI workflow", () => {
     ].join("\n");
   }
 
+  const IGNORED =
+    "release-age has continue-on-error, so the jobs that need it run when the check fails";
+  const RUNS = "job install has an if: that runs it when release-age failed";
+  const HIDES =
+    "the guard refuses anchors, aliases, merge keys, tags and directives, which another parser may read differently and which could hide an if: or continue-on-error";
+
   it("H-1: flags a release-age check that can fail without failing its job", () => {
     expect(gateProblems(scratchWorkflow())).toEqual([]);
-    const IGNORED =
-      "release-age has continue-on-error, so the jobs that need it run when the check fails";
     for (const value of ["true", `\${{ true }}`, "false"]) {
       expect(
         gateProblems(scratchWorkflow({ step: [`        continue-on-error: ${value}`] })),
@@ -2159,8 +2244,9 @@ describe("CI workflow", () => {
         [IGNORED],
       );
     }
+    // YAML reads the quoted key as continue-on-error too.
     expect(gateProblems(scratchWorkflow({ step: ["        'continue-on-error': true"] }))).toEqual([
-      `release-age has "'continue-on-error'", a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`,
+      IGNORED,
     ]);
   });
 
@@ -2172,7 +2258,13 @@ describe("CI workflow", () => {
       [{ step: ["        working-directory: other"] }, [unknown("working-directory")]],
       [{ step: ["        env:", "          NODE_OPTIONS: --import=./x.mjs"] }, [unknown("env")]],
       [{ step: ["        if: false"] }, [unknown("if")]],
-      [{ step: ["      - {run: 'exit 0', continue-on-error: true}"] }, [unknown("{run")]],
+      [
+        { step: ["      - {run: 'exit 0', continue-on-error: true}"] },
+        [
+          IGNORED,
+          `line 10: release-age runs "exit 0", not the check; a command there could change the check's environment through $GITHUB_ENV or $GITHUB_PATH`,
+        ],
+      ],
       [{ check: ["    defaults:", "      run:", "        shell: sh"] }, [unknown("defaults")]],
       [{ check: ["    container: node:22"] }, [unknown("container")]],
       [{ check: ["    if: false"] }, [unknown("if")]],
@@ -2191,8 +2283,55 @@ describe("CI workflow", () => {
       expect(gateProblems(scratchWorkflow(extra))).toEqual(problems);
   });
 
+  it("H-1: flags a release-age step that could change what the check runs or reads", () => {
+    const sha = "0".repeat(40);
+    // A command before the check can set NODE_OPTIONS for it through $GITHUB_ENV.
+    const env = scratchWorkflow().replace(
+      "      - name: Release age\n",
+      `      - run: echo "NODE_OPTIONS=--import=./x.mjs" >> "$GITHUB_ENV"\n      - name: Release age\n`,
+    );
+    expect(gateProblems(env)).toEqual([
+      `line 7: release-age runs "echo \\"NODE_OPTIONS=--import=./x.mjs\\" >> \\"$GITHUB_ENV\\"", not the check; a command there could change the check's environment through $GITHUB_ENV or $GITHUB_PATH`,
+    ]);
+    expect(gateProblems(scratchWorkflow({ step: [`      - uses: example/setup@${sha}`] }))).toEqual(
+      [
+        "release-age uses example/setup; only actions/checkout and actions/setup-node run before the check, since an action could change what it runs",
+      ],
+    );
+    const mirror = scratchWorkflow({
+      step: [
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          mirror: https://nodejs.invalid",
+      ],
+    });
+    expect(gateProblems(mirror)).toEqual([
+      "release-age gives actions/setup-node the input mirror, which the guard does not know; inputs such as mirror change which Node.js runs the check",
+    ]);
+    // A checkout of another commit, in release-age or in a job that installs.
+    const ref = (lines: string[]) => [`      - uses: actions/checkout@${sha}`, ...lines];
+    expect(
+      gateProblems(
+        scratchWorkflow({ step: ref(["        with:", "          ref: refs/tags/old"]) }),
+      ),
+    ).toEqual([
+      "job release-age gives actions/checkout the input ref; inputs such as ref, repository or path check out other files than the release-age job checked",
+    ]);
+    const install = scratchWorkflow().replace(
+      "      - run: pnpm install --frozen-lockfile\n",
+      `${ref(["        with:", "          Repository: example/other", "          persist-credentials: false"]).join("\n")}\n      - run: pnpm install --frozen-lockfile\n`,
+    );
+    expect(gateProblems(install)).toEqual([
+      "job install gives actions/checkout the input repository; inputs such as ref, repository or path check out other files than the release-age job checked",
+    ]);
+    const plain = scratchWorkflow({
+      step: ref(["        with:", "          persist-credentials: false"]),
+    });
+    expect(gateProblems(plain)).toEqual([]);
+  });
+
   it("H-1: flags an installing job whose if: runs it when release-age failed", () => {
-    const RUNS = "job install has an if: that runs it when release-age failed";
     for (const condition of [
       "always()",
       "failure()",
@@ -2200,14 +2339,27 @@ describe("CI workflow", () => {
       "success() || failure()",
       "Always ()",
       `\${{ always() && github.event_name == 'push' }}`,
+      // With a status function GitHub adds no success() &&, so these run after a failed check too.
+      "success() || true",
+      `\${{ !success() }}`,
+      "SUCCESS() && always()",
+      `\${{ success() }} || \${{ true }}`,
     ]) {
-      expect(gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }))).toEqual([RUNS]);
+      expect(
+        gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] })),
+        condition,
+      ).toEqual([RUNS]);
     }
     expect(gateProblems(scratchWorkflow({ install: ["    if: >-", "      always()"] }))).toEqual([
       RUNS,
     ]);
     expect(gateProblems(scratchWorkflow({ install: ["    'if': always()"] }))).toEqual([RUNS]);
-    for (const condition of ["success()", "github.event_name == 'push'"]) {
+    expect(gateProblems(scratchWorkflow({ install: ["    IF: always()"] }))).toEqual([RUNS]);
+    for (const condition of [
+      "success()",
+      "github.event_name == 'push'",
+      `\${{ success() && github.ref == 'refs/heads/main' }}`,
+    ]) {
       expect(gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }))).toEqual([]);
     }
     // A step's if: runs only inside a job that has started.
@@ -2219,52 +2371,67 @@ describe("CI workflow", () => {
   });
 
   it("H-1: flags anchors, aliases and merge keys, which could hide an if: or continue-on-error", () => {
-    const HIDDEN =
-      "anchors, aliases or merge keys, which the guard does not resolve: line {n} could hide an if: or continue-on-error";
-    const at = (n: number) => HIDDEN.replace("{n}", String(n));
     const anchored = scratchWorkflow({
       top: ["env:", "  RUN: &run always()", ""],
       install: ["    if: *run"],
     });
     expect(gateProblems(anchored)).toEqual([
-      "workflow-level env: applies to the release-age job too; set it on the jobs that need it",
-      at(4),
-      at(15),
+      `line 4: an anchor; ${HIDES}`,
+      `line 15: an alias; ${HIDES}`,
     ]);
     const merged = scratchWorkflow({ step: ["        <<: {continue-on-error: true}"] });
-    expect(gateProblems(merged)).toContain(at(10));
+    expect(gateProblems(merged)).toEqual([`line 10: a merge key; ${HIDES}`]);
     const aliased = scratchWorkflow({ step: ["      - *step"] });
-    expect(gateProblems(aliased)).toEqual([at(10)]);
+    expect(gateProblems(aliased)).toEqual([`line 10: an alias; ${HIDES}`]);
   });
 
-  /**
-   * actions/setup-node steps that do not take the Node.js version from .nvmrc
-   * (TM-32): each must give node-version-file: .nvmrc and no node-version,
-   * which setup-node prefers. A step's lines run from its "- " at indent 6 to
-   * the next line indented less than 8.
-   */
-  function nodeProblems(text: string): string[] {
-    const lines = text.split(/\r\n|\r|\n/);
-    const problems: string[] = [];
-    for (const [index, line] of lines.entries()) {
-      if (!line.includes("actions/setup-node@")) continue;
-      let start = index;
-      while (start > 0 && !/^ {6}- /.test(lines[start] ?? "")) start--;
-      let end = index + 1;
-      while (end < lines.length && /^(?: {8}|\s*$)/.test(lines[end] ?? "")) end++;
-      const step = lines.slice(start, end).join("\n");
-      if (
-        !/^ {6}- uses: actions\/setup-node@|^ {8}uses: actions\/setup-node@/.test(line) ||
-        !/^ {10}node-version-file: \.nvmrc$/m.test(step) ||
-        /^ {10}node-version:/m.test(step)
-      ) {
-        problems.push(
-          `line ${index + 1}: actions/setup-node does not take the version from .nvmrc`,
-        );
-      }
-    }
-    return problems;
-  }
+  it("R10-03: flags continue-on-error in a release-age job indented by 5 spaces", () => {
+    // The review's case (a): the job's keys at 5 spaces, its steps at 6. YAML
+    // reads continue-on-error as a key of the job.
+    const [check = "", install = ""] = scratchWorkflow({
+      check: ["    continue-on-error: true"],
+    }).split("  install:\n");
+    const fiveSpaces = `${check.replace(/^ {4}(?=\S)/gm, "     ")}  install:\n${install}`;
+    expect(fiveSpaces).toContain(
+      "  release-age:\n     runs-on: ubuntu-24.04\n     continue-on-error: true\n     steps:\n      - name:",
+    );
+    expect(gateProblems(fiveSpaces)).toEqual([IGNORED]);
+  });
+
+  it("R10-03: flags an installing job whose if: is always() written with a YAML escape", () => {
+    // The review's case (b): YAML reads "\x61lways()" as always().
+    expect(gateProblems(scratchWorkflow({ install: ['    if: "\\x61lways()"'] }))).toEqual([RUNS]);
+    expect(gateProblems(scratchWorkflow({ install: ['    if: "\\u0061lways()"'] }))).toEqual([
+      RUNS,
+    ]);
+  });
+
+  it("R10-03: refuses what another parser could read differently", () => {
+    const cases: [string, string[]][] = [
+      [
+        scratchWorkflow({ check: ["    runs-on: ubuntu-22.04"] }),
+        ["line 6: Map keys must be unique"],
+      ],
+      [
+        scratchWorkflow({
+          step: ["        continue-on-error: false", "        'continue-on-error': true"],
+        }),
+        ["line 11: Map keys must be unique"],
+      ],
+      [scratchWorkflow({ install: ["    if: !!str always()"] }), [`line 12: a tag; ${HIDES}`]],
+      [`%YAML 1.1\n---\n${scratchWorkflow()}`, [`line 1: a directive; ${HIDES}`]],
+      [
+        scratchWorkflow({ top: ["true: x"] }),
+        ["line 3: a key that is not a string, which another parser may read differently"],
+      ],
+      [
+        `${scratchWorkflow()}---\nname: other\n`,
+        ["line 15: Source contains multiple documents; please use YAML.parseAllDocuments()"],
+      ],
+      ["", ["the workflow is not a mapping"]],
+    ];
+    for (const [source, problems] of cases) expect(gateProblems(source), source).toEqual(problems);
+  });
 
   it("TM-32: .nvmrc pins an exact Node.js version of at least 22.18, and every setup-node reads it", () => {
     const pinned = readFileSync(join(REPO_ROOT, ".nvmrc"), "utf8");
@@ -2275,7 +2442,9 @@ describe("CI workflow", () => {
       nodeProblems(readFileSync(join(WORKFLOWS, file), "utf8")).map((p) => `${file} ${p}`),
     );
     expect(steps).toEqual([]);
-    expect(workflow.match(/uses: actions\/setup-node@/g)).toHaveLength(3);
+    expect(actions(ci).filter((action) => action.startsWith("actions/setup-node@"))).toHaveLength(
+      3,
+    );
   });
 
   it("TM-32: flags a setup-node step that does not read .nvmrc", () => {
@@ -2301,12 +2470,29 @@ describe("CI workflow", () => {
         "          node-version: 23",
       ]),
     ).toEqual([NOT]);
+    // GitHub reads input names without case.
+    expect(
+      node([
+        `      - uses: Actions/Setup-Node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          NODE-VERSION: 23",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: '.nvmrc '",
+      ]),
+    ).toEqual([NOT]);
+    // The parser reads a flow map like a block.
     expect(
       node([
         `      - uses: actions/setup-node@${sha}`,
         "        with: {node-version-file: .nvmrc}",
       ]),
-    ).toEqual([NOT]);
+    ).toEqual([]);
     expect(
       node([
         "      - name: Node",
@@ -2326,23 +2512,23 @@ describe("CI workflow", () => {
   });
 
   it("R8-05: deploy-dry-run needs release-age and check, so one green status covers rules:check", () => {
-    const deploy = jobs(workflow).get("deploy-dry-run") ?? "";
-    expect(deploy).toContain("- run: node scripts/deploy.ts --dry-run\n");
+    const deploy = job("deploy-dry-run");
+    expect(runs(deploy)).toContain("node scripts/deploy.ts --dry-run");
     expect(needs(deploy).sort()).toEqual(["check", "release-age"]);
-    expect(jobs(workflow).get("check")).toContain("- run: pnpm rules:check\n");
+    expect(runs(job("check"))).toContain("pnpm rules:check");
   });
 
   it("R4-07: runs the check in its own job, which installs nothing and runs no package code", () => {
-    const check = jobs(workflow).get("release-age") ?? "";
-    expect(check).toContain("- run: node scripts/check-release-age.ts\n");
-    expect(check).not.toMatch(INSTALLS);
+    const check = job("release-age");
+    expect(runs(check)).toEqual(["node scripts/check-release-age.ts --fresh-checkout"]);
+    expect(gated(check)).toBe(false);
     expect(needs(check)).toEqual([]);
   });
 
   it("R4-07, R6-04: every job that installs packages needs the release-age job", () => {
-    const installing = [...jobs(workflow)].filter(([, job]) => INSTALLS.test(job));
-    expect(installing.map(([name]) => name)).toEqual(["check", "deploy-dry-run"]);
-    expect(ungated(workflow)).toEqual([]);
+    const installing = [...ci.jobs.values()].filter(gated);
+    expect(installing.map(({ name }) => name)).toEqual(["check", "deploy-dry-run"]);
+    expect(ungated(ci)).toEqual([]);
   });
 
   it("R4-07, R6-04: finds a job that installs before the check, whatever it runs", () => {
@@ -2373,19 +2559,46 @@ describe("CI workflow", () => {
       "    needs: [build, release-age]",
       "    steps:",
       "      - run: npm ci && npx tsc",
+      "  restored:",
+      "    steps:",
+      `      - uses: actions/cache@${sha}`,
+      "  escaped:",
+      "    steps:",
+      '      - run: "\\x70npm install"',
       "  plain:",
       "    steps:",
       "      - run: node --version",
       "",
     ].join("\n");
-    expect(ungated(synthetic)).toEqual(["setup-only", "lint", "cached", "npm-ci"]);
+    expect(ungated(parseWorkflow(synthetic))).toEqual([
+      "setup-only",
+      "lint",
+      "cached",
+      "npm-ci",
+      "restored",
+      "escaped",
+    ]);
   });
 
   it("R6-04: pnpm/action-setup takes the pnpm version from packageManager, which the check dates", () => {
     // A version input would bypass package.json, and with it the check.
-    const steps = [...workflow.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)];
+    const steps = [...ci.jobs.values()]
+      .flatMap((found) => found.steps)
+      .filter((step) => stringOf(step.entries.get("uses"))?.startsWith("pnpm/action-setup@"));
     expect(steps.length).toBeGreaterThan(0);
-    for (const [, inputs] of steps) expect(inputs).not.toMatch(/\bversion:/);
+    for (const step of steps) expect(step.entries.has("with")).toBe(false);
+    const withInput = (input: string) =>
+      gateProblems(
+        workflow.replace(
+          /^( +)- uses: pnpm\/action-setup@(\S+).*$/m,
+          `$1- uses: pnpm/action-setup@$2\n$1  with:\n$1    ${input}`,
+        ),
+      );
+    expect(withInput("VERSION: 10.34.9")).toEqual(["pnpm/action-setup has a version input"]);
+    // A package.json the check does not read, such as one in a directory its walk leaves out.
+    expect(withInput("package_json_file: node_modules/x/package.json")).toEqual([
+      "pnpm/action-setup has the input package_json_file, which the guard does not know; inputs such as version and package_json_file change which pnpm it installs",
+    ]);
   });
 
   it("R4-07: the check imports nothing from node_modules, since CI runs it before any install", () => {
@@ -2397,11 +2610,11 @@ describe("CI workflow", () => {
   });
 
   it("pins every action by commit SHA and grants read-only permissions", () => {
-    const uses = [...workflow.matchAll(/uses: (\S+)/g)].map((match) => match[1]);
+    const uses = actions(ci);
     expect(uses.length).toBeGreaterThan(0);
     for (const action of uses) expect(action).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
-    expect(workflow).toContain("\npermissions:\n  contents: read\n\n");
-    expect(workflow.match(/permissions:/g)).toHaveLength(1);
+    expect(plain(ci.top.entries.get("permissions"))).toEqual({ contents: "read" });
+    for (const found of ci.jobs.values()) expect(found.keys.entries.has("permissions")).toBe(false);
   });
 });
 

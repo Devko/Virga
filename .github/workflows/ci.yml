@@ -26,10 +26,16 @@ jobs:
   # only the root holds pnpm-workspace.yaml and .npmrc, and no directory holds
   # .corepack.env, however a case-insensitive file system would spell them,
   # since corepack and pnpm read them from the directory a command runs in.
-  # H-1: no continue-on-error or other key here that lets the check fail
-  # without failing this job, and no if: on an installing job that runs it
-  # after this job failed. The only job that needs the registry; it installs
-  # nothing and runs no package code. Node.js is the exact version in .nvmrc.
+  # R10-01, R10-02: no directory holds a pnpmfile, whose updateConfig hook
+  # pnpm runs on every command, a .pnp.cjs, or a package.yaml or package.json5.
+  # --fresh-checkout: nothing is installed yet, so the checkout holds no
+  # node_modules, whose committed files pnpm could take as installed.
+  # H-1, R10-03: no continue-on-error, other key, command or action here that
+  # lets the check fail without failing this job or changes what it runs, and
+  # no if: on an installing job that runs it after this job failed; a script
+  # test checks this on the parsed YAML. The only job that needs the registry;
+  # it installs nothing and runs no package code. Node.js is the exact version
+  # in .nvmrc.
   release-age:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -40,7 +46,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-      - run: node scripts/check-release-age.ts
+      - run: node scripts/check-release-age.ts --fresh-checkout
 
   check:
     needs: release-age
