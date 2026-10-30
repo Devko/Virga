@@ -35,7 +35,7 @@ Every field comes from `GraphReader.listFindings` (`FindingView`) or is a consta
 | `metadata.version` | `1.9.0` | constant |
 | `metadata.product` | `{ name: "Virga", vendor_name: "Virga" }` | constant |
 | `metadata.profiles` | `["cloud"]` | constant |
-| `metadata.is_truncated`, `metadata.untruncated_size` | `true` and the evidence size in KB, only when the evidence was left out | `evidence` |
+| `metadata.is_truncated`, `metadata.untruncated_size` | Only when the evidence was left out: `true`, and the size of the whole record with its evidence, as the export writes it (UTF-8, escapes included), in KiB rounded up. OCSF 1.9 defines `untruncated_size` as the size of the whole event before truncation in kilobytes, not the size of the part left out | `evidence` |
 | `category_uid`, `category_name` | 2, `Findings` | constant |
 | `class_uid`, `class_name` | 2004, `Detection Finding` | constant |
 | `activity_id`, `activity_name` | 3 `Close` when `resolved`; else 2 `Update` when `lastSeen > firstSeen`; else 1 `Create` | `status`, `firstSeen`, `lastSeen` |

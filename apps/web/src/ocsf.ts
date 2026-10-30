@@ -126,14 +126,29 @@ function activityOf(f: FindingView) {
   return f.lastSeen > f.firstSeen ? ACTIVITY.update : ACTIVITY.create;
 }
 
-/** One finding of `accountId` as an OCSF Detection Finding. */
+/**
+ * One finding of `accountId` as an OCSF Detection Finding. Evidence larger
+ * than MAX_EVIDENCE_BYTES is left out, and the record says so: OCSF 1.9's
+ * `metadata.is_truncated`, and `metadata.untruncated_size`, which OCSF
+ * defines as the size of the whole event before truncation in kilobytes:
+ * the record with its evidence, as exported, in KiB rounded up.
+ */
 export function detectionFinding(f: FindingView, accountId: string): Record<string, unknown> {
+  const whole = record(f, accountId, null);
+  if (byteLength(exportJson(f.evidence ?? {})) <= MAX_EVIDENCE_BYTES) return whole;
+  return record(f, accountId, Math.ceil(byteLength(exportJson(whole)) / 1024));
+}
+
+/** The record; with `untruncatedSize` (KiB), without its evidence. */
+function record(
+  f: FindingView,
+  accountId: string,
+  untruncatedSize: number | null,
+): Record<string, unknown> {
   const severity = SEVERITY[f.severity] ?? { id: 0, caption: "Unknown" };
   const status = STATUS[f.status] ?? { id: 0, caption: "Unknown" };
   const activity = activityOf(f);
-  const evidence = exportJson(f.evidence ?? {});
-  const evidenceBytes = byteLength(evidence);
-  const omitted = evidenceBytes > MAX_EVIDENCE_BYTES;
+  const omitted = untruncatedSize !== null;
   const nodeType = f.subject === null ? undefined : NODE_TYPE.exec(f.subject)?.[1];
 
   const virga: Record<string, unknown> = { untrusted: UNTRUSTED_PATHS };
@@ -147,7 +162,7 @@ export function detectionFinding(f: FindingView, accountId: string): Record<stri
       version: OCSF_VERSION,
       product: { name: "Virga", vendor_name: "Virga" },
       profiles: ["cloud"],
-      ...(omitted ? { is_truncated: true, untruncated_size: Math.ceil(evidenceBytes / 1024) } : {}),
+      ...(omitted ? { is_truncated: true, untruncated_size: untruncatedSize } : {}),
     },
     category_uid: CATEGORY.uid,
     category_name: CATEGORY.name,

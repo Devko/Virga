@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EXPORT_CHUNK, EXPORT_MAX, EXPORT_MAX_BYTES } from "../src/export.ts";
 import { CSP } from "../src/http.ts";
 import {
+  byteLength,
   detectionFinding,
   EXPORT_ESCAPED,
   exportJson,
@@ -491,10 +492,27 @@ describe("OCSF export", () => {
 
     const big = all[7] as OcsfRecord;
     expect(big.evidences).toBeUndefined();
-    expect(big.metadata).toMatchObject({ is_truncated: true, untruncated_size: 98 });
+    expect(big.metadata).toMatchObject({ is_truncated: true });
+    expect(big.metadata.untruncated_size).toBeGreaterThan(98);
     expect(big.unmapped.virga.evidence_omitted).toMatch(/read the finding/);
     const normal = all[8] as OcsfRecord;
     expect(normal.metadata.is_truncated).toBeUndefined();
+    expect(normal.metadata.untruncated_size).toBeUndefined();
     expect(normal.evidences).toEqual([{ data: expected[8]?.evidence }]);
+  });
+
+  it("writes untruncated_size as the size of the whole record in KB, as OCSF 1.9 defines it (R9 hardening: OCSF untruncated_size)", () => {
+    const evidence = { blob: "y".repeat(100_000), hosts: [HOSTILE] } as FindingView["evidence"];
+    const record = detectionFinding({ ...finding, evidence }, ACCOUNT) as OcsfRecord;
+    const { is_truncated, untruncated_size, ...metadata } = record.metadata;
+    expect(is_truncated).toBe(true);
+    expect(record.evidences).toBeUndefined();
+    // The record as it would be without truncation: with the evidence, without the note.
+    const { evidence_omitted, ...virga } = record.unmapped.virga;
+    expect(evidence_omitted).toMatch(/read the finding/);
+    const whole = { ...record, metadata, evidences: [{ data: evidence }], unmapped: { virga } };
+    expect(untruncated_size).toBe(Math.ceil(byteLength(exportJson(whole)) / 1024));
+    // The whole event, not the evidence alone.
+    expect(untruncated_size).toBeGreaterThan(Math.ceil(byteLength(exportJson(evidence)) / 1024));
   });
 });
