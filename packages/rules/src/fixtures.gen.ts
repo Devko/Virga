@@ -2296,7 +2296,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-003",
     "name": "negative-read-only-or-restricted",
-    "description": "Evaluated on 2026-10-29; none of these tokens expires. Read permissions only; a risky write permission limited to an IP range; a write permission outside the risky list; and a risky permission that a policy denies.\n",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires. Read permissions only; a risky write permission limited to an IP range; one limited to a /8 and an IPv4-mapped /24, the widest ranges that still count; a write permission outside the risky list; and a risky permission that a policy denies.\n",
     "params": {
       "now_ms": 1793232000000
     },
@@ -2350,6 +2350,39 @@ export const FIXTURES: readonly RuleFixture[] = [
             "in": [
               "198.51.100.0/24",
               "2001:db8::/32"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "a0000000000000000000000000000005",
+        "name": "partner-network",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "17.0.0.0/8",
+              "::ffff:198.51.100.0/120"
             ],
             "not_in": []
           },
@@ -2636,6 +2669,232 @@ export const FIXTURES: readonly RuleFixture[] = [
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-003",
+    "name": "positive-ip-allow-list-without-limit",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires and each can write Workers scripts. Their IP allow lists admit every address: 0.0.0.0/0 with ::/0 (the review's case), IPv4 in two halves, a narrow IPv4 range next to ::/0, an IPv6 range wider than /32, and an IPv4-mapped IPv6 range that covers all of IPv4.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000001",
+        "name": "anywhere",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0.0.0.0/0",
+              "::/0"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000002",
+        "name": "two-halves",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0.0.0.0/1",
+              "128.0.0.0/1"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000003",
+        "name": "office-or-any-ipv6",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "198.51.100.0/24",
+              "::/0"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000004",
+        "name": "global-unicast",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "198.51.100.0/24",
+              "2000::/3"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000005",
+        "name": "mapped",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::ffff:0.0.0.0/96"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "account_token:d0000000000000000000000000000001",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000002",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000003",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000004",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000005",
+        "name": "last_used_on",
+        "value": 1793145600000
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000001",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000002",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000003",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000004",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000005",
+        "severity": "high"
+      }
+    ]
   },
   {
     "rule": "CF-003",
