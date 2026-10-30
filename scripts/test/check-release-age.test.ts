@@ -1776,25 +1776,94 @@ describe("CI workflow", () => {
       .filter(([, job]) => !needs(job).includes("release-age"))
       .map(([name]) => name);
 
+  /** The keys the release-age job, and each of its steps, may have (H-1). */
+  const CHECK_JOB_KEYS = new Set(["name", "runs-on", "timeout-minutes", "steps"]);
+  const CHECK_STEP_KEYS = new Set(["name", "uses", "with", "run"]);
+
   /**
-   * What lets a workflow install before the check (R8-04): a job the guard
-   * cannot read, a job that installs without needing release-age, a
-   * release-age job that does not run the check alone, a pnpm/action-setup
-   * version input, or an action not pinned by commit SHA.
+   * What could let the check in the release-age job fail without failing the
+   * job, or change what it runs (H-1): continue-on-error on the job or a
+   * step, and any key the guard does not know, such as shell,
+   * working-directory, env, if, defaults or container. Keys are read at
+   * indent 4 (the job) and, under steps:, at indent 6 after "- " or at indent 8.
+   */
+  function checkJobProblems(check: string): string[] {
+    const problems: string[] = [];
+    let steps = false;
+    for (const line of check.split("\n")) {
+      const jobKey = /^ {4}(\S[^:]*):/.exec(line)?.[1];
+      if (/^ {4}\S/.test(line)) steps = jobKey === "steps";
+      const stepKey = steps ? /^ {6}- (\S[^:]*):|^ {8}(\S[^:]*):/.exec(line) : null;
+      const key = jobKey ?? stepKey?.[1] ?? stepKey?.[2];
+      if (key === undefined) continue;
+      if (key === "continue-on-error") {
+        problems.push(
+          "release-age has continue-on-error, so the jobs that need it run when the check fails",
+        );
+      } else if (!(jobKey === undefined ? CHECK_STEP_KEYS : CHECK_JOB_KEYS).has(key)) {
+        problems.push(
+          `release-age has ${JSON.stringify(key)}, a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`,
+        );
+      }
+    }
+    return problems;
+  }
+
+  /**
+   * GitHub's status check functions. A job-level if: with one of them drops
+   * the implicit success(), so the job runs when a job it needs failed (H-1).
+   * Function names are not case-sensitive.
+   */
+  const STATUS_FUNCTION = /\b(?:always|failure|cancelled)\s*\(/i;
+
+  /** A job's own keys and values, without its steps, whose if: runs only in a started job. */
+  const jobLevel = (job: string) => job.replace(/^ {4}steps:\n(?: {5,}.*\n)*/m, "");
+
+  /**
+   * Lines with a YAML anchor, alias or merge key, which GitHub resolves and the
+   * guard does not: `if: *run` could name `&run always()` elsewhere.
+   */
+  const ANCHOR = /(?:^[ \t]*-|:)[ \t]+[&*][\w-]|^[ \t]*(?:- )?<<[ \t]*:/;
+
+  /**
+   * What lets a workflow install before the check (R8-04), or after a failed
+   * check (H-1): a job the guard cannot read, a job that installs without
+   * needing release-age, a release-age job that does not run the check alone
+   * or whose check can fail without failing it, workflow-level env or
+   * defaults, an installing job whose if: runs it when release-age failed,
+   * anchors and aliases, a pnpm/action-setup version input, or an action not
+   * pinned by commit SHA.
    */
   function gateProblems(text: string): string[] {
     const { jobs: all, unread } = readJobs(text);
     const problems = unread.map((line) => `cannot read ${JSON.stringify(line)} under jobs:`);
     for (const name of ungated(text)) problems.push(`job ${name} installs before release-age`);
-    if ([...all.values()].some((job) => INSTALLS.test(job))) {
-      const check = all.get("release-age");
-      if (
-        check === undefined ||
+    const check = all.get("release-age");
+    if (
+      [...all.values()].some((job) => INSTALLS.test(job)) &&
+      (check === undefined ||
         !check.includes("      - run: node scripts/check-release-age.ts\n") ||
         INSTALLS.test(check) ||
-        needs(check).length > 0
-      ) {
-        problems.push("no release-age job that runs the check before anything else");
+        needs(check).length > 0)
+    ) {
+      problems.push("no release-age job that runs the check before anything else");
+    }
+    if (check !== undefined) problems.push(...checkJobProblems(check));
+    for (const [, key] of text.matchAll(/^(env|defaults):/gm)) {
+      problems.push(
+        `workflow-level ${key}: applies to the release-age job too; set it on the jobs that need it`,
+      );
+    }
+    for (const [name, job] of all) {
+      if (name !== "release-age" && INSTALLS.test(job) && STATUS_FUNCTION.test(jobLevel(job))) {
+        problems.push(`job ${name} has an if: that runs it when release-age failed`);
+      }
+    }
+    for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
+      if (ANCHOR.test(line)) {
+        problems.push(
+          `anchors, aliases or merge keys, which the guard does not resolve: line ${index + 1} could hide an if: or continue-on-error`,
+        );
       }
     }
     for (const [, inputs] of text.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)) {
@@ -1864,6 +1933,123 @@ describe("CI workflow", () => {
       "deploy.yml: pnpm/action-setup has a version input",
       "deploy.yml: example/workflows/.github/workflows/deploy.yml@main is not pinned by commit SHA",
     ]);
+  });
+
+  /** A workflow with a release-age job and an install job that needs it, with lines added. */
+  function scratchWorkflow(
+    extra: { top?: string[]; check?: string[]; step?: string[]; install?: string[] } = {},
+  ): string {
+    return [
+      "name: CI",
+      "",
+      ...(extra.top ?? []),
+      "jobs:",
+      "  release-age:",
+      "    runs-on: ubuntu-24.04",
+      ...(extra.check ?? []),
+      "    steps:",
+      "      - name: Release age",
+      "        run: node scripts/check-release-age.ts",
+      "      - run: node scripts/check-release-age.ts",
+      ...(extra.step ?? []),
+      "  install:",
+      "    needs: release-age",
+      ...(extra.install ?? []),
+      "    steps:",
+      `      - uses: pnpm/action-setup@${"0".repeat(40)}`,
+      "      - run: pnpm install --frozen-lockfile",
+      "",
+    ].join("\n");
+  }
+
+  it("H-1: flags a release-age check that can fail without failing its job", () => {
+    expect(gateProblems(scratchWorkflow())).toEqual([]);
+    const IGNORED =
+      "release-age has continue-on-error, so the jobs that need it run when the check fails";
+    for (const value of ["true", `\${{ true }}`, "false"]) {
+      expect(
+        gateProblems(scratchWorkflow({ step: [`        continue-on-error: ${value}`] })),
+      ).toEqual([IGNORED]);
+      expect(gateProblems(scratchWorkflow({ check: [`    continue-on-error: ${value}`] }))).toEqual(
+        [IGNORED],
+      );
+    }
+    expect(gateProblems(scratchWorkflow({ step: ["        'continue-on-error': true"] }))).toEqual([
+      `release-age has "'continue-on-error'", a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`,
+    ]);
+  });
+
+  it("H-1: flags keys that change what the release-age check runs", () => {
+    const unknown = (key: string) =>
+      `release-age has "${key}", a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`;
+    const cases: [Parameters<typeof scratchWorkflow>[0], string[]][] = [
+      [{ step: ["        shell: bash -c 'exit 0' {0}"] }, [unknown("shell")]],
+      [{ step: ["        working-directory: other"] }, [unknown("working-directory")]],
+      [{ step: ["        env:", "          NODE_OPTIONS: --import=./x.mjs"] }, [unknown("env")]],
+      [{ step: ["        if: false"] }, [unknown("if")]],
+      [{ step: ["      - {run: 'exit 0', continue-on-error: true}"] }, [unknown("{run")]],
+      [{ check: ["    defaults:", "      run:", "        shell: sh"] }, [unknown("defaults")]],
+      [{ check: ["    container: node:22"] }, [unknown("container")]],
+      [{ check: ["    if: false"] }, [unknown("if")]],
+      [
+        { top: ["defaults:", "  run:", "    working-directory: other", ""] },
+        [
+          "workflow-level defaults: applies to the release-age job too; set it on the jobs that need it",
+        ],
+      ],
+      [
+        { top: ["env:", "  NODE_OPTIONS: --import=./x.mjs", ""] },
+        ["workflow-level env: applies to the release-age job too; set it on the jobs that need it"],
+      ],
+    ];
+    for (const [extra, problems] of cases)
+      expect(gateProblems(scratchWorkflow(extra))).toEqual(problems);
+  });
+
+  it("H-1: flags an installing job whose if: runs it when release-age failed", () => {
+    const RUNS = "job install has an if: that runs it when release-age failed";
+    for (const condition of [
+      "always()",
+      "failure()",
+      `\${{ !cancelled() }}`,
+      "success() || failure()",
+      "Always ()",
+      `\${{ always() && github.event_name == 'push' }}`,
+    ]) {
+      expect(gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }))).toEqual([RUNS]);
+    }
+    expect(gateProblems(scratchWorkflow({ install: ["    if: >-", "      always()"] }))).toEqual([
+      RUNS,
+    ]);
+    expect(gateProblems(scratchWorkflow({ install: ["    'if': always()"] }))).toEqual([RUNS]);
+    for (const condition of ["success()", "github.event_name == 'push'"]) {
+      expect(gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }))).toEqual([]);
+    }
+    // A step's if: runs only inside a job that has started.
+    const upload = scratchWorkflow().replace(
+      "      - run: pnpm install --frozen-lockfile\n",
+      "      - run: pnpm install --frozen-lockfile\n      - if: always()\n        run: echo done\n",
+    );
+    expect(gateProblems(upload)).toEqual([]);
+  });
+
+  it("H-1: flags anchors, aliases and merge keys, which could hide an if: or continue-on-error", () => {
+    const HIDDEN =
+      "anchors, aliases or merge keys, which the guard does not resolve: line {n} could hide an if: or continue-on-error";
+    const at = (n: number) => HIDDEN.replace("{n}", String(n));
+    const anchored = scratchWorkflow({
+      top: ["env:", "  RUN: &run always()", ""],
+      install: ["    if: *run"],
+    });
+    expect(gateProblems(anchored)).toEqual([
+      "workflow-level env: applies to the release-age job too; set it on the jobs that need it",
+      at(4),
+      at(15),
+    ]);
+    const merged = scratchWorkflow({ step: ["        <<: {continue-on-error: true}"] });
+    expect(gateProblems(merged)).toContain(at(10));
+    const aliased = scratchWorkflow({ step: ["      - *step"] });
+    expect(gateProblems(aliased)).toEqual([at(10)]);
   });
 
   it("R8-05: deploy-dry-run needs release-age and check, so one green status covers rules:check", () => {
