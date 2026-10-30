@@ -4,7 +4,9 @@ An agentless, read-only security tool for Cloudflare accounts that runs entirely
 
 > *Virga* is rain that falls from a cloud but evaporates before it reaches the ground. The tool does the same with risk: it forms in the cloud and is caught before it hits anyone.
 
-**Status: phase 1 in progress.** The concept, its review and the implementation plan are in [`docs/`](docs/). Built so far: the graph store, the rule compiler with the flagship rule CF-001, the core Worker with its Durable Object, the credential broker and the platform collectors. Nothing scans a real account yet.
+**Status: phase 1 in progress, no release yet.** The concept, its review and the implementation plan are in [`docs/`](docs/). Built so far: the graph store, the rule engine with 11 rules, the credential broker, the phase 1 collectors, the exposure evaluator, the scan Workflow, the web Worker (UI, JSON API, MCP server), the deploy script and an end-to-end scan test against a fake account. Nothing has scanned a real account yet. See the [changelog](CHANGELOG.md).
+
+> Virga is an independent open source project. It is not affiliated with or endorsed by Cloudflare, Inc., and it uses no Cloudflare logos.
 
 ## Documents
 
@@ -14,9 +16,14 @@ An agentless, read-only security tool for Cloudflare accounts that runs entirely
 | [Analysis](docs/analysis.md) | Review of the spec: verified platform claims, inconsistencies, security additions, risks, open decisions |
 | [Implementation plan](docs/implementation-plan.md) | Phases with gates, spikes, rule rollout, deployment topology, repository layout, phase 1 backlog |
 | [Data model](docs/architecture/data-model.md) | Graph schema, write path, exposure semantics, rule file format, revised CF-001 |
+| [Graph contract](docs/architecture/graph-contract.md) | What collectors emit and what rules and evaluators read |
+| [Threat model](docs/architecture/threat-model.md) | Assets, principals, trust boundaries, controls and residual risks |
+| [Operator guide](docs/operator/guide.md) | Deploying and operating an instance, scan tokens, onboarding, offboarding |
 | [Decisions](docs/decisions/) | Accepted decisions, starting with the working defaults |
 | [Spikes](docs/spikes/) | Results of the phase 0 spikes |
-| [Graph contract](docs/architecture/graph-contract.md) | What collectors emit and what rules and evaluators read |
+| [Reviews](docs/reviews/) | Security reviews and verification rounds with their findings |
+| [Versioning](docs/release/versioning.md) | Version numbers, breaking changes, rule versions, what a release contains |
+| [Changelog](CHANGELOG.md) | Changes by area; no release yet |
 | [Work packages](docs/team/work-packages.md) | How development is split across the agent team |
 
 ## Principles
@@ -63,7 +70,9 @@ pnpm rules:build   # after changing anything in rules/
 | `packages/rules` | Rule compiler, rule runtime, fixture runner |
 | `rules/` | One directory per rule: `rule.sql`, fixtures, fix proposals |
 | `apps/broker` | Credential broker: token vault, onboarding write check, read allowlist, rate budget |
-| `apps/core` | Core Worker with the `AccountGraph` Durable Object |
+| `apps/core` | Core Worker: the `AccountGraph` Durable Object, scan and dispatch Workflows, account index |
+| `apps/web` | Web Worker: UI, JSON API and MCP server behind Access |
+| `scripts/` | Deploy script and the release-age check |
 | `spikes/` | Throwaway code for phase 0 spikes |
 
 ## License
@@ -73,6 +82,6 @@ Apache-2.0, see [LICENSE](LICENSE). Contributions require a DCO sign-off, see [C
 ## Disclaimer
 
 - Virga is an independent open source project. It is not affiliated with, endorsed by, or sponsored by Cloudflare, Inc.
-- Cloudflare and the names of Cloudflare products belong to Cloudflare, Inc. They appear here only to describe what Virga works with.
+- Cloudflare and the names of Cloudflare products belong to Cloudflare, Inc. They appear here only to describe what Virga works with. Virga uses no Cloudflare logos.
 - "Virga" is a meteorological term. The project claims no exclusive rights to the name.
 - Use Virga only on accounts you own or are authorized to assess. The software is provided "as is", without warranty of any kind; see the [LICENSE](LICENSE).
