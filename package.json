@@ -19,7 +19,8 @@
     "build": "pnpm -r --if-present build",
     "deploy": "node scripts/deploy.ts",
     "deploy:dry-run": "node scripts/deploy.ts --dry-run",
-    "test:scripts": "tsc -p scripts && vitest run --root scripts"
+    "test:scripts": "tsc -p scripts && vitest run --root scripts",
+    "check:release-age": "node scripts/check-release-age.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

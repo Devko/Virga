@@ -12,7 +12,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # R4-07: every version in pnpm-lock.yaml was published at least 14 days
+  # ago. minimumReleaseAge does not apply to an install from the lockfile, so
+  # this runs before any job installs. The only job that needs the registry;
+  # it installs nothing and runs no package code.
+  release-age:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: node scripts/check-release-age.ts
+
   check:
+    needs: release-age
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -34,6 +51,7 @@ jobs:
   # Bundles every Worker with `wrangler deploy --dry-run` and checks the
   # configs against each other. Uses no Cloudflare credentials.
   deploy-dry-run:
+    needs: release-age
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
