@@ -57,8 +57,7 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
   const rank = new Map<string, number>(WORKERS.map((w, i) => [w.name, i]));
   const byName = new Map<string, WorkerConfig>();
   for (const expected of WORKERS) {
-    const found = workers.filter((w) => w.app === expected.app);
-    const worker = found[0];
+    const worker = workers.find((w) => w.app === expected.app);
     if (!worker) {
       if (!expected.optional) error(`apps/${expected.app}: no wrangler.jsonc found`);
       continue;
