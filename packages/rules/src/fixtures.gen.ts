@@ -8526,6 +8526,132 @@ export const FIXTURES: readonly RuleFixture[] = [
     ]
   },
   {
+    "rule": "CF-021",
+    "name": "undecided-unknown-enabled-state",
+    "description": "The storage collector could not read whether a domain is enabled, so it stores enabled null, and the evaluator decides such a domain unknown. customer-exports has one such custom domain, and backups an r2.dev domain in the same state. Either would make its bucket public if it were enabled, so both rows are undecided. assets has one too, but another of its custom domains is enabled and public, which decides it.\n",
+    "nodes": [
+      {
+        "type": "r2_bucket",
+        "id": "customer-exports",
+        "name": "customer-exports"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "files.example.com",
+        "name": "files.example.com",
+        "props": {
+          "bucket": "customer-exports",
+          "kind": "custom",
+          "enabled": null,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "backups",
+        "name": "backups"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "name": "pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "props": {
+          "bucket": "backups",
+          "kind": "r2_dev",
+          "enabled": null,
+          "zone_id": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "assets",
+        "name": "assets"
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "old-assets.example.com",
+        "name": "old-assets.example.com",
+        "props": {
+          "bucket": "assets",
+          "kind": "custom",
+          "enabled": null,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      },
+      {
+        "type": "r2_public_domain",
+        "id": "assets.example.com",
+        "name": "assets.example.com",
+        "props": {
+          "bucket": "assets",
+          "kind": "custom",
+          "enabled": true,
+          "zone_id": "36ca64a6d92827b8a6b90be344bb1bfd"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:files.example.com",
+        "dst": "r2_bucket:customer-exports"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "dst": "r2_bucket:backups"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:old-assets.example.com",
+        "dst": "r2_bucket:assets"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "r2_public_domain:assets.example.com",
+        "dst": "r2_bucket:assets"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "r2_public_domain:files.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:old-assets.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "r2_public_domain:assets.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-021:r2_bucket:customer-exports",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:backups",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-021:r2_bucket:assets",
+        "severity": "high"
+      }
+    ]
+  },
+  {
     "rule": "CF-022",
     "name": "negative-previews-behind-access",
     "description": "Previews share the production database, but an Access app covers the preview wildcard. The evaluator could not decide the previews of a second project, but they bind nothing that production binds, so that project would not qualify even if they were public.\n",
