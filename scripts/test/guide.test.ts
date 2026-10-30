@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPO_ROOT } from "./helpers.ts";
@@ -134,6 +134,43 @@ describe('operator guide, "Deploy from CI"', () => {
       expect(pinned.has(action), action).toBe(true);
     }
     expect(workflow).toContain("\npermissions:\n  contents: read\n");
+  });
+});
+
+describe('operator guide, "Run the deploy"', () => {
+  /** Bare module names imported by the sources of packages/<name>, tests left out. */
+  const imports = (name: string) => {
+    const src = join(REPO_ROOT, "packages", name, "src");
+    const found = new Set<string>();
+    for (const file of readdirSync(src, { recursive: true, encoding: "utf8" })) {
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
+      const text = readFileSync(join(src, file), "utf8");
+      for (const [, spec] of text.matchAll(/\b(?:from|import)\s*\(?\s*"([^".][^"]*)"/g)) {
+        if (spec !== undefined && !spec.startsWith("node:")) found.add(spec);
+      }
+    }
+    return found;
+  };
+
+  it("H-2: names every package the rule compiler loads into the process that holds the token", () => {
+    // The workspace packages rules/ reaches, and the third-party packages they import.
+    const workspace = new Set(["rules"]);
+    const thirdParty = new Set<string>();
+    for (const name of workspace) {
+      for (const spec of imports(name)) {
+        const scoped = /^@virga\/([^/]+)/.exec(spec);
+        if (scoped?.[1] !== undefined) workspace.add(scoped[1]);
+        else thirdParty.add(spec);
+      }
+    }
+    expect([...thirdParty]).toEqual(["yaml"]);
+    const run = section("### Run the deploy");
+    for (const name of [...workspace].filter((name) => name !== "rules")) {
+      expect(run, name).toContain(`\`@virga/${name}\``);
+    }
+    for (const name of thirdParty) expect(run).toContain(`the YAML parser \`${name}\``);
+    expect(run).toContain("`yaml` is the only third-party package in that process");
+    expect(run).toContain("the release-age check dates it");
   });
 });
 
