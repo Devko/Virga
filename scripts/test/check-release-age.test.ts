@@ -342,6 +342,47 @@ describe("EXCEPTIONS", () => {
   });
 });
 
+describe("CI workflow", () => {
+  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+
+  /** The text of each job under `jobs:`, by job name. */
+  function jobs(): Map<string, string> {
+    const result = new Map<string, string>();
+    let name: string | undefined;
+    for (const line of workflow.slice(workflow.indexOf("\njobs:\n")).split("\n").slice(2)) {
+      const header = /^ {2}([\w-]+):$/.exec(line);
+      if (header?.[1] !== undefined) {
+        name = header[1];
+        result.set(name, "");
+      } else if (name !== undefined && line.startsWith("    ")) {
+        result.set(name, `${result.get(name)}${line}\n`);
+      }
+    }
+    return result;
+  }
+
+  it("R4-07: runs the check in its own job, before every job that installs", () => {
+    const all = jobs();
+    const check = all.get("release-age") ?? "";
+    expect(check).toContain("- run: node scripts/check-release-age.ts\n");
+    expect(check).not.toContain("pnpm install");
+    const installing = [...all].filter(([, text]) => text.includes("pnpm install"));
+    expect(installing.map(([name]) => name)).toEqual(["check", "deploy-dry-run"]);
+    for (const [, text] of installing) {
+      expect(text).toContain("    needs: release-age\n");
+      expect(text).not.toContain("check-release-age");
+    }
+  });
+
+  it("pins every action by commit SHA and grants read-only permissions", () => {
+    const uses = [...workflow.matchAll(/uses: (\S+)/g)].map((match) => match[1]);
+    expect(uses.length).toBeGreaterThan(0);
+    for (const action of uses) expect(action).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+    expect(workflow).toContain("\npermissions:\n  contents: read\n\n");
+    expect(workflow.match(/permissions:/g)).toHaveLength(1);
+  });
+});
+
 describe("main", () => {
   const run = async (registry: Registry, entries: string[]) => {
     const out: string[] = [];
