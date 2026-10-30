@@ -18,7 +18,7 @@ Status: implemented in [`packages/graph`](../../packages/graph). The schema is [
 
 | Table | Purpose |
 | --- | --- |
-| `meta` | Schema version, current scan, settings |
+| `meta` | Key-value pairs: `schema_version`, `current_scan`, and `removed` after offboarding (set by `AccountGraph.deleteAll`, cleared by `Admin.addAccount`; `beginScan` refuses while it is set, R4-03) |
 | `scans` | One row per scan (Workflow instance), with kind and status |
 | `coverage` | Status per resource class and scan: `complete`, `partial`, `no_permission`, `error`, `skipped`. Decides tombstones and "not evaluated" |
 | `nodes`, `edges` | The graph. Resource class, content hash, `first_seen`, `changed_at`, `seen_scan`, tombstone `deleted_at` |
@@ -111,9 +111,12 @@ Implemented in [`packages/rules/src/evaluate.ts`](../../packages/rules/src/evalu
 - One row per fingerprint. Rules choose the fingerprint granularity: CF-001 uses one per Worker, so a new CVE updates the finding and does not open a second one (D-10).
 - `open` → `resolved` only when the rule ran with status `evaluated` and no longer returns the fingerprint, decided or undecided. A rule that is `not_evaluated` never resolves anything.
 - A finding that comes back after `resolved` is reopened with its history intact.
-- Suppression always has `suppressed_until`, a reason and the actor. It expires on its own, at the latest on the next evaluated run that returns the fingerprint, decided or undecided. While it lasts, the accepted severity is kept and a higher severity ends it.
+- Suppression always has `suppressed_until`, a reason and the actor. While it lasts, the accepted severity is kept and a higher severity ends it.
+- A suppression ends at `suppressed_until` (R3-07):
+  - The lifecycle stores the end on the rule's next evaluated run: a finding whose fingerprint the run returns, decided or undecided, becomes `open`; one it no longer returns is resolved. A run that is `not_evaluated` or `error` changes nothing.
+  - Until then, reads (`GraphReader` `listFindings`, `getFinding` and the summary counts) show a suppressed finding whose `suppressed_until` is `null` or not after the read time as `open`, without suppression fields. They write nothing.
 - A rule whose query fails or breaks the output contract is `error` for that run and changes no finding; the rules after it still run.
-- Unknown is a result. A row with `decided = 0` says the rule cannot decide that fingerprint, for example because the entry points that decide it have exposure `unknown`. It neither opens nor resolves: an existing finding keeps its status, severity, evidence, node links and `last_seen` (an open, suppressed or resolved finding stays so, except that a suppression past `suppressed_until` returns to open with the state it had, R3-07), and without a finding nothing opens. Before round 2, such a finding was resolved as soon as its exposure turned `unknown`.
+- Unknown is a result. A row with `decided = 0` says the rule cannot decide that fingerprint, for example because the entry points that decide it have exposure `unknown`. It neither opens nor resolves: an existing finding keeps its status, severity, evidence, node links and `last_seen` (an open, suppressed or resolved finding stays so, except that a suppression past `suppressed_until` returns to open with the state it had, as above), and without a finding nothing opens. Before round 2, such a finding was resolved as soon as its exposure turned `unknown`.
 - `rule_runs.hits` counts decided rows only; the run summary reports undecided rows apart (`undecided`). `rule_runs.undecided` counts them (migration 2); `rule_runs.error` holds the message of a failed run, capped at 500 characters.
 - Changing the rule version keeps the fingerprints unless the rule's meaning changes. In that case the rule gets a new ID.
 
