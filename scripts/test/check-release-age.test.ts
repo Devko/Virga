@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   type CheckOptions,
   checkReleaseAge,
+  cli,
   EXCEPTIONS,
   type Exception,
   LockfileError,
@@ -2057,6 +2058,66 @@ describe("R10-02: no package.yaml or package.json5", () => {
   });
 });
 
+describe("Fresh checkout (round 10 lead): --fresh-checkout refuses node_modules", () => {
+  const FRESH =
+    "a fresh checkout holds no node_modules \\(--fresh-checkout\\); pnpm could take committed package files";
+  /** cli with the arguments given, on a checkout, with pnpm 10.28.0 in the registry. */
+  async function runCli(args: string[], root: string) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const { fetch } = mockFetch(PNPM_REGISTRY);
+    const code = await cli(args, {
+      root,
+      fetch,
+      now: NOW,
+      exceptions: [],
+      retryDelayMs: 0,
+      log: (line) => out.push(line),
+      error: (line) => err.push(line),
+    });
+    return { code, out, err };
+  }
+
+  it("Fresh checkout: refuses a committed node_modules anywhere, however spelled", async () => {
+    // The lead: pnpm could take a committed .modules.yaml and .pnpm/lock.yaml
+    // as an install that is up to date, and keep the committed package files.
+    const cases: [string, string][] = [
+      ["node_modules/.modules.yaml", "node_modules"],
+      ["node_modules/.pnpm/lock.yaml", "node_modules"],
+      ["apps/web/node_modules/yaml/package.json", "apps/web/node_modules"],
+      ["packages/graph/NODE_MODULES/x.js", "packages/graph/NODE_MODULES"],
+    ];
+    for (const [path, shown] of cases) {
+      const root = checkout({ [path]: "{}\n" });
+      expect(await runCli(["--fresh-checkout"], root), path).toEqual({
+        code: 1,
+        out: [],
+        err: [expect.stringMatching(new RegExp(`^error: ${shown}: ${FRESH}`))],
+      });
+      // Without the flag the walk leaves node_modules out, as on a workstation after pnpm install.
+      expect(await runCli([], root), path).toEqual(PASSES);
+    }
+    expect(await runCli(["--fresh-checkout"], checkout())).toEqual(PASSES);
+  });
+
+  it("Fresh checkout: the command line takes --fresh-checkout and nothing else", async () => {
+    const root = checkout({ "node_modules/.modules.yaml": "{}\n" });
+    const USAGE = "usage: node scripts/check-release-age.ts [--fresh-checkout]";
+    expect(await runCli(["--help"], root)).toEqual({ code: 0, out: [USAGE], err: [] });
+    for (const args of [["--fresh"], ["--fresh-checkout=yes"], ["node_modules"]]) {
+      expect(await runCli(args, root), args.join(" ")).toEqual({ code: 2, out: [], err: [USAGE] });
+    }
+  });
+
+  it("Fresh checkout: CI runs the check with --fresh-checkout, before anything is installed", () => {
+    const ci = parseWorkflow(
+      readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8"),
+    );
+    const check = ci.jobs.get("release-age");
+    expect(check && runs(check)).toEqual(["node scripts/check-release-age.ts --fresh-checkout"]);
+  });
+});
+
 describe("EXCEPTIONS", () => {
   it("names exact versions and says why", () => {
     for (const exception of EXCEPTIONS) {
@@ -2459,7 +2520,7 @@ describe("CI workflow", () => {
 
   it("R4-07: runs the check in its own job, which installs nothing and runs no package code", () => {
     const check = job("release-age");
-    expect(runs(check)).toEqual(["node scripts/check-release-age.ts"]);
+    expect(runs(check)).toEqual(["node scripts/check-release-age.ts --fresh-checkout"]);
     expect(gated(check)).toBe(false);
     expect(needs(check)).toEqual([]);
   });

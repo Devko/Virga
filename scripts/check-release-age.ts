@@ -967,12 +967,13 @@ function checkNestedManifest(path: string, shown: string): void {
  * command and .pnp.cjs into every script it runs, so no directory may hold
  * either (R10-01), and it reads package.yaml and package.json5 as manifests,
  * which the project does not use (R10-02). Walks the checkout without
- * node_modules and .git, and refuses symbolic links rather than follow them,
+ * node_modules and .git; with freshCheckout, as before any install in CI, it
+ * refuses node_modules instead. Refuses symbolic links rather than follow them,
  * since corepack and pnpm would. Names are compared as a case-insensitive file
  * system may open them (L-1), and at the root the files main reads must have
  * their exact names.
  */
-export function checkCheckout(root: string): void {
+export function checkCheckout(root: string, options: { freshCheckout?: boolean } = {}): void {
   const top = resolve(root);
   const shownPath = (path: string) => relative(top, path).split(sep).join("/") || ".";
   const walk = (dir: string) => {
@@ -984,10 +985,16 @@ export function checkCheckout(root: string): void {
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
-      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      if (entry.name === ".git") continue;
       const path = join(dir, entry.name);
       const shown = shownPath(path);
       const name = foldedName(entry.name);
+      if (name === "node_modules" && options.freshCheckout) {
+        throw new CheckoutError(
+          `${shown}: a fresh checkout holds no node_modules (--fresh-checkout); pnpm could take committed package files, with their .modules.yaml and lock.yaml, as installed, and the check never dated them`,
+        );
+      }
+      if (entry.name === "node_modules") continue;
       const atRoot = dir === top;
       if (entry.isSymbolicLink()) {
         throw new CheckoutError(
@@ -1445,6 +1452,12 @@ export interface MainOptions extends CheckOptions {
   lockfile?: string;
   /** By default package.json under root. */
   packageJson?: string;
+  /**
+   * Refuse any node_modules in the checkout, which a fresh clone or a CI
+   * checkout before the install does not have; by default the walk leaves
+   * node_modules out.
+   */
+  freshCheckout?: boolean;
   log?: (line: string) => void;
   error?: (line: string) => void;
 }
@@ -1491,8 +1504,10 @@ export async function main(options: MainOptions = {}): Promise<number> {
     // lockfile or a pnpmfile are refused before anything is fetched.
     parseWorkspace(readText(root, "pnpm-workspace.yaml"));
     // R8-02, R9-02: corepack and pnpm read these from the directory a command
-    // runs in. The walk also refuses a root .npmrc that is a symbolic link.
-    checkCheckout(root);
+    // runs in. The walk also refuses a root .npmrc that is a symbolic link,
+    // a pnpmfile (R10-01), package.yaml (R10-02) and, on a fresh checkout,
+    // node_modules.
+    checkCheckout(root, { freshCheckout: options.freshCheckout === true });
     // R9-01: settings such as lockfile-dir make pnpm install from a lockfile
     // the check never dated.
     const npmrc = readOptional(root, ".npmrc");
@@ -1530,24 +1545,36 @@ export async function main(options: MainOptions = {}): Promise<number> {
   return 0;
 }
 
-const USAGE = "usage: node scripts/check-release-age.ts";
+const USAGE = "usage: node scripts/check-release-age.ts [--fresh-checkout]";
 
-async function cli(): Promise<number> {
+/**
+ * The command: main with the options of `args`. --fresh-checkout refuses any
+ * node_modules in the checkout, for CI and a fresh clone, where nothing has
+ * been installed yet.
+ */
+export async function cli(args: readonly string[], options: MainOptions = {}): Promise<number> {
+  const log = options.log ?? console.log;
+  const error = options.error ?? console.error;
+  let values: { help?: boolean; "fresh-checkout"?: boolean };
   try {
-    if (parseArgs({ options: { help: { type: "boolean" } } }).values.help) {
-      console.log(USAGE);
-      return 0;
-    }
+    ({ values } = parseArgs({
+      args: [...args],
+      options: { help: { type: "boolean" }, "fresh-checkout": { type: "boolean" } },
+    }));
   } catch {
-    console.error(USAGE);
+    error(USAGE);
     return 2;
   }
+  if (values.help) {
+    log(USAGE);
+    return 0;
+  }
   try {
-    return await main();
+    return await main({ ...options, freshCheckout: values["fresh-checkout"] === true });
   } catch (cause) {
-    console.error(`error: ${cause instanceof Error ? (cause.stack ?? cause.message) : cause}`);
+    error(`error: ${cause instanceof Error ? (cause.stack ?? cause.message) : cause}`);
     return 1;
   }
 }
 
-if (import.meta.main) process.exitCode = await cli();
+if (import.meta.main) process.exitCode = await cli(process.argv.slice(2));
