@@ -7,10 +7,9 @@
  * `JSON.stringify` escapes them, nothing is concatenated into JSON text.
  *
  * `checkSbom` is a structural self-check of what this module emits; the
- * generator runs it on every document. It is not validation against the
- * official CycloneDX JSON schema (phase 2, gate 2): the schema files and a
- * validator are not in the repository yet. A schema test can validate
- * `JSON.parse(serializeSbom(bom))` without any change here.
+ * generator runs it on every document. Validation against the official
+ * CycloneDX 1.6 JSON schema (phase 2, gate 2) runs in the tests, on
+ * `JSON.parse(serializeSbom(bom))` of every SBOM they build (decision 0010).
  */
 
 import { compare } from "./fields.ts";

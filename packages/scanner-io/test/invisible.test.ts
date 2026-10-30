@@ -5,9 +5,10 @@ import { describe, expect, it } from "vitest";
 import { ScannerOutputRejected } from "../src/errors.ts";
 import { readGitleaks } from "../src/gitleaks.ts";
 import { readOsvScanner } from "../src/osv.ts";
-import { buildWorkerSbom, checkSbom, SbomInputError } from "../src/sbom.ts";
+import { buildWorkerSbom, checkSbom, SbomInputError, serializeSbom } from "../src/sbom.ts";
 import { isCleanText, isInvisible } from "../src/text.ts";
 import { readTrivy } from "../src/trivy.ts";
+import { schemaProblems } from "./cdx-schema.ts";
 import { gitleaksSample, json, osvSample, trivySample } from "./samples.ts";
 
 /** The characters the round 9 review named, as code points. */
@@ -111,7 +112,9 @@ describe("invisible characters (R9 hardening)", () => {
       { ...base, tool: { version: `0.1.0${ch(0x2060)}` } },
     ];
     for (const input of cases) expect(() => buildWorkerSbom(input)).toThrow(SbomInputError);
-    const bom = buildWorkerSbom(base) as unknown as { components: { name: string }[] };
+    const valid = buildWorkerSbom(base);
+    expect(schemaProblems(JSON.parse(serializeSbom(valid)))).toEqual([]);
+    const bom = structuredClone(valid) as unknown as { components: { name: string }[] };
     const first = bom.components[0];
     if (first) first.name = `lodash${ch(0x180e)}`;
     expect(checkSbom(bom).length).toBeGreaterThan(0);

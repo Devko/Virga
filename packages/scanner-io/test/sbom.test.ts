@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkerSbom,
   CYCLONEDX_SCHEMA,
+  type CycloneDxBom,
   checkSbom,
   SbomInputError,
   type SbomPackage,
   serializeSbom,
   type WorkerSbomInput,
 } from "../src/sbom.ts";
+import { schemaProblems } from "./cdx-schema.ts";
 import { RIGHT_TO_LEFT_OVERRIDE } from "./chars.ts";
 
 const SERIAL = "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79";
@@ -41,12 +43,19 @@ const input = (overrides: Partial<WorkerSbomInput> = {}): WorkerSbomInput => ({
 
 const clone = <T>(value: T): T => structuredClone(value);
 
+/** Builds an SBOM and validates its stored form against the CycloneDX 1.6 schema (decision 0010). */
+const build = (value: WorkerSbomInput): CycloneDxBom => {
+  const bom = buildWorkerSbom(value);
+  expect(schemaProblems(JSON.parse(serializeSbom(bom))), "CycloneDX 1.6 schema").toEqual([]);
+  return bom;
+};
+
 // biome-ignore lint/suspicious/noExplicitAny: the mutations reach into any part of the document
 type Doc = Record<string, any>;
 
 describe("buildWorkerSbom", () => {
   it("emits a CycloneDX 1.6 document for one Worker version", () => {
-    const bom = buildWorkerSbom(input());
+    const bom = build(input());
     expect(bom).toEqual({
       $schema: CYCLONEDX_SCHEMA,
       bomFormat: "CycloneDX",
@@ -93,8 +102,8 @@ describe("buildWorkerSbom", () => {
 
   it("draws a random v4 serial number when none is given", () => {
     const { serialNumber: _, ...rest } = input();
-    const a = buildWorkerSbom(rest);
-    const b = buildWorkerSbom(rest);
+    const a = build(rest);
+    const b = build(rest);
     expect(a.serialNumber).toMatch(
       /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -102,27 +111,27 @@ describe("buildWorkerSbom", () => {
   });
 
   it("is deterministic: the same packages in any order give the same bytes", () => {
-    const reversed = buildWorkerSbom(input({ packages: [...packages].reverse() }));
-    expect(serializeSbom(reversed)).toBe(serializeSbom(buildWorkerSbom(input())));
+    const reversed = build(input({ packages: [...packages].reverse() }));
+    expect(serializeSbom(reversed)).toBe(serializeSbom(build(input())));
   });
 
   it("keeps one component per purl, with the highest confidence", () => {
     const first = packages[0] as SbomPackage;
     const banner: SbomPackage = { ...first, source: "banner", confidence: 0 };
-    const bom = buildWorkerSbom(input({ packages: [banner, ...packages] }));
+    const bom = build(input({ packages: [banner, ...packages] }));
     expect(bom.components).toHaveLength(2);
     expect(bom.components[1]?.properties).toEqual([
       { name: "virga:confidence", value: "high" },
       { name: "virga:source", value: "package_dependencies" },
     ]);
     const tie: SbomPackage = { ...first, source: "sbom" };
-    const tied = buildWorkerSbom(input({ packages: [tie, ...packages] }));
-    const again = buildWorkerSbom(input({ packages: [...packages, tie] }));
+    const tied = build(input({ packages: [tie, ...packages] }));
+    const again = build(input({ packages: [...packages, tie] }));
     expect(serializeSbom(tied)).toBe(serializeSbom(again));
   });
 
   it("emits an empty component list for a Worker without packages", () => {
-    const bom = buildWorkerSbom(input({ packages: [] }));
+    const bom = build(input({ packages: [] }));
     expect(bom.components).toEqual([]);
     expect(checkSbom(bom)).toEqual([]);
   });
@@ -137,9 +146,7 @@ describe("buildWorkerSbom", () => {
       source: "banner",
       confidence: 0,
     };
-    const bom = buildWorkerSbom(
-      input({ worker: { scriptName, versionId: VERSION_ID }, packages: [evil] }),
-    );
+    const bom = build(input({ worker: { scriptName, versionId: VERSION_ID }, packages: [evil] }));
     const parsed = JSON.parse(serializeSbom(bom));
     expect(parsed.metadata.component.name).toBe(scriptName);
     expect(parsed.components).toHaveLength(1);
@@ -182,7 +189,7 @@ describe("buildWorkerSbom", () => {
 });
 
 describe("checkSbom", () => {
-  const good = () => clone(buildWorkerSbom(input())) as unknown as Doc;
+  const good = () => clone(build(input())) as unknown as Doc;
 
   it.each([
     ["a wrong spec version", (b: Doc) => (b.specVersion = "1.5")],

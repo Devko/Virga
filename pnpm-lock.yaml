@@ -131,7 +131,11 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
 
-  packages/scanner-io: {}
+  packages/scanner-io:
+    devDependencies:
+      '@cfworker/json-schema':
+        specifier: 4.1.1
+        version: 4.1.1
 
   packages/vulns:
     dependencies:

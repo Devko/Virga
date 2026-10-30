@@ -11,5 +11,8 @@
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cfworker/json-schema": "4.1.1"
   }
 }

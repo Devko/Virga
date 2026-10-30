@@ -7,7 +7,7 @@ The package has two parts:
 - **Readers** turn the JSON output of osv-scanner, Trivy and gitleaks into one normalized, typed result. They are the boundary for scanner output, which is untrusted ([design spec](../concept/design-spec.md#security-of-the-tool-itself): "validated against a schema with size limits"; phase 2 gate 6).
 - **SBOM generator** writes a CycloneDX 1.6 JSON document for one Worker version (phase 2 gate 2).
 
-The package is runtime-agnostic: no `node:` imports and no dependencies, so it runs in a Worker or a Workflow step.
+The package is runtime-agnostic: `src/` has no `node:` imports and the package no runtime dependencies, so it runs in a Worker or a Workflow step. Its one dev dependency, `@cfworker/json-schema`, serves the schema tests.
 
 ## Formats and versions
 
@@ -196,9 +196,12 @@ Strings from the scanned account (script name, package names and versions) are v
 
 `checkSbom` is a structural self-check of what the generator emits, and the generator runs it on every document. It checks the members above and nothing else (stricter than the schema where Virga is: no other members, `bom-ref` equal to the purl, both properties present, components sorted, `bom-ref` unique). It is not schema validation.
 
+**Schema validation (gate 2, [decision 0010](../decisions/0010-cyclonedx-schema-validation.md)).** The tests validate the stored form of every SBOM they build against the official CycloneDX 1.6 JSON schema: `bom-1.6.schema.json` with `spdx.schema.json` and `jsf-0.82.schema.json`, vendored unchanged from tag `1.6.2` of the CycloneDX specification repository in [`test/schema/cyclonedx-1.6`](../../packages/scanner-io/test/schema/cyclonedx-1.6/README.md), which records the source, the hashes and the license. The validator is `@cfworker/json-schema` 4.1.1, a dev dependency of this package only, with no dependencies of its own. `test/sbom.test.ts` validates each SBOM it builds; `test/sbom-schema.test.ts` checks the vendored files by size and SHA-256, that every `$ref` resolves and every format is covered, that the validator rejects documents the schema forbids (as a check that it runs), and validates SBOMs with hostile names, versions, script names and purls.
+
+The validator does not implement two formats the schema uses, `iri-reference` (18 uses) and `idn-email` (2 uses), and it passes formats it does not know. The tests put a function under each name that records the hit and fails the value, so a document that reaches either one fails its test. A test also fails if the validator brings its own entry for either name, or if the schema uses any other format it lacks. The SBOMs carry no URL and no e-mail address, so they reach neither. The guard lives in the test code; nothing in `src/` touches the validator.
+
 ## Not done yet
 
-- **Schema validation for gate 2.** Validation against the official CycloneDX 1.6 JSON schema needs the schema files (`bom-1.6.schema.json` with `spdx.schema.json` and `jsf-0.82.schema.json`) and a JSON Schema validator. Neither is in the repository, and adding a validator is a dependency decision. The generator returns a plain JSON value, so a schema test can validate `JSON.parse(serializeSbom(bom))` later without changing it.
 - **The scanner container** (Trivy, osv-scanner, gitleaks unmodified, no internet, outbound handlers): waits for S-07. The tool versions above must be pinned there by digest, and the samples replaced with captured output from exactly those versions.
 - **Storing SBOMs in R2**: bucket layout, object keys and lifecycle are not decided.
 - **Writing results to the graph**: `package` nodes, `CONTAINS` edges with `source: "sbom"` for container images, `vulns` rows and secret findings. The `vulns` table has `severity_rank NOT NULL`, so a writer must decide how to store an unknown severity without reporting it as "none".
