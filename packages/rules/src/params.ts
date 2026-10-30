@@ -4,13 +4,28 @@ export interface CompiledSql {
   order: string[];
 }
 
-const NAME = /[A-Za-z_][A-Za-z0-9_]*/y;
+/** A parameter name the compiler rewrites. */
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const WORD = /[A-Za-z0-9_]*/y;
+/** What SQLite still reads as part of a variable after its name: identifier characters, `(...)` and `::`. */
+const RUNS_ON = /^(?:[$\u0080-\uffff(]|::)/;
+
+/** The variable at `start` as far as SQLite could read it, enough to name it. */
+function placeholder(source: string, start: number): string {
+  WORD.lastIndex = start + 1;
+  const end = start + 1 + (WORD.exec(source)?.[0].length ?? 0);
+  return source.slice(start, end) + (RUNS_ON.exec(source.slice(end, end + 2))?.[0] ?? "");
+}
 
 /**
  * Replaces `:name` parameters with positional `?` placeholders, because
  * Durable Object SQL only documents positional parameters. Skips string
  * literals, quoted identifiers ("", ``, []) and comments. Rejects positional
- * placeholders and more than one statement.
+ * placeholders, every other variable form (`@name`, `$name`, `#name`, and
+ * a `:` that SQLite would read as more or other than `:name`), and more
+ * than one statement. Node SQLite binds such a variable NULL, so a rule
+ * with one would pass its fixtures; Durable Object SQL refuses the bindings
+ * on every run (R8 hardening).
  */
 export function compileParams(source: string): CompiledSql {
   let out = "";
@@ -60,15 +75,16 @@ export function compileParams(source: string): CompiledSql {
       continue;
     }
     if (c === "?") throw new SyntaxError("use named :parameters, not positional ?");
-    if (c === ":" && next !== ":" && source[i - 1] !== ":") {
-      NAME.lastIndex = i + 1;
-      const match = NAME.exec(source);
-      if (match) {
-        order.push(match[0]);
-        out += "?";
-        i += 1 + match[0].length;
-        continue;
+    if (c === ":" || c === "$" || c === "@" || c === "#") {
+      const token = placeholder(source, i);
+      const name = token.slice(1);
+      if (c !== ":" || !NAME.test(name)) {
+        throw new SyntaxError(`unsupported placeholder ${token}; use named :parameters`);
       }
+      order.push(name);
+      out += "?";
+      i += token.length;
+      continue;
     }
     out += c;
     i++;
