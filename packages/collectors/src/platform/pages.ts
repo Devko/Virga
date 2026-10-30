@@ -1,5 +1,6 @@
 import type { Collector, CollectorContext } from "../types.ts";
 import { type Binding, bindingTarget, type StoreLookup, storeLookup } from "./bindings.ts";
+import { inspectValue, type ValueVerdict } from "./secrets.ts";
 import { chunk, GraphBuilder, isObject, nonEmpty, sortedUnique, str, unlessGone } from "./util.ts";
 
 /** developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get */
@@ -68,6 +69,26 @@ function previewSetting(project: CfPagesProject): string {
   return setting && PREVIEW_SETTINGS.has(setting) ? setting : "all";
 }
 
+type PlainTextVar = { name: string; environment: string; kind: string } & ValueVerdict;
+
+/**
+ * Plain-text environment variables of both environments, without their
+ * values. Values are inspected here and dropped; secret_text is never read.
+ */
+function plainTextVars(configs: unknown): PlainTextVar[] {
+  const vars: PlainTextVar[] = [];
+  for (const environment of ENVIRONMENTS) {
+    const config = isObject(configs) ? configs[environment] : undefined;
+    const envVars = isObject(config) && isObject(config.env_vars) ? config.env_vars : {};
+    for (const name of Object.keys(envVars).sort()) {
+      const envVar = envVars[name];
+      if (!isObject(envVar) || envVar.type !== "plain_text") continue;
+      vars.push({ name, environment, kind: "plain_text", ...inspectValue(envVar.value) });
+    }
+  }
+  return vars;
+}
+
 async function collectProject(
   ctx: CollectorContext,
   name: string,
@@ -79,11 +100,13 @@ async function collectProject(
   if (!project) return;
   const subdomain = (str(project.subdomain) ?? `${name}.pages.dev`).toLowerCase();
   const preview = previewSetting(project);
+  const configs = project.deployment_configs;
   const projectId = g.node("pages_project", name, name, {
     production_branch:
       str(project.production_branch) ?? str(project.source?.config?.production_branch),
     subdomain,
     preview_deployments: preview,
+    plain_text_vars: plainTextVars(configs),
   });
 
   const production = { environment: "production" };
@@ -109,7 +132,6 @@ async function collectProject(
     g.edge("ROUTES_TO", previewId, projectId, { environment: "preview" });
   }
 
-  const configs = project.deployment_configs;
   for (const environment of ENVIRONMENTS) {
     const config = isObject(configs) ? configs[environment] : undefined;
     if (!isObject(config)) continue;
