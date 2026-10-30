@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -93,6 +93,19 @@ describe("deploy.ts", () => {
       expect(result.stderr).toContain(`error: apps/web/${file}: Wrangler would load it`);
       rmSync(join(root, "apps"), { recursive: true, force: true });
     }
+  });
+
+  it("R6-01: refuses a symlink under an app directory before anything runs", () => {
+    apps({});
+    mkdirSync(join(root, "apps", "web", "spa", "public"), { recursive: true });
+    writeFileSync(join(root, "id_ed25519"), "a private key");
+    symlinkSync(join(root, "id_ed25519"), join(root, "apps", "web", "spa", "public", "key.svg"));
+    const result = deploy(["--dry-run"], {});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/web holds symlinks outside node_modules: apps/web/spa/public/key.svg.",
+    );
+    expect(result.stdout).not.toContain("Configs:");
   });
 
   it("R5-03: refuses NODE_OPTIONS, whose code runs in the deploy before it could drop it", () => {

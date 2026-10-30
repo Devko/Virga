@@ -1,8 +1,16 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ConfigError, parseWorkerConfig, readWorkerConfig } from "../lib/config.ts";
+import { ConfigError, checkAppDir, parseWorkerConfig, readWorkerConfig } from "../lib/config.ts";
 import { REPO_ROOT } from "./helpers.ts";
 
 const source = {
@@ -197,6 +205,70 @@ describe("readWorkerConfig", () => {
     app({});
     expect(assets("./dist/client")).toBeNull();
     expect(readWorkerConfig(REPO_ROOT, "web")?.assetsDirectory).toBe("./dist/client");
+  });
+});
+
+describe("checkAppDir", () => {
+  let root = "";
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const web = (...parts: string[]) => join(root, "apps", "web", ...parts);
+  /** apps/web with a config, sources, a public directory and a pnpm node_modules. */
+  const checkout = () => {
+    root = mkdtempSync(join(tmpdir(), "virga-appdir-"));
+    for (const dir of ["src", "spa/public", "node_modules/.pnpm/wrangler/bin", "outside"]) {
+      mkdirSync(dir === "outside" ? join(root, dir) : web(dir), { recursive: true });
+    }
+    writeFileSync(web("wrangler.jsonc"), `{ "name": "virga-web" }`);
+    writeFileSync(web("src", "index.ts"), "export default {};");
+    writeFileSync(web("spa", "public", "favicon.svg"), "<svg/>");
+    writeFileSync(join(root, "outside", "id_ed25519"), "a private key");
+    // pnpm links every dependency; node_modules is the lockfile's, not the app's.
+    symlinkSync(web("node_modules", ".pnpm", "wrangler"), web("node_modules", "wrangler"));
+    symlinkSync("../.pnpm/wrangler/bin", web("node_modules", ".bin"));
+  };
+  const problem = () => {
+    try {
+      checkAppDir(root, "web");
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  };
+
+  it("R6-01: returns the config of an app with plain files, and null without one", () => {
+    checkout();
+    expect(checkAppDir(root, "web")).toBe(web("wrangler.jsonc"));
+    expect(checkAppDir(root, "core")).toBeNull();
+  });
+
+  it("R6-01: refuses symlinks under the app directory outside its node_modules", () => {
+    checkout();
+    symlinkSync(join(root, "outside", "id_ed25519"), web("spa", "public", "key.svg"));
+    symlinkSync(join(root, "outside"), web("src", "lib"));
+    // Only the app's own node_modules is skipped.
+    mkdirSync(web("src", "node_modules"));
+    symlinkSync(join(root, "outside"), web("src", "node_modules", "x"));
+    expect(problem()).toBe(
+      "apps/web holds symlinks outside node_modules: apps/web/spa/public/key.svg, apps/web/src/lib, apps/web/src/node_modules/x. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file",
+    );
+  });
+
+  it("R6-01: refuses an app directory that is a symlink", () => {
+    checkout();
+    renameSync(join(root, "apps", "web"), join(root, "web"));
+    symlinkSync(join(root, "web"), join(root, "apps", "web"));
+    expect(problem()).toBe(
+      "apps/web holds symlinks outside node_modules: apps/web. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file",
+    );
+  });
+
+  it("R6-01: runs the checks of readWorkerConfig that need no parsed config", () => {
+    checkout();
+    writeFileSync(web(".env"), "CLOUDFLARE_API_BASE_URL=http://127.0.0.1:18787\n");
+    expect(problem()).toContain("apps/web/.env: Wrangler would load it into its environment");
+    rmSync(web(".env"));
+    writeFileSync(join(root, "apps", "wrangler.json"), "{}");
+    expect(problem()).toContain("apps/wrangler.json is a Wrangler config above the app");
   });
 });
 

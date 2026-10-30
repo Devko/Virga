@@ -14,7 +14,7 @@
 // See docs/operator/guide.md.
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { ConfigError, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
+import { ConfigError, checkAppDir, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
 import {
   API_VARS,
@@ -120,6 +120,7 @@ async function main(): Promise<number> {
     );
   }
 
+  for (const { app } of WORKERS) checkAppDir(root, app);
   const workers: WorkerConfig[] = [];
   for (const { app, optional } of WORKERS) {
     const config = readWorkerConfig(root, app);
