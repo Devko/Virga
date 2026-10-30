@@ -49,7 +49,8 @@ export type DispatchResult = DispatchSummary & { auditPurged: number | null };
 
 /**
  * Runs on the `schedules` of its binding (hourly, UTC), starts the scans of
- * all accounts that are due, then deletes tool audit rows older than 90 days.
+ * all accounts that are due, then deletes tool audit rows older than 90 days,
+ * up to 5,000,000 rows (runAuditPurge).
  */
 export class DispatchWorkflow extends WorkflowEntrypoint<Env> {
   override async run(

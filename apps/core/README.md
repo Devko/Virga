@@ -35,7 +35,7 @@ Only the running scan that is current in the graph may write (R2-07). `writeChun
 
 `DispatchWorkflow` runs on its schedule and starts the scans that are due: active accounts whose last scan started at least `cadence_hours` UTC hour slots ago, without a running scan. Each step `dispatch:<n>` selects 100 accounts and calls `createBatch`. Instance IDs are `scan-<accountId>-<yyyymmddhh>`, so a retried step or a second dispatch in the same hour skips existing instances (code 10405) instead of starting a scan twice.
 
-Then the step `audit:purge` deletes tool audit rows older than 90 days, at most 20 batches of 5,000 per run ([src/audit.ts](src/audit.ts)). A purge that still fails after the step's retries is logged and returns `auditPurged: null` in the result; it does not fail the dispatch.
+Then the steps `audit:purge:<n>` delete tool audit rows older than 90 days before the dispatch time, oldest first ([src/audit.ts](src/audit.ts)). Each step deletes at most 20 batches of 5,000 rows; another step follows while the last one deleted a full 100,000, up to 50 steps. So the purge deletes up to 5,000,000 rows an hour in at most 1,000 D1 statements, far inside the Workflow limits of 10,000 steps and 10,000 subrequests per instance. One MCP request can write up to 100 audit rows and audit writes are not rate limited (TM-13), so this is the bound: the purge keeps up with 5,000,000 new rows an hour on average, and a burst above that is deleted at that rate after it expires, so its rows outlive the 90 days by at most their number divided by 5,000,000 hours. A purge step that still fails after its retries is logged and ends the purge with `auditPurged: null` in the result; it does not fail the dispatch, and the next hour goes on.
 
 ## Entrypoints
 

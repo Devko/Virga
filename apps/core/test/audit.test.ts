@@ -6,6 +6,8 @@ import {
   checkToolCall,
   listToolCalls,
   PURGE_BATCH,
+  PURGE_STEP_ROWS,
+  PURGE_STEPS,
   purgeToolCalls,
   recordToolCall,
   runAuditPurge,
@@ -162,7 +164,7 @@ describe("tool audit trail", () => {
       at,
     );
     expect(purged).toBeGreaterThanOrEqual(1);
-    expect(steps.names()).toEqual(["audit:purge"]);
+    expect(steps.names()).toEqual(["audit:purge:1"]);
     expect(await count("outcome = 'stale'")).toBe(0);
 
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -175,9 +177,85 @@ describe("tool audit trail", () => {
       at,
     );
     expect(result).toBeNull();
-    expect(failing.record("audit:purge")?.attempts).toBe(6);
+    expect(failing.record("audit:purge:1")?.attempts).toBe(6);
     expect(error).toHaveBeenCalledWith("audit purge failed", "Error");
     error.mockRestore();
+  });
+
+  describe("Audit amplification: the purge keeps up with a full hour", () => {
+    const at = Date.UTC(2026, 9, 30, 11, 17);
+    /** A purge that deletes the given counts, one per step, and records its cutoffs. */
+    const scripted = (counts: number[]) => {
+      const cutoffs: number[] = [];
+      return {
+        cutoffs,
+        purge: async (before: number) => {
+          cutoffs.push(before);
+          return counts.shift() ?? 0;
+        },
+      };
+    };
+
+    it("Audit amplification: runs another step while a step deleted a full purge", async () => {
+      const steps = fakeStep();
+      const { purge, cutoffs } = scripted([PURGE_STEP_ROWS, PURGE_STEP_ROWS, 7]);
+      expect(await runAuditPurge(steps.step, purge, at)).toBe(2 * PURGE_STEP_ROWS + 7);
+      expect(steps.names()).toEqual(["audit:purge:1", "audit:purge:2", "audit:purge:3"]);
+      // One cutoff for the whole run, so a replay deletes the same rows.
+      expect(new Set(cutoffs)).toEqual(new Set([at - AUDIT_RETENTION_MS]));
+    });
+
+    it("Audit amplification: stops after PURGE_STEPS steps, and the next hour goes on", async () => {
+      const steps = fakeStep();
+      const { purge } = scripted(Array(PURGE_STEPS + 5).fill(PURGE_STEP_ROWS));
+      expect(await runAuditPurge(steps.step, purge, at)).toBe(PURGE_STEPS * PURGE_STEP_ROWS);
+      expect(steps.names()).toHaveLength(PURGE_STEPS);
+      expect(steps.names().at(-1)).toBe(`audit:purge:${PURGE_STEPS}`);
+      // 5,000,000 rows an hour in at most 1,000 statements.
+      expect(PURGE_STEPS * PURGE_STEP_ROWS).toBe(5_000_000);
+      expect((PURGE_STEPS * PURGE_STEP_ROWS) / PURGE_BATCH).toBe(1000);
+    });
+
+    it("Audit amplification: a step that fails ends the purge with null, and logs its error name", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const steps = fakeStep();
+      let calls = 0;
+      const result = await runAuditPurge(
+        steps.step,
+        async () => {
+          calls++;
+          if (calls > 1) throw new Error("D1 unavailable");
+          return PURGE_STEP_ROWS;
+        },
+        at,
+      );
+      expect(result).toBeNull();
+      expect(steps.names()).toEqual(["audit:purge:1", "audit:purge:2"]);
+      expect(error).toHaveBeenCalledWith("audit purge failed", "Error");
+      error.mockRestore();
+    });
+
+    it("Audit amplification: deletes more rows than one step does in D1, and none at the cutoff", async () => {
+      await env.INDEX.prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+         INSERT INTO tool_audit (at, identity, identity_type, channel, action, account_id, outcome)
+         SELECT ? - i, 'flood@example.com', 'email', 'mcp', 'list_findings', NULL, 'flood' FROM n`,
+      )
+        .bind(PURGE_STEP_ROWS + 10, at - AUDIT_RETENTION_MS)
+        .run();
+      await recordToolCall(env.INDEX, entry({ outcome: "kept" }), at - AUDIT_RETENTION_MS);
+      const kept = await count("outcome = 'kept'");
+      const steps = fakeStep();
+      const purged = await runAuditPurge(
+        steps.step,
+        (before) => purgeToolCalls(env.INDEX, before),
+        at,
+      );
+      expect(purged).toBeGreaterThanOrEqual(PURGE_STEP_ROWS + 10);
+      expect(steps.names()).toEqual(["audit:purge:1", "audit:purge:2"]);
+      expect(await count("outcome = 'flood'")).toBe(0);
+      expect(await count("outcome = 'kept'")).toBe(kept);
+    }, 60_000);
   });
 
   it("is purged by the hourly DispatchWorkflow", async () => {
