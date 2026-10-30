@@ -64,7 +64,7 @@ export function AccountsTable({ accounts }: { accounts: AccountRow[] }) {
 const SEVERITIES: FindingSeverity[] = ["critical", "high", "medium", "low", "info"];
 
 /** A removal that began and did not finish (R5-08); the account page offers to repeat it. */
-function RemovalPending() {
+export function RemovalPending() {
   return (
     <div className="problem" role="status">
       <h2>Removal pending</h2>
@@ -138,7 +138,13 @@ export function SummaryView({ summary }: { summary: ScanSummaryView }) {
           {graph.coverage.map((c) => (
             <tr key={c.resourceClass}>
               <td>{c.resourceClass}</td>
-              <td className={`coverage coverage-${c.status}`}>{c.status.replace("_", " ")}</td>
+              <td className={`coverage coverage-${c.status}`}>
+                {c.status.replace("_", " ")}
+                {/* Every chunk was written, but one left resources out (decision 0005). */}
+                {c.status === "partial" && c.chunksDone === c.chunksTotal && (
+                  <div className="muted">resources left out</div>
+                )}
+              </td>
               <td>
                 {c.chunksDone}/{c.chunksTotal}
               </td>

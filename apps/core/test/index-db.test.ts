@@ -85,6 +85,7 @@ describe("scan runs", () => {
 
     // An older scan that finishes late does not move the schedule back.
     const older = `scan-${accountId}-2026102906`;
+    await index.beginRun({ id: older, accountId, startedAt: AT - HOUR });
     await index.finishRun({
       id: older,
       accountId,

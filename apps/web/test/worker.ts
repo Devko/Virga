@@ -18,6 +18,7 @@ import {
   hugeNeighborhood,
   neighborhood,
   REMOVING_ACCOUNT,
+  REMOVING_UNREADABLE,
   removingSummary,
   summary,
   TOKEN_REMOVAL_FAILS,
@@ -44,6 +45,7 @@ export class StubGraphReader extends WorkerEntrypoint<Env> implements GraphReade
   async getScanSummary(accountId: string) {
     record("getScanSummary", [accountId]);
     if (accountId === REMOVING_ACCOUNT) return removingSummary;
+    if (accountId === REMOVING_UNREADABLE) throw new Error(`graph of ${accountId} is half deleted`);
     return known(accountId) ? summary : null;
   }
 
@@ -98,7 +100,10 @@ export class StubAdmin extends WorkerEntrypoint<Env> implements AdminRpc {
   async removeAccount(accountId: string) {
     record("removeAccount", [accountId]);
     if (accountId === ACCOUNT_REMOVAL_FAILS) throw new Error("index unavailable");
-    return { removed: known(accountId) || accountId === REMOVING_ACCOUNT };
+    return {
+      removed:
+        known(accountId) || accountId === REMOVING_ACCOUNT || accountId === REMOVING_UNREADABLE,
+    };
   }
 }
 

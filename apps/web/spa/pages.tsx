@@ -21,6 +21,7 @@ import {
   FindingsTable,
   IntakeResult,
   NodeDetails,
+  RemovalPending,
   RemovalResult,
   SummaryView,
   scanMessage,
@@ -238,8 +239,23 @@ function RemoveAccount({
   );
 }
 
+/** Core could not read the summary (502), e.g. the half deleted graph of an account being removed. */
+const unreadable = (summary: Loaded<unknown>) =>
+  summary.error instanceof ApiError && summary.error.status === 502;
+
+/** The account as the accounts list shows it. The list reads only core's index, never the graph. */
+export async function listedAccount(accountId: string): Promise<AccountRow | null> {
+  return (await api.accounts()).find((a) => a.id === accountId) ?? null;
+}
+
 export function AccountPage({ accountId, me }: { accountId: string; me: Me | undefined }) {
   const summary = useLoad(() => api.summary(accountId), [accountId]);
+  // Only when the summary fails: the list then says whether a removal is pending.
+  const failed = unreadable(summary);
+  const listed = useLoad(
+    () => (failed ? listedAccount(accountId) : Promise.resolve(null)),
+    [accountId, failed],
+  );
   const [removed, setRemoved] = useState<{ accountId: string; result: RemovalView } | null>(null);
   if (removed?.accountId === accountId) {
     return (
@@ -258,6 +274,7 @@ export function AccountPage({ accountId, me }: { accountId: string; me: Me | und
       accountId={accountId}
       me={me}
       summary={summary}
+      listed={listed.data}
       onRemoved={(result) => setRemoved({ accountId, result })}
     />
   );
@@ -268,22 +285,29 @@ export function AccountView({
   accountId,
   me,
   summary,
+  listed,
   onRemoved,
 }: {
   accountId: string;
   me: Me | undefined;
   summary: Loaded<ScanSummaryView>;
+  /** The account as the accounts list shows it; loaded only when the summary fails with 502. */
+  listed?: AccountRow | null;
   onRemoved: (result: RemovalView) => void;
 }) {
   // Core starts no scan of an account being removed; repeating the removal finishes it (R5-08).
-  const admin = me?.admin === true && summary.data !== undefined;
-  const removing = summary.data?.account.status === "removing";
+  // Its graph may be half deleted, so its summary can fail with 502; the list
+  // then still says `removing`. The API checks the admin again on removal.
+  const pending = unreadable(summary) && listed?.id === accountId && listed.status === "removing";
+  const admin = me?.admin === true && (summary.data !== undefined || pending);
+  const removing = summary.data ? summary.data.account.status === "removing" : pending;
   return (
     <>
       <p>
         <Link to={paths.accounts()}>← Accounts</Link>
       </p>
       <Pending loaded={summary}>{(data) => <SummaryView summary={data} />}</Pending>
+      {pending && <RemovalPending />}
       {admin && !removing && <ScanButton accountId={accountId} onStarted={summary.reload} />}
       <FindingsSection accountId={accountId} />
       {admin && <RemoveAccount accountId={accountId} again={removing} onRemoved={onRemoved} />}

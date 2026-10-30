@@ -160,6 +160,18 @@ describe("MCP server", () => {
     expect(unknown.content[0]?.text).toMatch(/^Not found/);
   });
 
+  it("get_scan_summary describes a `partial` class: a failed chunk or resources left out (decision 0005)", async () => {
+    const list = (await parse(await post("tools/list"))) as {
+      result: { tools: { name: string; description: string }[] };
+    };
+    const described = list.result.tools.find((t) => t.name === "get_scan_summary")?.description;
+    expect(described).toMatch(/`partial`.*chunks were written before one failed/s);
+    expect(described).toMatch(/every chunk was written but one left resources out/);
+    expect(described).toContain("`truncated (<count>): <reasons>`");
+    expect(described).toMatch(/not swept.*require it are not_evaluated/s);
+    expect(described).toMatch(/neither open nor resolve/);
+  });
+
   it("list_findings applies MCP limits and passes filters", async () => {
     const data = untrusted(
       await tool("list_findings", { account_id: ACCOUNT, status: ["open"], severity: ["high"] }),

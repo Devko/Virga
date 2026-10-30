@@ -2,6 +2,7 @@ import { createExecutionContext, introspectWorkflow } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { createReader } from "@virga/cf-api";
 import { fixtureTransport } from "@virga/cf-api/testing";
+import type { Collector } from "@virga/collectors";
 import { SCHEMA_VERSION } from "@virga/graph";
 import { describe, expect, it } from "vitest";
 import { Admin } from "../src/admin.ts";
@@ -361,6 +362,90 @@ describe("Admin.removeAccount", () => {
       expect(await stub.beginScan(`scan-${accountId}-new`, "full", LATER)).toEqual({
         started: true,
       });
+    });
+  });
+
+  describe("R6-07: a scan of the removed account never sets last_scan_at of the account added again", () => {
+    const HOUR = 3_600_000;
+    const reader = (id: string) => createReader(fixtureTransport(apiRoutes(id, initialState())));
+    const scheduled = async (accountId: string) => ({
+      lastScanAt: (await getAccount(env.INDEX, accountId))?.lastScanAt,
+      due: (await allDue(Date.now() + 2 * HOUR)).includes(accountId),
+    });
+
+    it("R6-07: a scan that is refused after the account was removed and added again leaves the new account due", async () => {
+      const accountId = newAccountId();
+      await setupAccount(accountId);
+      // Began before the removal, so before the account was added again.
+      const startedAt = Date.now() - 60_000;
+      const readd: Collector<never> = {
+        resourceClass: "storage",
+        permissions: [],
+        async plan() {
+          return [[]];
+        },
+        async collect() {
+          await admin.removeAccount(accountId);
+          await admin.addAccount({ id: accountId, name: "Production" });
+          return { nodes: [], edges: [] };
+        },
+      };
+
+      const old = await runScan(
+        {
+          step: fakeStep().step,
+          graph: () => graphOf(accountId),
+          index: d1ScanIndex(env.INDEX),
+          reader,
+          collectors: [readd],
+        },
+        { accountId, scanId: `scan-${accountId}-old`, now: startedAt },
+      );
+      expect(old).toMatchObject({
+        status: "failed",
+        detail: expect.stringMatching(/StaleScanError/),
+      });
+      expect(await runs(accountId)).toEqual([]);
+      expect(await scheduled(accountId)).toEqual({ lastScanAt: null, due: true });
+
+      // The first scan of the account added again sets it as before.
+      const now = Date.now();
+      const first = await runScan(
+        {
+          step: fakeStep().step,
+          graph: () => graphOf(accountId),
+          index: d1ScanIndex(env.INDEX),
+          reader,
+          collectors: [dnsStub, storageStub],
+        },
+        { accountId, scanId: `scan-${accountId}-new`, now },
+      );
+      expect(first.status).not.toBe("failed");
+      expect(await scheduled(accountId)).toEqual({ lastScanAt: now, due: false });
+    });
+
+    it("R6-07: a run the index got after the account was added again, but which began before, leaves the new account due", async () => {
+      const { accountId, stub, index } = await scannedAccount();
+      const scanId = `scan-${accountId}-old`;
+      const startedAt = Date.now() - 60_000;
+      // The begin step started the scan in the graph, then the account was
+      // removed and added again before the step wrote the index row.
+      await stub.beginScan(scanId, "full", startedAt);
+      await admin.removeAccount(accountId);
+      await admin.addAccount({ id: accountId, name: "Production" });
+      await index.beginRun({ id: scanId, accountId, startedAt });
+      expect(await runs(accountId)).toEqual([{ id: scanId, status: "running" }]);
+
+      await index.finishRun({
+        id: scanId,
+        accountId,
+        startedAt,
+        finishedAt: Date.now(),
+        status: "failed",
+        summary: { scanId, accountId, status: "failed" } as ScanSummary,
+      });
+      expect(await runs(accountId)).toEqual([{ id: scanId, status: "failed" }]);
+      expect(await scheduled(accountId)).toEqual({ lastScanAt: null, due: true });
     });
   });
 });
