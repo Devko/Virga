@@ -2,9 +2,24 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPO_ROOT } from "./helpers.ts";
+import {
+  actions,
+  CHECK_RUNS,
+  deploys,
+  gated,
+  gateProblems,
+  type Job,
+  keysIn,
+  needs,
+  parseWorkflow,
+  plain,
+  runs,
+  ungated,
+  type Workflow,
+} from "./workflow-guard.ts";
 
 const guide = readFileSync(join(REPO_ROOT, "docs", "operator", "guide.md"), "utf8");
-const ci = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+const ci = parseWorkflow(readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8"));
 
 /** The text of a section of the guide, from its heading to the next heading of any level. */
 function section(heading: string): string {
@@ -28,103 +43,46 @@ const blocks = (text: string, language: string) =>
     (match) => match[1] ?? "",
   );
 
-/** The text of each job under `jobs:`, by job name. */
-function jobs(workflow: string): Map<string, string> {
-  const result = new Map<string, string>();
-  let name: string | undefined;
-  const at = workflow.indexOf("\njobs:\n");
-  expect(at).toBeGreaterThan(-1);
-  for (const line of workflow.slice(at).split("\n").slice(2)) {
-    const header = /^ {2}([\w-]+):$/.exec(line);
-    if (header?.[1] !== undefined) {
-      name = header[1];
-      result.set(name, "");
-    } else if (name !== undefined && line.startsWith("    ")) {
-      result.set(name, `${result.get(name)}${line}\n`);
-    }
-  }
-  return result;
-}
-
-/** The jobs a job needs, from `needs: a` or `needs: [a, b]`. */
-function needs(job: string): string[] {
-  const [, one, list] = /^ {4}needs: (?:([\w-]+)|\[([^\]]*)\])$/m.exec(job) ?? [];
-  if (one !== undefined) return [one];
-  return list === undefined ? [] : list.split(",").map((name) => name.trim());
-}
-
-/**
- * A job that installs packages or runs a package manager: pnpm/action-setup
- * (which installs the pnpm that package.json names), a setup-node package
- * cache, or any pnpm, npm, npx, yarn or corepack command.
- */
-const INSTALLS = /uses: pnpm\/action-setup@|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
-/** A job that runs the deploy, which runs the builds and Wrangler from node_modules. */
-const DEPLOYS = /\bscripts\/deploy\.ts\b/;
-
-/** Jobs other than release-age that install or deploy without waiting for it. */
-const ungated = (workflow: string) =>
-  [...jobs(workflow)]
-    .filter(([name, job]) => name !== "release-age" && (INSTALLS.test(job) || DEPLOYS.test(job)))
-    .filter(([, job]) => !needs(job).includes("release-age"))
-    .map(([name]) => name);
-
-/**
- * Ways a workflow runs a gated job although the check failed (H-1):
- * continue-on-error in the release-age job or its steps, and a job-level
- * `if:` of a job that installs or deploys with a status function, which
- * GitHub evaluates without case.
- */
-function bypasses(workflow: string): string[] {
-  const found: string[] = [];
-  for (const [name, job] of jobs(workflow)) {
-    if (name === "release-age") {
-      if (/\bcontinue-on-error\s*:/.test(job)) found.push(`${name}: continue-on-error`);
-      continue;
-    }
-    if (!INSTALLS.test(job) && !DEPLOYS.test(job)) continue;
-    // The job-level if, with the lines of a block scalar after it.
-    const lines = job.split("\n");
-    const at = lines.findIndex((line) => /^ {4}if:/.test(line));
-    if (at === -1) continue;
-    const condition = [lines[at] ?? ""];
-    for (const line of lines.slice(at + 1)) {
-      if (!/^ {5,}\S/.test(line)) break;
-      condition.push(line);
-    }
-    if (/\b(?:always|failure|cancelled)\s*\(/i.test(condition.join("\n")))
-      found.push(`${name}: if`);
-  }
-  return found;
+/** A job of a parsed workflow. */
+function jobOf(workflow: Workflow, name: string): Job {
+  const found = workflow.jobs.get(name);
+  expect(found, name).toBeDefined();
+  return found as Job;
 }
 
 describe('operator guide, "Deploy from CI"', () => {
   const workflow = blocks(section("### Deploy from CI"), "yaml")[0] ?? "";
+  const example = parseWorkflow(workflow);
+  const IGNORED =
+    "release-age has continue-on-error, so the jobs that need it run when the check fails";
+  const RUNS = "job deploy has an if: that runs it when release-age failed";
 
   it("R8-04: holds one example workflow", () => {
     expect(blocks(section("### Deploy from CI"), "yaml")).toHaveLength(1);
     expect(workflow).toContain("\njobs:\n");
-    expect([...jobs(workflow).keys()]).toContain("deploy");
+    expect([...example.jobs.keys()]).toContain("deploy");
   });
 
   it("R8-04: runs the release-age check in its own job, which installs nothing", () => {
-    const check = jobs(workflow).get("release-age") ?? "";
-    expect(check).toContain("- run: node scripts/check-release-age.ts\n");
-    expect(check).not.toMatch(INSTALLS);
-    expect(check).not.toMatch(DEPLOYS);
+    const check = jobOf(example, "release-age");
+    expect(runs(check)).toHaveLength(1);
+    expect(CHECK_RUNS.has(runs(check)[0] ?? "")).toBe(true);
+    expect(gated(check)).toBe(false);
     expect(needs(check)).toEqual([]);
   });
 
   it("R8-04: every job that installs or deploys needs the release-age job", () => {
-    const gated = [...jobs(workflow)].filter(
-      ([name, job]) => name !== "release-age" && (INSTALLS.test(job) || DEPLOYS.test(job)),
+    const gatedJobs = [...example.jobs.values()].filter(
+      (job) => job.name !== "release-age" && gated(job),
     );
-    expect(gated.map(([name]) => name)).toContain("deploy");
-    expect(ungated(workflow)).toEqual([]);
+    expect(gatedJobs.map(({ name }) => name)).toContain("deploy");
+    expect(ungated(example)).toEqual([]);
   });
 
   it("R8-04: finds a job that installs or deploys before the check", () => {
-    expect(ungated(workflow.replace(/^ {4}needs: release-age\n/m, ""))).toEqual(["deploy"]);
+    const unneeded = workflow.replace(/^ {4}needs: release-age\n/m, "");
+    expect(unneeded).not.toBe(workflow);
+    expect(ungated(parseWorkflow(unneeded))).toEqual(["deploy"]);
     const synthetic = [
       "jobs:",
       "  release-age:",
@@ -144,31 +102,32 @@ describe('operator guide, "Deploy from CI"', () => {
       "      - run: pnpm install --frozen-lockfile && node scripts/deploy.ts",
       "",
     ].join("\n");
-    expect(ungated(`\n${synthetic}`)).toEqual(["deploy-only", "cached"]);
+    expect(ungated(parseWorkflow(synthetic))).toEqual(["deploy-only", "cached"]);
   });
 
   it("H-1: neither lets the check fail nor runs the deploy job when it failed", () => {
-    expect(bypasses(workflow)).toEqual([]);
-    const deploy = jobs(workflow).get("deploy") ?? "";
-    expect(deploy).not.toMatch(/^ {4}if:/m);
-    expect(jobs(workflow).get("release-age")).not.toMatch(/continue-on-error/);
+    expect(gateProblems(workflow)).toEqual([]);
+    const deploy = jobOf(example, "deploy");
+    expect(deploys(deploy)).toBe(true);
+    expect([...deploy.keys.entries.keys()].map((key) => key.toLowerCase())).not.toContain("if");
+    expect(keysIn(jobOf(example, "release-age").keys)).not.toContain("continue-on-error");
   });
 
   it("H-1: finds continue-on-error in the check and a status function in a gated job's if", () => {
     const withCheck = (job: string) =>
       workflow.replace("      - run: node scripts/check-release-age.ts\n", job);
     expect(
-      bypasses(
+      gateProblems(
         withCheck(
           "      - run: node scripts/check-release-age.ts\n        continue-on-error: true\n",
         ),
       ),
-    ).toEqual(["release-age: continue-on-error"]);
+    ).toEqual([IGNORED]);
     expect(
-      bypasses(
+      gateProblems(
         workflow.replace("  release-age:\n", "  release-age:\n    continue-on-error: true\n"),
       ),
-    ).toEqual(["release-age: continue-on-error"]);
+    ).toEqual([IGNORED]);
     /** A GitHub expression, `${{ body }}`. */
     const expression = (body: string) => `$\{{ ${body} }}`;
     for (const condition of [
@@ -178,37 +137,57 @@ describe('operator guide, "Deploy from CI"', () => {
       "Failure()",
       expression("cancelled ()"),
       "|\n      success() ||\n      failure()",
+      "success() || true",
     ]) {
       const changed = workflow.replace(
         "    needs: release-age\n",
         `    needs: release-age\n    if: ${condition}\n`,
       );
-      expect(bypasses(changed), condition).toEqual(["deploy: if"]);
+      expect(gateProblems(changed), condition).toEqual([RUNS]);
     }
     // success() and other conditions run the job only when the check passed.
     const passing = workflow.replace(
       "    needs: release-age\n",
       `    needs: release-age\n    if: ${expression("success() && github.ref == 'refs/heads/main'")}\n`,
     );
-    expect(bypasses(passing)).toEqual([]);
+    expect(gateProblems(passing)).toEqual([]);
+  });
+
+  it("R10-03: finds the review's variants in the example: a 5-space release-age job, an escaped always()", () => {
+    // (a) The release-age job's keys at 5 spaces, with continue-on-error: true.
+    const fiveSpaces = workflow.replace(
+      "    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    steps:\n",
+      "     runs-on: ubuntu-24.04\n     timeout-minutes: 10\n     continue-on-error: true\n     steps:\n",
+    );
+    expect(fiveSpaces).not.toBe(workflow);
+    expect(gateProblems(fiveSpaces)).toEqual([IGNORED]);
+    // (b) The deploy job's if: is "\x61lways()", which YAML reads as always().
+    const escaped = workflow.replace(
+      "    needs: release-age\n",
+      '    needs: release-age\n    if: "\\x61lways()"\n',
+    );
+    expect(escaped).not.toBe(workflow);
+    expect(gateProblems(escaped)).toEqual([RUNS]);
   });
 
   it("R8-04: the deploy job restores no package cache", () => {
-    const deploy = jobs(workflow).get("deploy") ?? "";
-    expect(deploy).toMatch(DEPLOYS);
-    expect(deploy).not.toMatch(/^\s+cache(?:-dependency-path)?:/m);
-    expect(deploy).not.toMatch(/uses: actions\/cache/);
+    const deploy = jobOf(example, "deploy");
+    expect(deploys(deploy)).toBe(true);
+    const keys = keysIn(deploy.keys).map((key) => key.toLowerCase());
+    expect(keys).not.toContain("cache");
+    expect(keys).not.toContain("cache-dependency-path");
+    expect(actions(example).filter((action) => /^actions\/cache@/i.test(action))).toEqual([]);
   });
 
   it("R8-04: pins every action by the commit SHA that CI uses", () => {
-    const uses = [...workflow.matchAll(/uses: (\S+)/g)].map((match) => match[1] ?? "");
-    const pinned = new Set([...ci.matchAll(/uses: (\S+)/g)].map((match) => match[1]));
+    const uses = actions(example);
+    const pinned = new Set(actions(ci));
     expect(uses.length).toBeGreaterThan(0);
     for (const action of uses) {
       expect(action).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
       expect(pinned.has(action), action).toBe(true);
     }
-    expect(workflow).toContain("\npermissions:\n  contents: read\n");
+    expect(plain(example.top.entries.get("permissions"))).toEqual({ contents: "read" });
   });
 });
 
