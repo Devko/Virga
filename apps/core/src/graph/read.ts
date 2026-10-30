@@ -13,6 +13,8 @@ import {
   type GraphSummary,
   type Neighborhood,
   type NodeView,
+  type RuleRunStatus,
+  type RuleRunView,
 } from "./views.ts";
 
 /** Read queries behind GraphReader. Pure reads; nothing here writes. */
@@ -34,6 +36,20 @@ const parseJson = (text: unknown): JsonRecord => {
 
 const str = (value: unknown): string | null => (typeof value === "string" ? value : null);
 const int = (value: unknown): number | null => (typeof value === "number" ? value : null);
+
+// rule_runs.missing is a JSON array of input names, or null; it has no json_valid check.
+const stringList = (text: unknown): string[] => {
+  if (typeof text !== "string") return [];
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
+// As evaluateRules caps it (graph contract, scan semantics).
+const MAX_RULE_ERROR = 500;
 
 const NODE_COLUMNS = "id, type, native_id, class, name, props, first_seen, changed_at, deleted_at";
 const EDGE_COLUMNS = "id, type, src, dst, key, class, props";
@@ -92,6 +108,18 @@ function findingView(row: Row): FindingView {
   };
 }
 
+function ruleRunView(row: Row): RuleRunView {
+  const error = str(row.error);
+  return {
+    ruleId: String(row.rule_id),
+    status: row.status as RuleRunStatus,
+    hits: Number(row.hits),
+    undecided: Number(row.undecided),
+    missing: stringList(row.missing),
+    error: error === null ? null : untrusted(error.slice(0, MAX_RULE_ERROR)),
+  };
+}
+
 export function graphSummary(db: SqlRunner): GraphSummary {
   const scan =
     db.query(
@@ -145,6 +173,15 @@ export function graphSummary(db: SqlRunner): GraphSummary {
           scanId,
         )
       : {},
+    ruleRuns: scanId
+      ? db
+          .query(
+            `SELECT rule_id, status, hits, undecided, missing, error FROM rule_runs
+             WHERE scan_id = ? ORDER BY rule_id`,
+            scanId,
+          )
+          .map(ruleRunView)
+      : [],
   };
 }
 
