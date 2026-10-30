@@ -14,6 +14,7 @@ import {
   V_MY_1,
   V_MY_2,
   V_MY_3,
+  versionMy2,
 } from "./fixtures/workers.ts";
 import { ZONE_A, ZONE_B } from "./fixtures/zones.ts";
 import {
@@ -133,8 +134,8 @@ describe("workers collector", () => {
         created_on: "2024-09-23T09:00:00.000Z",
         source: "wrangler",
         plain_text_vars: [
-          { name: "API_BASE", looks_secret: false, secret_pattern: null },
-          { name: "CF_TOKEN", looks_secret: true, secret_pattern: "cfat_" },
+          { name: "API_BASE", kind: "plain_text", looks_secret: false, secret_pattern: null },
+          { name: "CF_TOKEN", kind: "plain_text", looks_secret: true, secret_pattern: "cfat_" },
         ],
         secret_names: ["STRIPE_KEY"],
       },
@@ -148,6 +149,48 @@ describe("workers collector", () => {
     const json = JSON.stringify(output);
     expect(json).not.toContain(FAKE_TOKEN);
     expect(json).not.toContain(PLAIN_URL);
+  });
+
+  it("R2-09: inspects every string of a json binding and keeps only the verdict", async () => {
+    const awsKey = ["AKIA", "IOSFODNN7", "EXAMPLE"].join("");
+    const bindings = [
+      // wrangler uploads a [vars] entry with an object value as a json binding.
+      { name: "CONFIG", type: "json", json: { api_key: FAKE_TOKEN } },
+      { name: "NESTED", type: "json", json: { a: [1, true, null, { b: ["x", awsKey] }] } },
+      { name: "SETTINGS", type: "json", json: { region: "eu", retries: 3, debug: false } },
+      { name: "KEYED", type: "json", json: { [FAKE_TOKEN]: true } },
+      { name: "BARE", type: "json", json: FAKE_TOKEN },
+      { name: "NULL", type: "json", json: null },
+      // Without a value nothing was inspected: unknown, not clean.
+      { name: "EMPTY", type: "json" },
+      { name: "UNSET", type: "plain_text" },
+      { name: "API_BASE", type: "plain_text", text: PLAIN_URL },
+    ];
+    const version = { ...versionMy2, resources: { ...versionMy2.resources, bindings } };
+    const { output } = await run(workersCollector, {
+      ...routes,
+      [`${scripts}/my-worker/versions/${V_MY_2}`]: envelope(version),
+    });
+    const verdict = (kind: string, looks: boolean | null, pattern: string | null = null) => ({
+      kind,
+      looks_secret: looks,
+      secret_pattern: pattern,
+    });
+    expect(node(output, `worker_version:${V_MY_2}`).props?.plain_text_vars).toEqual([
+      { name: "API_BASE", ...verdict("plain_text", false) },
+      { name: "BARE", ...verdict("json", true, "cfat_") },
+      { name: "CONFIG", ...verdict("json", true, "cfat_") },
+      { name: "EMPTY", ...verdict("json", null) },
+      { name: "KEYED", ...verdict("json", true, "cfat_") },
+      { name: "NESTED", ...verdict("json", true, "aws_access_key") },
+      { name: "NULL", ...verdict("json", false) },
+      { name: "SETTINGS", ...verdict("json", false) },
+      { name: "UNSET", ...verdict("plain_text", null) },
+    ]);
+    const json = JSON.stringify(output);
+    for (const value of [FAKE_TOKEN, awsKey, PLAIN_URL, "region"]) {
+      expect(json).not.toContain(value);
+    }
   });
 
   it("emits BINDS edges for every binding with a node, keyed by binding name", async () => {

@@ -71,3 +71,46 @@ export function detectSecret(value: string): SecretVerdict {
   }
   return { looks_secret: false, secret_pattern: null };
 }
+
+const rank = (verdict: SecretVerdict): number =>
+  verdict.secret_pattern === null
+    ? SECRET_PATTERNS.length
+    : SECRET_PATTERNS.indexOf(verdict.secret_pattern);
+
+/**
+ * The verdict for a JSON value, such as a `json` binding. Every string in it,
+ * object keys included, is tested on its own, and the strongest pattern wins
+ * whatever the order. The walk keeps its own stack, so deep nesting cannot
+ * overflow the call stack.
+ */
+export function detectSecretIn(value: unknown): SecretVerdict {
+  let best: SecretVerdict = { looks_secret: false, secret_pattern: null };
+  const test = (text: string) => {
+    const verdict = detectSecret(text);
+    if (rank(verdict) < rank(best)) best = verdict;
+  };
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (typeof item === "string") {
+      test(item);
+    } else if (Array.isArray(item)) {
+      for (const v of item) pending.push(v);
+    } else if (item !== null && typeof item === "object") {
+      for (const [key, v] of Object.entries(item)) {
+        test(key);
+        pending.push(v);
+      }
+    }
+  }
+  return best;
+}
+
+/** A verdict, with nulls when there was no value to inspect: unknown, not clean. */
+export type ValueVerdict = {
+  looks_secret: boolean | null;
+  secret_pattern: SecretPattern | null;
+};
+
+export const inspectValue = (value: unknown): ValueVerdict =>
+  value === undefined ? { looks_secret: null, secret_pattern: null } : detectSecretIn(value);
