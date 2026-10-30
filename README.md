@@ -50,7 +50,7 @@ One Durable Object per scanned account holds the graph. Collectors fill it. Eval
 
 ## Development
 
-Requirements: Node.js 22.18 or later (runs TypeScript sources directly) and pnpm (via `corepack enable`).
+Requirements: Node.js 22.18 or later (runs TypeScript sources directly; CI runs the version in `.nvmrc`) and pnpm (via `corepack enable`).
 
 ```sh
 pnpm install
