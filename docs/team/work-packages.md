@@ -148,7 +148,12 @@ Round 8 status (2026-10-30): all packages are merged and verified. The cloud ses
 | `docs-4` | Phase 1 backlog 15: threat model v1; phase 4: the non-affiliation notice in the README and docs (D-01), versioning policy, changelog | `README.md`, a new `docs/architecture/threat-model.md`, a new `docs/release/**`, a new `CHANGELOG.md` | Every trust boundary has its threats, controls with file references, and residual risks with review IDs |
 | `review-9` | Read-only review of the round 9 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
 
-Phase 2 logic (the `vulns` table, advisory matching, CycloneDX SBOMs, scanner output validation) starts as its own packages once `rules-6` is merged, because it changes `packages/graph`.
+Phase 2 logic started once `rules-6` was merged, because it changes `packages/graph`:
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `vulns-1` | OSV advisory matching for npm purls, CVSS severity rank, KEV, the rematch of existing `vulns` rows; an unknown match keeps `vulns` incomplete | a new `packages/vulns/**`, the vulns functions in `packages/graph/src/write.ts`, a new `docs/architecture/vulns.md` | Table-driven range tests; a match whose version or severity cannot be read is never written as harmless |
+| `scanner-io-1` | Strict readers for osv-scanner, Trivy and gitleaks output (gate 6, with a seeded fuzz test), secrets masked at the boundary, CycloneDX 1.6 SBOMs (schema validation for gate 2 pending) | a new `packages/scanner-io/**`, a new `docs/architecture/scanner-io.md` | A report that breaks a type or a limit is rejected as a whole; no secret beyond its prefix in any output |
 
 Not in round 9: the leads R8-06 to R8-11 wait for an observed API shape (S-05 and a test account), and the hardening notes outside these packages stay listed in the round 8 verification.
 
