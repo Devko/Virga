@@ -80,8 +80,50 @@ export function describeDatabases(ctx: Context, workers: readonly WorkerConfig[]
 }
 
 /**
+ * Checks the D1 bindings against the account's databases. Wrangler binds and
+ * migrates by database_id, so a database_id must name the database of its
+ * database_name, and each database, by UUID, belongs to one Worker (D-08,
+ * R3-06). Otherwise a binding named after the index could reach the vault.
+ */
+export function checkDatabaseIds(
+  workers: readonly WorkerConfig[],
+  existing: readonly D1Database[],
+) {
+  const owners = new Map<string, string>();
+  for (const worker of workers) {
+    for (const db of worker.d1) {
+      let found: D1Database | undefined;
+      if (db.databaseId !== null) {
+        found = existing.find((e) => e.uuid === db.databaseId);
+        if (!found) {
+          throw new DeployError(
+            `${worker.displayPath}: D1 database_id ${db.databaseId} does not exist in this account`,
+          );
+        }
+        if (found.name !== db.databaseName) {
+          throw new DeployError(
+            `${worker.displayPath}: D1 binding ${db.binding} has database_id ${db.databaseId}, which is ${found.name}, not ${db.databaseName ?? "(no database_name)"}`,
+          );
+        }
+      } else {
+        found = existing.find((e) => e.name === db.databaseName);
+      }
+      if (!found) continue;
+      const owner = owners.get(found.uuid);
+      if (owner !== undefined && owner !== worker.name) {
+        throw new DeployError(
+          `${worker.displayPath}: D1 database ${found.uuid} (${found.name}) is also bound by ${owner}; each database belongs to one Worker (D-08)`,
+        );
+      }
+      owners.set(found.uuid, worker.name);
+    }
+  }
+}
+
+/**
  * Creates every D1 database that does not exist yet, by name, and applies
- * its migrations. Both steps are no-ops when nothing is missing.
+ * its migrations. Both steps are no-ops when nothing is missing. Nothing is
+ * created or migrated unless every binding passes checkDatabaseIds.
  */
 export async function ensureDatabases(ctx: Context, workers: readonly WorkerConfig[]) {
   const first = workers[0];
@@ -89,16 +131,11 @@ export async function ensureDatabases(ctx: Context, workers: readonly WorkerConf
   const listed = await ctx.run(wrangler(first, ["d1", "list", "--json"], true));
   if (listed.code !== 0) throw new DeployError("wrangler d1 list failed");
   const existing = parseD1List(listed.stdout);
+  checkDatabaseIds(workers, existing);
 
   for (const worker of workers) {
     for (const db of worker.d1) {
-      if (db.databaseId !== null) {
-        if (!existing.some((e) => e.uuid === db.databaseId)) {
-          throw new DeployError(
-            `${worker.displayPath}: D1 database_id ${db.databaseId} does not exist in this account`,
-          );
-        }
-      } else if (db.databaseName !== null) {
+      if (db.databaseId === null && db.databaseName !== null) {
         if (existing.some((e) => e.name === db.databaseName)) {
           ctx.log(`D1 ${db.databaseName} exists`);
         } else {

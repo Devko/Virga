@@ -109,6 +109,53 @@ describe("ensureDatabases", () => {
     });
     await expect(ensureDatabases(ctx, [broker])).rejects.toThrow(DeployError);
   });
+
+  const VAULT_ID = "6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11";
+  const INDEX_ID = "a9e2d4b0-7c31-4e5f-8a26-0f4b9c1d3e72";
+  const LIST = ok(
+    JSON.stringify([
+      { uuid: VAULT_ID, name: "virga-vault" },
+      { uuid: INDEX_ID, name: "virga-index" },
+    ]),
+  );
+
+  it("R3-06: refuses a database_id of another database before creating or migrating anything", async () => {
+    const broker = app("broker", [{ binding: "VAULT", databaseName: "virga-vault" }]);
+    // Names the index, points at the vault: Wrangler binds and migrates by database_id.
+    const core = app("core", [
+      { binding: "INDEX", databaseName: "virga-index", databaseId: VAULT_ID },
+    ]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": LIST });
+    await expect(ensureDatabases(ctx, [broker, core])).rejects.toThrow(
+      `apps/core/wrangler.jsonc: D1 binding INDEX has database_id ${VAULT_ID}, which is virga-vault, not virga-index`,
+    );
+    expect(calls).toEqual(["broker: d1 list --json"]);
+  });
+
+  it("R3-06: refuses a database that two Workers bind, by UUID", async () => {
+    const broker = app("broker", [{ binding: "VAULT", databaseName: "virga-vault" }]);
+    const core = app("core", [
+      { binding: "INDEX", databaseName: "virga-index", databaseId: INDEX_ID },
+      { binding: "COPY", databaseName: "virga-vault", databaseId: VAULT_ID },
+    ]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": LIST });
+    await expect(ensureDatabases(ctx, [broker, core])).rejects.toThrow(
+      `apps/core/wrangler.jsonc: D1 database ${VAULT_ID} (virga-vault) is also bound by virga-broker`,
+    );
+    expect(calls).toEqual(["broker: d1 list --json"]);
+  });
+
+  it("R3-06: accepts a database_id that matches its database_name", async () => {
+    const core = app("core", [
+      { binding: "INDEX", databaseName: "virga-index", databaseId: INDEX_ID },
+    ]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": LIST });
+    await ensureDatabases(ctx, [core]);
+    expect(calls).toEqual([
+      "core: d1 list --json",
+      "core: d1 migrations apply virga-index --remote",
+    ]);
+  });
 });
 
 const TABLE = (rows: string[]) =>

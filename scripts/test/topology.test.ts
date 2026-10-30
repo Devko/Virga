@@ -248,6 +248,22 @@ describe("checkTopology", () => {
     ]);
   });
 
+  it("R3-06: keeps one owner per database_id, whatever the name says", () => {
+    const vault = {
+      binding: "VAULT",
+      databaseName: "virga-vault",
+      databaseId: "6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11",
+      migrationsDir: "migrations",
+    };
+    const issues = check(
+      broker({ d1: [vault] }),
+      core({ d1: [{ ...vault, binding: "INDEX", databaseName: "virga-index" }] }),
+    );
+    expect(errors(issues)).toEqual([
+      "apps/core/wrangler.jsonc: D1 database_id 6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11 is also bound by virga-broker; each database belongs to one Worker (D-08)",
+    ]);
+  });
+
   it("needs a database_name to create and migrate a database", () => {
     const issues = check(
       broker({
