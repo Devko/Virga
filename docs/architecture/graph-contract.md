@@ -401,9 +401,9 @@ What the scan records, and what rules and the evaluator may rely on:
   - `partial`: some chunks were written before one failed; collection of a class stops at the first failed chunk
   - `no_permission`: the API answered 401 or 403
   - `error`: anything else
-- **Sweep** runs only for `complete` classes. A sweep never moves the current scan.
+- **Sweep** runs only for `complete` classes. A sweep never moves the current scan. The write path refuses the sweep of a scan that is not current.
 - **Only the current scan writes.** Writes from a scan marked failed as stale, from one that ended, or from one a newer scan took over are refused (`StaleScanError`). That scan stops and ends `failed`, with the reason in `summary.detail`.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
-- **Undecided.** Where the exposure that decides a rule is `unknown`, the rule returns an undecided row (`decided = 0`). An undecided row changes no finding and is not a hit.
+- **Undecided.** Where the exposure that decides a rule is `unknown`, or a value it needs could not be read (for example `plain_text_vars` entries with `looks_secret` `null` in CF-024), the rule returns an undecided row (`decided = 0`). An undecided row is not a hit and changes no finding, except that a suppression past its end returns to open (R3-07).
 - **`rule_runs`** records hits (decided rows), undecided rows, and for a failed run its error message (at most 500 characters).
