@@ -41,11 +41,15 @@ Every read from a scanned account goes through the broker, which allows only rea
 - Node.js 22.18 or later. The scripts run as TypeScript without a build step, and Node 22 strips types by default from 22.18.
 - pnpm through corepack, and a checkout of this repository.
 - Linux or macOS. The deploy script runs each app's own Wrangler, the package in `apps/<app>/node_modules/wrangler`, with the Node that runs the script.
+- Network access to `registry.npmjs.org` for the release-age check.
 
 ```sh
+node scripts/check-release-age.ts
 corepack enable
-pnpm install
+pnpm install --frozen-lockfile
 ```
+
+The first command is the release-age check ([CONTRIBUTING.md](../../CONTRIBUTING.md)): every version in `pnpm-lock.yaml` and the pnpm version that `package.json` pins must have been published at least 14 days ago, with the integrity the registry publishes. It runs on Node alone and imports nothing from `node_modules`. Run it before anything installs or starts the checkout's pnpm, and not as `pnpm check:release-age`: that runs the pnpm the commit pins before the check has dated it. `--frozen-lockfile` installs exactly what the check dated, or nothing.
 
 ## The deploy token
 
@@ -182,7 +186,7 @@ They do not protect against build code that:
 - changes the app's sources or migrations. Wrangler bundles and applies what is there after the builds; the bindings stay checked, but the code inside a Worker is what the build left;
 - keeps running and changes a file between the last check and the moment Wrangler reads it.
 
-So the build code must be trusted as far as the token is, and it is covered by the supply chain checks instead: `pnpm install --frozen-lockfile` installs exactly the versions and integrity hashes in `pnpm-lock.yaml`, and the release-age check (`pnpm check:release-age`, run in CI before any job installs) refuses versions younger than 14 days ([CONTRIBUTING.md](../../CONTRIBUTING.md)). Prefer to deploy from [CI](#deploy-from-ci). The builds run there in the same step as the token too, but each run starts on a fresh runner from a fresh checkout, nothing a build leaves behind reaches a later run, and the runner holds no other credentials of yours. On a workstation, deploy from a fresh clone, as a user that holds no other credentials you care about.
+So the build code must be trusted as far as the token is, and it is covered by the supply chain checks instead: `pnpm install --frozen-lockfile` installs exactly the versions and integrity hashes in `pnpm-lock.yaml`, and the release-age check (`node scripts/check-release-age.ts`) refuses versions younger than 14 days ([CONTRIBUTING.md](../../CONTRIBUTING.md)). These checks hold only where the check runs before the install: CI runs it before any job installs, the [deploy workflow](#deploy-from-ci) before its deploy job, and on a workstation you run it before `pnpm install` ([Prerequisites](#prerequisites), [Updates](#updates)). Prefer to deploy from [CI](#deploy-from-ci). The builds run there in the same step as the token too, but each run starts on a fresh runner from a fresh checkout, nothing a build leaves behind reaches a later run, and the runner holds no other credentials of yours. On a workstation, deploy from a fresh clone, as a user that holds no other credentials you care about.
 
 ### Behind a proxy
 
@@ -206,7 +210,24 @@ on: workflow_dispatch
 permissions:
   contents: read
 jobs:
+  # The release-age check on the commit to deploy, before anything installs
+  # its pnpm or packages. It needs the registry, installs nothing and runs no
+  # package code.
+  release-age:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: node scripts/check-release-age.ts
+
+  # No package cache: the install takes nothing another run wrote.
   deploy:
+    needs: release-age
     runs-on: ubuntu-24.04
     environment: production # required reviewers, deploy branch restricted
     steps:
@@ -224,9 +245,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
 
+- **`release-age` first.** `pnpm/action-setup` installs the pnpm that `package.json` names, and `pnpm install` installs the packages that the builds and Wrangler run beside the token. Both jobs check out the commit the workflow runs for, so the deploy job installs only what the check dated. Keep `needs: release-age` on every job that installs or deploys; `scripts/test/guide.test.ts` checks this example for it.
+- **No cache.** Neither job sets `cache:` on `setup-node` or restores a pnpm store.
+- **The generated rules.** The deploy itself compiles `rules/` and refuses `packages/rules/src/*.gen.ts` that are not the compiler's output, so the workflow needs no `pnpm rules:check`.
+- **Deploy branch.** Restrict the environment to the branch you deploy, and protect that branch so that only reviewed commits that passed CI reach it.
+
 ### Updates
 
-Pull the new version, run `pnpm install`, then the deploy script. New D1 migrations are applied before the Workers are deployed. Durable Object migrations are part of `wrangler deploy`.
+Pull the new version, run `node scripts/check-release-age.ts`, then `pnpm install --frozen-lockfile`, then the deploy script. New D1 migrations are applied before the Workers are deployed. Durable Object migrations are part of `wrangler deploy`.
 
 ## Access for the UI
 
@@ -442,10 +468,10 @@ What stays behind:
 | `secrets.required names CLOUDFLARE_…` | Remove the name. The deploy token and the other `CLOUDFLARE_` and `CF_` variables never become Worker secrets |
 | `D1 binding … has database_id …, which is …, not …` | The `database_id` belongs to another database than `database_name`. Correct it, or remove `database_id`: the script finds databases by name |
 | `D1 database … is also bound by …` | Two Workers bind one database, by name or by ID. Each database belongs to one Worker (D-08); the vault only to `virga-broker` |
-| `… not found; run pnpm install first`, `… is not the wrangler package` or `the wrangler bin file is missing or outside the package` | The app has no Wrangler installed, or `apps/<app>/node_modules/wrangler` is something else. Run `pnpm install` at the repository root |
+| `… not found; run pnpm install first`, `… is not the wrangler package` or `the wrangler bin file is missing or outside the package` | The app has no Wrangler installed, or `apps/<app>/node_modules/wrangler` is something else. Run `node scripts/check-release-age.ts`, then `pnpm install --frozen-lockfile` at the repository root |
 | `apps/<app> holds symlinks outside node_modules: …` | Replace each link with the file or directory itself. Wrangler and Vite read what a link points to, also from outside the repository, into the bundle, the migrations and the assets. Before the builds, the link is in your checkout; after them, a build created it |
 | `…/spa/public/…: the public directory holds a symlink, and Vite would copy what it points to into the assets` (from the build of `apps/web`) | Replace the link with the file. Vite copies the file a link points to into the published assets |
-| `the Wrangler of …/apps/<app> changed after the deploy recorded it before the builds: …` | A file of Wrangler, of a package it loads, or a `wrangler` shim in `node_modules/.bin` was added, removed or changed, or a package appeared where Wrangler would load it; the message names the paths. Unless you changed them yourself, treat the checkout as compromised: find what wrote them, starting with the `build` scripts and their dependencies, and deploy from a fresh clone after `pnpm install --frozen-lockfile`. Do not run `npx wrangler` in that checkout with a token |
+| `the Wrangler of …/apps/<app> changed after the deploy recorded it before the builds: …` | A file of Wrangler, of a package it loads, or a `wrangler` shim in `node_modules/.bin` was added, removed or changed, or a package appeared where Wrangler would load it; the message names the paths. Unless you changed them yourself, treat the checkout as compromised: find what wrote them, starting with the `build` scripts and their dependencies, and deploy from a fresh clone after `node scripts/check-release-age.ts` and `pnpm install --frozen-lockfile`. Do not run `npx wrangler` in that checkout with a token |
 | `…/wrangler.jsonc changed after the deploy checked it; refusing to pass it to Wrangler` | The config changed between the check and a Wrangler call, for example from your editor or a process a build left running. Find what changed it, then run the deploy again; it checks the new bytes |
 | `apps/<app>: its Wrangler config was removed during the builds` | A build deleted the config. Restore it from git and find out why |
 | `store_id is a placeholder` | Set `store_id` in `apps/broker/wrangler.jsonc`, or use the `MASTER_KEY` fallback. A dry run only reports it |
