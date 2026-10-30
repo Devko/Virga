@@ -734,4 +734,36 @@ describe("processRunner and what the builds can change (R6-01)", () => {
     await run(recordWranglers([app]));
     expect(calls()).not.toBe("");
   });
+
+  it("R8-05: refuses to run Wrangler once a checked generated rule module has changed", async () => {
+    const generated = join(root, "packages", "rules", "src", "rules.gen.ts");
+    const text = "export const RULES = [];\n";
+    put(generated, text);
+    const checked = new Map([[generated, sha256(text)]]);
+    const wranglers = recordWranglers([app]);
+    const runChecked = () =>
+      processRunner({
+        credentials: "token",
+        secrets: () => [],
+        wranglers,
+        checked: () => checked,
+        print: () => {},
+      })({
+        bin: "wrangler",
+        cwd: app,
+        config,
+        configSha256: sha256(CONFIG_TEXT),
+        args: ["deploy"],
+        capture: true,
+      });
+    await runChecked();
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+    appendFileSync(generated, "// planted\n");
+    await expect(runChecked()).rejects.toThrow(
+      `${generated} changed after the deploy checked it; refusing to run Wrangler`,
+    );
+    rmSync(generated);
+    await expect(runChecked()).rejects.toThrow(`${generated} cannot be read`);
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+  });
 });

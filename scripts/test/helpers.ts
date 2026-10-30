@@ -1,9 +1,27 @@
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig } from "../lib/config.ts";
 
 export const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+/**
+ * What scripts/deploy.ts needs of a checkout under `root`, without apps:
+ * the script and its lib, a package.json, and the rule compiler with the
+ * committed rules and generated modules (R8-05). The compiler's dependencies
+ * are the repository's, through a link to its node_modules.
+ */
+export function deployCheckout(root: string) {
+  for (const path of ["scripts/deploy.ts", "scripts/lib", "packages/rules/src", "rules"]) {
+    cpSync(join(REPO_ROOT, path), join(root, path), { recursive: true });
+  }
+  cpSync(join(REPO_ROOT, "packages/rules/package.json"), join(root, "packages/rules/package.json"));
+  symlinkSync(
+    join(REPO_ROOT, "packages/rules/node_modules"),
+    join(root, "packages/rules/node_modules"),
+  );
+  writeFileSync(join(root, "package.json"), '{ "type": "module" }');
+}
 
 const NAMES: Record<string, string> = {
   broker: "virga-broker",

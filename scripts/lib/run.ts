@@ -361,6 +361,12 @@ export interface RunnerOptions {
   secrets: () => readonly string[];
   /** The Wrangler of each app directory, recorded before the builds (R6-01). */
   wranglers: ReadonlyMap<string, WranglerInstall>;
+  /**
+   * Files Wrangler runs only while they hold the bytes the deploy checked,
+   * by absolute path, with the sha256 of those bytes: the generated rule
+   * modules, which virga-core bundles (R8-05). Empty until they are checked.
+   */
+  checked?: () => ReadonlyMap<string, string>;
   print?: (stream: "stdout" | "stderr", line: string) => void;
 }
 
@@ -397,7 +403,8 @@ function childEnv(command: Command, credentials: RunnerOptions["credentials"]): 
  * Why Wrangler may not run `command` now, or null. It gets the config only
  * while the file holds the bytes the script checked, and runs only while
  * every file recorded before the builds is unchanged: a build, or a process
- * a build left running, may have rewritten either (R6-01).
+ * a build left running, may have rewritten either (R6-01). The same holds
+ * for the other checked files, the generated rules (R8-05).
  */
 function wranglerProblem(command: WranglerCommand, options: RunnerOptions): string | null {
   const chooser = command.args.find((arg) => CHOOSERS.test(arg));
@@ -419,6 +426,16 @@ function wranglerProblem(command: WranglerCommand, options: RunnerOptions): stri
   }
   if (sha256(bytes) !== command.configSha256) {
     return `${command.config} changed after the deploy checked it; refusing to pass it to Wrangler. Find what changed it, then run the deploy again`;
+  }
+  for (const [path, checked] of options.checked?.() ?? []) {
+    try {
+      bytes = readFileSync(path);
+    } catch (error) {
+      return `${path} cannot be read: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (sha256(bytes) !== checked) {
+      return `${path} changed after the deploy checked it; refusing to run Wrangler. Find what changed it, then run the deploy again`;
+    }
   }
   const dotEnv = dotEnvFiles(command.cwd);
   if (dotEnv.length > 0) return dotEnv.map(dotEnvProblem).join("\n");
