@@ -10159,6 +10159,109 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-024",
+    "name": "undecided-pages-unread-env-vars",
+    "description": "Pages env vars the API did not return are unknown, not absent (R5-07). A project whose production config came without an env_vars object has an `unread` entry with no name, and a project with a variable of an unknown type has an `unknown` entry; both are undecided. A project with an `unread` preview config and a production variable that looks like a secret is decided.\n",
+    "nodes": [
+      {
+        "type": "pages_project",
+        "id": "shop",
+        "name": "shop",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "shop.pages.dev",
+          "preview_deployments": "all",
+          "plain_text_vars": [
+            {
+              "name": "LOG_LEVEL",
+              "environment": "preview",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            },
+            {
+              "name": null,
+              "environment": "production",
+              "kind": "unread",
+              "looks_secret": null,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "blog",
+        "name": "blog",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "blog.pages.dev",
+          "preview_deployments": "none",
+          "plain_text_vars": [
+            {
+              "name": "COMMENTS_KEY",
+              "environment": "production",
+              "kind": "unknown",
+              "looks_secret": null,
+              "secret_pattern": null
+            },
+            {
+              "name": "SITE_URL",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": false,
+              "secret_pattern": null
+            }
+          ]
+        }
+      },
+      {
+        "type": "pages_project",
+        "id": "admin",
+        "name": "admin",
+        "props": {
+          "production_branch": "main",
+          "subdomain": "admin.pages.dev",
+          "preview_deployments": "none",
+          "plain_text_vars": [
+            {
+              "name": null,
+              "environment": "preview",
+              "kind": "unread",
+              "looks_secret": null,
+              "secret_pattern": null
+            },
+            {
+              "name": "CF_API_TOKEN",
+              "environment": "production",
+              "kind": "plain_text",
+              "looks_secret": true,
+              "secret_pattern": "cfat_"
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-024:pages_project:admin",
+        "severity": "medium"
+      },
+      {
+        "fingerprint": "CF-024:pages_project:shop",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-024:pages_project:blog",
+        "decided": false
+      }
+    ]
+  },
+  {
+    "rule": "CF-024",
     "name": "undecided-uninspected-values",
     "description": "The API returned no value for some plain-text variables, so the collector could not inspect them. A Pages project and a Worker with only such variables are undecided. A project with one uninspected variable and one that looks like a secret is decided. A project whose other variables were inspected and are clean, plus one uninspected, stays undecided.\n",
     "nodes": [
