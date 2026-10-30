@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type NodeSqlRunner, openNodeDatabase } from "../src/node.ts";
-import { assertOneStatement, guardRead, ReadOnlyError } from "../src/sql.ts";
+import {
+  assertOneStatement,
+  guardRead,
+  ReadOnlyError,
+  type Row,
+  type SqlValue,
+} from "../src/sql.ts";
 
 let db: NodeSqlRunner;
 
@@ -141,6 +147,58 @@ describe("SqlRunner.queryReadOnly (R6-02)", () => {
       "the setting case_sensitive_like",
     );
     expect(db.query("SELECT 'a' LIKE 'A' AS ci")).toEqual([{ ci: 1 }]);
+  });
+
+  it("R8 hardening: defer_foreign_keys: refuses a read that sets it", () => {
+    expect(() => db.queryReadOnly("PRAGMA defer_foreign_keys = 1")).toThrow(
+      "the setting defer_foreign_keys",
+    );
+    expect(setting("defer_foreign_keys")).toBe(0);
+  });
+
+  it("R8 hardening: settings read shadowed by a view: sets every setting back and refuses the read", () => {
+    const names = [
+      "ignore_check_constraints",
+      "recursive_triggers",
+      "reverse_unordered_selects",
+      "legacy_alter_table",
+    ];
+    expect(() =>
+      guardRead(db, () => {
+        db.run("CREATE VIEW pragma_legacy_alter_table AS SELECT 0 AS legacy_alter_table");
+        for (const name of names) db.run(`PRAGMA ${name} = 1`);
+        db.run("PRAGMA case_sensitive_like = 1");
+        return { rows: [], rowsWritten: 0 };
+      }),
+    ).toThrow(ReadOnlyError);
+    expect(names.map(setting)).toEqual([0, 0, 0, 0]);
+    expect(db.query("SELECT 'a' LIKE 'A' AS ci")).toEqual([{ ci: 1 }]);
+    expect(tables()).toEqual([{ name: "meta" }, { name: "sqlite_autoindex_meta_1" }]);
+  });
+
+  it("R8 hardening: sets every setting back when the settings read fails, and refuses the read", () => {
+    let unreadable = false;
+    const failing = {
+      ...db,
+      query: <T extends Row>(sql: string, ...params: SqlValue[]): T[] => {
+        // Any read of the setting, but not the statement that sets it.
+        if (unreadable && sql.includes("recursive_triggers") && !sql.includes("=")) {
+          throw new Error("read failed");
+        }
+        return db.query<T>(sql, ...params);
+      },
+    };
+    expect(() =>
+      guardRead(failing, () => {
+        db.run("PRAGMA recursive_triggers = 1");
+        db.run("PRAGMA legacy_alter_table = 1");
+        unreadable = true;
+        return { rows: [], rowsWritten: 0 };
+      }),
+    ).toThrow(ReadOnlyError);
+    unreadable = false;
+    expect(setting("recursive_triggers")).toBe(0);
+    expect(setting("legacy_alter_table")).toBe(0);
   });
 
   it("sets a setting back when a later statement fails", () => {

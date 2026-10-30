@@ -110,16 +110,68 @@ export interface Executed {
 }
 
 /**
- * Connection settings a statement can change for the statements after it.
- * A rollback keeps them. `case_sensitive_like` cannot be read, so its value
- * is what LIKE does.
+ * Connection settings a statement can change for the statements after it. A
+ * rollback keeps them, `defer_foreign_keys` too (workerd 1.20261012.1). Each
+ * is read with its PRAGMA statement: a view named like the table function
+ * pragma_<name> makes a read through the function fail or lie, but not this.
  */
-const SETTINGS = `json_object(
-  'ignore_check_constraints', (SELECT ignore_check_constraints FROM pragma_ignore_check_constraints),
-  'recursive_triggers', (SELECT recursive_triggers FROM pragma_recursive_triggers),
-  'reverse_unordered_selects', (SELECT reverse_unordered_selects FROM pragma_reverse_unordered_selects),
-  'legacy_alter_table', (SELECT legacy_alter_table FROM pragma_legacy_alter_table),
-  'case_sensitive_like', NOT ('a' LIKE 'A'))`;
+const FLAGS = [
+  "ignore_check_constraints",
+  "recursive_triggers",
+  "reverse_unordered_selects",
+  "legacy_alter_table",
+  "defer_foreign_keys",
+] as const;
+
+/** Setting names and their values, 0 or 1. */
+type Settings = Record<string, number>;
+
+/**
+ * Reads the settings. `case_sensitive_like` has no read, so its value is
+ * what LIKE does. Throws if a value is not 0 or 1.
+ */
+function readSettings(db: Pick<SqlRunner, "query">): Settings {
+  const settings: Settings = {};
+  for (const name of FLAGS) settings[name] = db.query(`PRAGMA ${name}`)[0]?.[name] as number;
+  const like = db.query("SELECT 'a' LIKE 'A' AS ci")[0]?.ci;
+  settings.case_sensitive_like = like === 0 ? 1 : like === 1 ? 0 : Number.NaN;
+  for (const [name, value] of Object.entries(settings)) {
+    if (value !== 0 && value !== 1) throw new Error(`the setting ${name} reads ${String(value)}`);
+  }
+  return settings;
+}
+
+/** The names of the settings that differ from `before`, all of them if they cannot be read. */
+function changedSettings(db: Pick<SqlRunner, "query">, before: Settings): string[] {
+  let now: Settings;
+  try {
+    now = readSettings(db);
+  } catch {
+    return Object.keys(before);
+  }
+  return Object.keys(before).filter((name) => now[name] !== before[name]);
+}
+
+/**
+ * Sets every setting to its value in `before`, whatever a read says, and
+ * checks that it holds. Throws {@link ReadOnlyError} naming each setting
+ * that could not be set back.
+ */
+function setBack(db: Pick<SqlRunner, "query" | "run">, before: Settings): void {
+  for (const [name, value] of Object.entries(before)) {
+    try {
+      // Names come from FLAGS and case_sensitive_like, values are 0 or 1.
+      db.run(`PRAGMA ${name} = ${value ? 1 : 0}`);
+    } catch {
+      // The check below names it.
+    }
+  }
+  const stuck = changedSettings(db, before);
+  if (stuck.length > 0) {
+    const names = stuck.map((name) => `the setting ${name}`).join(", ");
+    throw new ReadOnlyError(`a read-only query changed ${names}, which could not be set back`);
+  }
+}
 
 /**
  * Tables whose rows a read must keep: all but the platform's `_cf_` tables,
@@ -144,14 +196,12 @@ const TABLES = `SELECT name FROM sqlite_schema WHERE type = 'table'
 const STATE = `SELECT total_changes() AS changes,
   (SELECT group_concat(type || ' ' || name || ' ' || ifnull(sql, ''), char(10))
    FROM (SELECT type, name, sql FROM sqlite_schema ORDER BY type, name)) AS schema,
-  (SELECT json_group_array(name) FROM (${TABLES})) AS tables,
-  ${SETTINGS} AS settings`;
+  (SELECT json_group_array(name) FROM (${TABLES})) AS tables`;
 
 interface State extends Row {
   changes: number;
   schema: string | null;
   tables: string;
-  settings: string;
 }
 
 /**
@@ -167,22 +217,11 @@ function filled(db: Pick<SqlRunner, "query">, names: readonly string[]): string[
   return names.filter((_, i) => row[`t${i}`] === 1);
 }
 
-/** Sets back every setting that differs from `before`, and returns their names. */
-function restoreSettings(db: Pick<SqlRunner, "query" | "run">, before: State): string[] {
-  const was = JSON.parse(before.settings) as Record<string, number>;
-  const now = JSON.parse(
-    db.query<{ settings: string }>(`SELECT ${SETTINGS} AS settings`)[0]?.settings ?? "{}",
-  ) as Record<string, number>;
-  const changed = Object.keys(was).filter((name) => now[name] !== was[name]);
-  // Names come from SETTINGS, values are 0 or 1.
-  for (const name of changed) db.run(`PRAGMA ${name} = ${was[name] ? 1 : 0}`);
-  return changed;
-}
-
 /**
  * Runs `exec` as {@link SqlRunner.queryReadOnly} does: in a transaction of
- * `db`, comparing the database's row changes, schema and connection
- * settings before and after. For the adapters.
+ * `db`, comparing the database's row changes, schema, tables that hold rows
+ * and connection settings before and after, and setting every setting back.
+ * For the adapters, which refuse a statement tail before they call it.
  */
 export function guardRead(
   db: Pick<SqlRunner, "query" | "run" | "transaction">,
@@ -191,21 +230,24 @@ export function guardRead(
   return db.transaction(() => {
     const before = db.query<State>(STATE)[0] as State;
     const held = filled(db, JSON.parse(before.tables) as string[]);
+    const settings = readSettings(db);
     let executed: Executed;
+    let changedNames: string[];
     try {
       executed = exec();
-    } catch (error) {
-      // A setting changed before the failing statement survives the rollback.
-      restoreSettings(db, before);
-      throw error;
+      changedNames = changedSettings(db, settings);
+    } finally {
+      // On every exit, whatever a read said: a rollback keeps a setting, a
+      // statement can change one before a later one fails, and a read can
+      // fail or, through a shadowed pragma_ function, lie.
+      setBack(db, settings);
     }
-    const settings = restoreSettings(db, before);
     const after = db.query<State>(STATE)[0] as State;
     const schemaChanged = after.schema !== before.schema;
     const changed = [
       ...(executed.rowsWritten > 0 || after.changes !== before.changes ? ["rows"] : []),
       ...(schemaChanged ? ["the schema"] : []),
-      ...settings.map((name) => `the setting ${name}`),
+      ...changedNames.map((name) => `the setting ${name}`),
     ];
     // With the schema as it was, every table of `held` can still be read.
     const kept = schemaChanged ? held : filled(db, held);

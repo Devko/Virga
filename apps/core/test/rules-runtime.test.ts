@@ -275,6 +275,69 @@ describe("guard state a drop cannot keep (R8 hardening, R6-02)", () => {
   });
 });
 
+describe("settings are always set back (R8 hardening, R6-02)", () => {
+  /** Runs each statement on its own, as a tail would, inside the guard alone. */
+  const guardStatements = (db: SqlRunner, storage: DurableObjectStorage, statements: string[]) =>
+    guardRead(db, () => {
+      for (const sql of statements) storage.sql.exec(sql);
+      return { rows: [], rowsWritten: 0 };
+    });
+  const CHANGE_ALL = [
+    "PRAGMA ignore_check_constraints = 1",
+    "PRAGMA recursive_triggers = 1",
+    "PRAGMA reverse_unordered_selects = 1",
+    "PRAGMA legacy_alter_table = 1",
+    "PRAGMA defer_foreign_keys = 1",
+    "PRAGMA case_sensitive_like = 1",
+  ];
+
+  it.each([
+    ["fails the read", "SELECT 1 AS nope"],
+    ["lies", "SELECT 0 AS legacy_alter_table"],
+  ])(
+    "R8 hardening: settings read shadowed by a view: a view named pragma_legacy_alter_table that %s, plus changed settings, ends error and leaves every setting as it was",
+    async (_, view) => {
+      await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+        const db = fromDurableObjectStorage(durable.storage);
+        await seed(db);
+        const before = state(db);
+        expect(Object.values(before.settings)).toEqual([0, 0, 0, 0, 0, 0]);
+        const statements = [`CREATE VIEW pragma_legacy_alter_table AS ${view}`, ...CHANGE_ALL];
+        expect(() => guardStatements(db, durable.storage, statements)).toThrow(ReadOnlyError);
+        expect(state(db)).toEqual(before);
+        expect(db.query("SELECT 'a' LIKE 'A' AS ci")).toEqual([{ ci: 1 }]);
+      });
+    },
+  );
+
+  it("R8 hardening: settings are set back when the query fails after changing them", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const before = state(db);
+      const statements = [...CHANGE_ALL, "SELECT * FROM no_such_table"];
+      expect(() => guardStatements(db, durable.storage, statements)).toThrow(/no such table/);
+      expect(state(db)).toEqual(before);
+    });
+  });
+
+  it("R8 hardening: defer_foreign_keys is set back, and a rule that sets it ends error", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const before = state(db);
+      expect(() =>
+        guardOnly(db, durable.storage, "PRAGMA defer_foreign_keys = 1; SELECT 1 AS x"),
+      ).toThrow(/the setting defer_foreign_keys/);
+      expect(state(db)).toEqual(before);
+      const [run] = evaluateRules(db, [rule("PRAGMA defer_foreign_keys = 1")], "s1", 2000);
+      expect(run).toMatchObject({ status: "error", opened: 0, resolved: 0 });
+      expect(run?.error).toMatch(/the setting defer_foreign_keys/);
+      expect(state(db)).toEqual(before);
+    });
+  });
+});
+
 /**
  * The platform facts decision 0006 relies on. If a workerd upgrade changes
  * one, re-check the guard in packages/graph/src/sql.ts.
@@ -333,6 +396,47 @@ describe("Durable Object SQL facts behind decision 0006", () => {
         }),
       ).toThrow("rollback");
       expect(read()).toEqual(before);
+    });
+  });
+
+  it("reads each setting with a PRAGMA statement, which a view named like its pragma_ function does not shadow", async () => {
+    await runInDurableObject(freshGraph(), (_graph: AccountGraph, durable) => {
+      const { sql } = durable.storage;
+      expect(() =>
+        durable.storage.transactionSync(() => {
+          sql.exec("CREATE VIEW pragma_legacy_alter_table AS SELECT 0 AS legacy_alter_table");
+          sql.exec("PRAGMA legacy_alter_table = 1");
+          expect(sql.exec("SELECT * FROM pragma_legacy_alter_table").one()).toEqual({
+            legacy_alter_table: 0,
+          });
+          expect(sql.exec("PRAGMA legacy_alter_table").one()).toEqual({ legacy_alter_table: 1 });
+          sql.exec("PRAGMA legacy_alter_table = 0");
+          throw new Error("rollback");
+        }),
+      ).toThrow("rollback");
+      for (const name of SETTING_NAMES) {
+        expect(sql.exec(`PRAGMA ${name}`).one()).toEqual({ [name]: 0 });
+      }
+      expect(sql.exec("PRAGMA case_sensitive_like").toArray()).toEqual([]);
+    });
+  });
+
+  it("keeps defer_foreign_keys and case_sensitive_like through a rollback", async () => {
+    await runInDurableObject(freshGraph(), (_graph: AccountGraph, durable) => {
+      const { sql } = durable.storage;
+      expect(() =>
+        durable.storage.transactionSync(() => {
+          sql
+            .exec("PRAGMA defer_foreign_keys = 1; PRAGMA case_sensitive_like = 1; SELECT 1 AS x")
+            .toArray();
+          throw new Error("rollback");
+        }),
+      ).toThrow("rollback");
+      expect(sql.exec("PRAGMA defer_foreign_keys").one()).toEqual({ defer_foreign_keys: 1 });
+      expect(sql.exec("SELECT 'a' LIKE 'A' AS ci").one()).toEqual({ ci: 0 });
+      sql.exec("PRAGMA defer_foreign_keys = 0");
+      sql.exec("PRAGMA case_sensitive_like = 0");
+      expect(sql.exec("SELECT 'a' LIKE 'A' AS ci").one()).toEqual({ ci: 1 });
     });
   });
 });
