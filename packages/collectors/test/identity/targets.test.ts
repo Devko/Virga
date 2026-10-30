@@ -3,24 +3,33 @@ import { appTargets, hostTarget, needsWorkerScripts } from "../../src/identity/t
 
 // Wildcard and path semantics:
 // https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
+// Destination types and overrides:
+// https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+
+const hostname = (host: string, path = "", overrides: object[] = []) => ({
+  kind: "hostname",
+  host,
+  path,
+  overrides,
+});
 
 describe("hostTarget", () => {
-  const cases: [string, ReturnType<typeof hostTarget>][] = [
-    ["example.com", { kind: "hostname", host: "example.com", path: "" }],
-    ["Test.Example.COM/admin", { kind: "hostname", host: "test.example.com", path: "/admin" }],
-    ["test.example.com/admin/", { kind: "hostname", host: "test.example.com", path: "/admin" }],
+  const cases: [string, ReturnType<typeof hostname>][] = [
+    ["example.com", hostname("example.com")],
+    ["Test.Example.COM/admin", hostname("test.example.com", "/admin")],
+    // Paths stay as configured; the evaluator applies Access path semantics.
+    ["test.example.com/admin/", hostname("test.example.com", "/admin/")],
     // Paths keep their case: they are matched case-sensitively.
-    ["example.com/Admin/Users", { kind: "hostname", host: "example.com", path: "/Admin/Users" }],
-    ["*.example.com", { kind: "hostname", host: "*.example.com", path: "" }],
-    ["*.test.example.com/api", { kind: "hostname", host: "*.test.example.com", path: "/api" }],
-    // `example.com/*` covers the apex and every path, like `example.com`.
-    ["example.com/*", { kind: "hostname", host: "example.com", path: "" }],
-    ["example.com/alpha/*", { kind: "hostname", host: "example.com", path: "/alpha" }],
-    ["https://example.com/login", { kind: "hostname", host: "example.com", path: "/login" }],
-    [
-      "my-worker.my-sub.workers.dev",
-      { kind: "hostname", host: "my-worker.my-sub.workers.dev", path: "" },
-    ],
+    ["example.com/Admin/Users", hostname("example.com", "/Admin/Users")],
+    ["*.example.com", hostname("*.example.com")],
+    ["*.test.example.com/api", hostname("*.test.example.com", "/api")],
+    ["example.com/*", hostname("example.com", "/*")],
+    // `/alpha/*` does not cover `/alpha`, so the wildcard is kept.
+    ["example.com/alpha/*", hostname("example.com", "/alpha/*")],
+    ["example.com/alpha*", hostname("example.com", "/alpha*")],
+    ["example.com/foo*/bar", hostname("example.com", "/foo*/bar")],
+    ["https://example.com/login", hostname("example.com", "/login")],
+    ["my-worker.my-sub.workers.dev", hostname("my-worker.my-sub.workers.dev")],
   ];
   it.each(cases)("normalizes %s", (input, expected) => {
     expect(hostTarget(input)).toEqual(expected);
@@ -32,8 +41,6 @@ describe("hostTarget", () => {
     "*.*.example.com",
     "test.*.example.com",
     "*",
-    "example.com/foo*/bar",
-    "example.com/alpha*",
     "example.com:8443/admin",
     "example.com/search?q=1",
     "example.com/#settings",
@@ -60,31 +67,57 @@ describe("appTargets", () => {
       self_hosted_domains: ["b.example.com"],
       destinations: [{ type: "public", uri: "a.example.com" }],
     };
-    expect(appTargets(app, null)).toEqual([{ kind: "hostname", host: "a.example.com", path: "" }]);
-    expect(appTargets({ ...app, destinations: [] }, null)).toEqual([
-      { kind: "hostname", host: "b.example.com", path: "" },
-    ]);
+    expect(appTargets(app, null)).toEqual([hostname("a.example.com")]);
+    expect(appTargets({ ...app, destinations: [] }, null)).toEqual([hostname("b.example.com")]);
     expect(appTargets({ ...app, destinations: [], self_hosted_domains: [] }, null)).toEqual([
-      { kind: "hostname", host: "c.example.com", path: "" },
+      hostname("c.example.com"),
     ]);
   });
 
   it("maps a public destination without a type by its uri", () => {
     expect(appTargets({ destinations: [{ uri: "a.example.com/x" }] }, null)).toEqual([
-      { kind: "hostname", host: "a.example.com", path: "/x" },
+      hostname("a.example.com", "/x"),
     ]);
   });
 
-  it("adds an other target for destination overrides, which make paths public", () => {
-    const dest = {
-      type: "public",
-      uri: "a.example.com",
-      overrides: [{ behavior: "public", path_pattern: "/health/*" }],
-    };
-    expect(appTargets({ destinations: [dest] }, null)).toEqual([
-      { kind: "hostname", host: "a.example.com", path: "" },
-      { kind: "other", raw: dest },
+  it("keeps destination overrides on hostname, Worker and all-Workers targets, sorted", () => {
+    const health = { behavior: "public", path_pattern: "/health" };
+    const hooks = { behavior: "public", path_pattern: "/webhooks/*" };
+    const destinations = [
+      { type: "public", uri: "a.example.com", overrides: [health, hooks, health] },
+      { type: "worker", worker_id: "w1", overrides: [hooks] },
+      { type: "all_preview_workers", overrides: [health] },
+      // A behavior added later is kept, so the evaluator can return unknown for it.
+      {
+        type: "public",
+        uri: "b.example.com/app",
+        overrides: [{ behavior: "isolate", path_pattern: "/x" }],
+      },
+    ];
+    expect(appTargets({ destinations }, scripts)).toEqual([
+      hostname("a.example.com", "", [health, hooks]),
+      hostname("b.example.com", "/app", [{ behavior: "isolate", path_pattern: "/x" }]),
+      { kind: "all_workers", scope: "previews", overrides: [health] },
+      { kind: "worker", script: "my-worker", scope: "all", overrides: [hooks] },
     ]);
+  });
+
+  it("maps a destination whose overrides cannot be read to other, so no public path is lost", () => {
+    for (const overrides of [
+      "/health",
+      [{ path_pattern: "/health" }],
+      [{ behavior: "public" }],
+      [{ behavior: "public", path_pattern: "" }],
+      [{ behavior: "public", path_pattern: `/${"p".repeat(600)}` }],
+      ["/health"],
+      Array.from({ length: 101 }, (_, i) => ({ behavior: "public", path_pattern: `/p${i}` })),
+    ]) {
+      const [target] = appTargets(
+        { destinations: [{ type: "public", uri: "a.example.com", overrides }] },
+        null,
+      );
+      expect(target?.kind, JSON.stringify(overrides).slice(0, 80)).toBe("other");
+    }
   });
 
   it("maps Worker destinations to the script, or to other when it cannot be resolved", () => {
@@ -92,11 +125,13 @@ describe("appTargets", () => {
       { type: "worker", worker_id: "w1" },
       { type: "preview_worker", worker_id: "w1" },
       { type: "worker", worker_id: "w2" },
+      { type: "worker" },
     ];
     expect(appTargets({ destinations }, scripts)).toEqual([
       { kind: "other", raw: { type: "worker", worker_id: "w2" } },
-      { kind: "worker", script: "my-worker", scope: "all" },
-      { kind: "worker", script: "my-worker", scope: "previews" },
+      { kind: "other", raw: { type: "worker" } },
+      { kind: "worker", script: "my-worker", scope: "all", overrides: [] },
+      { kind: "worker", script: "my-worker", scope: "previews", overrides: [] },
     ]);
     // Without the Worker list nothing can be resolved.
     expect(appTargets({ destinations: destinations.slice(0, 1) }, null)).toEqual([
@@ -104,12 +139,20 @@ describe("appTargets", () => {
     ]);
   });
 
-  it("maps account-level Worker Access and unknown destination types to other", () => {
+  it("maps account-level Worker Access to all_workers", () => {
+    expect(appTargets({ destinations: [{ type: "all_workers" }] }, null)).toEqual([
+      { kind: "all_workers", scope: "all", overrides: [] },
+    ]);
+    expect(appTargets({ destinations: [{ type: "all_preview_workers" }] }, null)).toEqual([
+      { kind: "all_workers", scope: "previews", overrides: [] },
+    ]);
+  });
+
+  it("maps MCP portal and unknown destination types to other", () => {
     for (const dest of [
-      { type: "all_workers" },
-      { type: "all_preview_workers" },
       { type: "via_mcp_server_portal", mcp_server_id: "m" },
       { type: "carrier_pigeon" },
+      { type: "constructor" },
       { type: "public" },
       "a.example.com",
     ]) {
@@ -141,10 +184,7 @@ describe("appTargets", () => {
 
   it("sorts and deduplicates targets", () => {
     const app = { self_hosted_domains: ["b.example.com", "a.example.com", "B.example.com"] };
-    expect(appTargets(app, null)).toEqual([
-      { kind: "hostname", host: "a.example.com", path: "" },
-      { kind: "hostname", host: "b.example.com", path: "" },
-    ]);
+    expect(appTargets(app, null)).toEqual([hostname("a.example.com"), hostname("b.example.com")]);
   });
 
   it("asks for the Worker list only for single-Worker destinations", () => {

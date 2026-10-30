@@ -171,19 +171,25 @@ export class Graph {
     return id;
   }
 
-  tunnelHostname(hostname: string, path = "", service = "ssh://localhost:22"): string {
-    const tunnel = this.node("tunnel", "tun-1", "tunnel", {
+  tunnelHostname(
+    hostname: string,
+    path = "",
+    service = "ssh://localhost:22",
+    { tunnelId = "tun-1", accessRequired = false } = {},
+  ): string {
+    const tunnel = this.node("tunnel", tunnelId, "tunnel", {
       tunnel_type: "cfd_tunnel",
       status: "healthy",
       config_src: "cloudflare",
     });
     const scheme = service.slice(0, service.indexOf(":"));
-    const id = this.node("tunnel_hostname", `${hostname}${path}`, hostname, {
+    const id = this.node("tunnel_hostname", `${tunnelId}:${hostname}${path}`, hostname, {
       hostname,
       path,
       service,
       origin_scheme: scheme,
-      tunnel_id: "tun-1",
+      tunnel_id: tunnelId,
+      access_required: accessRequired,
     });
     this.edge("ROUTES_TO", id, tunnel);
     return id;
@@ -223,11 +229,28 @@ export class Graph {
   }
 }
 
-export const host = (h: string, path = "") => ({ kind: "hostname", host: h, path });
-export const worker = (script: string, scope: "all" | "previews" = "all") => ({
-  kind: "worker",
-  script,
+export type Override = { behavior: string; path_pattern: string };
+
+export const publicPath = (path_pattern: string): Override => ({
+  behavior: "public",
+  path_pattern,
+});
+
+export const host = (h: string, path = "", overrides: Override[] = []) => ({
+  kind: "hostname",
+  host: h,
+  path,
+  overrides,
+});
+export const worker = (
+  script: string,
+  scope: "all" | "previews" = "all",
+  overrides: Override[] = [],
+) => ({ kind: "worker", script, scope, overrides });
+export const allWorkers = (scope: "all" | "previews" = "all", overrides: Override[] = []) => ({
+  kind: "all_workers",
   scope,
+  overrides,
 });
 export const other = (raw: unknown) => ({ kind: "other", raw });
 

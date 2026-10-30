@@ -8,6 +8,7 @@ import {
   type PathPattern,
   type PathSet,
   parseAccessPath,
+  parseOverridePath,
   parseRoutePath,
   parseTunnelPath,
   pathLabel,
@@ -25,7 +26,9 @@ describe("parseAccessPath", () => {
     ["/*", "/"],
     ["*", "/"],
     ["/admin", "/admin"],
-    ["admin/", "/admin"],
+    // Whether `/admin/` covers `/admin` is not documented.
+    ["/admin/", "opaque /admin"],
+    ["admin/", "opaque /admin"],
     ["/alpha/*", "/alpha/*"],
     ["/alpha*", "/alpha*"],
     ["/foo*/bar", "opaque /foo*"],
@@ -33,6 +36,21 @@ describe("parseAccessPath", () => {
     [42, "opaque /"],
   ])("%j -> %s", (input, expected) => {
     expect(describePattern(parseAccessPath(input))).toBe(expected);
+  });
+});
+
+describe("parseOverridePath", () => {
+  // An override without a wildcard matches the exact path; the segment is wider.
+  it.each([
+    ["/health", "/health"],
+    ["/health/", "/health"],
+    ["health", "/health"],
+    ["*", "/"],
+    ["/webhooks/*", "/webhooks/*"],
+    ["/api*", "/api*"],
+    ["/foo*/bar", "opaque /foo*"],
+  ])("%j -> %s", (input, expected) => {
+    expect(describePattern(parseOverridePath(input))).toBe(expected);
   });
 });
 

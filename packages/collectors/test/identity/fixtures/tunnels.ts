@@ -3,6 +3,7 @@
 // https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/methods/get/
 // Service values: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/protocols/
 // Catch-all rule and path regex: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/
+// originRequest.access: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
 
 import type { CfQuery } from "@virga/cf-api";
 import { envelope } from "@virga/cf-api/testing";
@@ -106,6 +107,15 @@ const originRequest = {
   noTLSVerify: false,
 };
 
+/** cloudflared validates the Access JWT of every request before it proxies it. */
+const accessRequired = {
+  access: {
+    audTag: ["737646a56ab1df6ec9bddc7e5ca84eaf3b0768850f3ffb5d74f1534911fe3893"],
+    teamName: "zero-trust-organization-name",
+    required: true,
+  },
+};
+
 export const blogConfig = {
   account_id: "023e105f4ecef8ad9ca31a8372d0c353",
   config: {
@@ -125,6 +135,11 @@ export const blogConfig = {
       { hostname: "status.example.com", service: "http_status:418" },
       { hostname: "jump.example.com", service: "bastion" },
       { hostname: "app.example.com", service: `http://admin:${ORIGIN_PASSWORD}@localhost:8080` },
+      {
+        hostname: "admin.example.com",
+        service: "http://localhost:8081",
+        originRequest: accessRequired,
+      },
       // Shadowed by the first rule: cloudflared never reaches it.
       { hostname: "tunnel.example.com", service: "http://localhost:9999", path: "subpath" },
       // The catch-all rule.
@@ -139,13 +154,25 @@ export const blogConfig = {
   version: 3,
 };
 
+/** Access validation for every rule that does not set its own `access`. */
 export const legacyConfig = {
   account_id: "023e105f4ecef8ad9ca31a8372d0c353",
   config: {
     ingress: [
       { hostname: "legacy.example.com", service: "http://localhost:80" },
+      // Inherits the top-level access setting: the rule sets other parameters only.
+      {
+        hostname: "wiki.example.com",
+        service: "http://localhost:81",
+        originRequest: { connectTimeout: 5 },
+      },
+      // Its own access object replaces the top-level one.
+      { hostname: "open.example.com", service: "http://localhost:82", originRequest },
+      // The blog tunnel serves the same hostname; the tunnel ID keeps the two apart.
+      { hostname: "ssh.example.com", service: "ssh://localhost:2222" },
       { service: "http_status:404" },
     ],
+    originRequest: accessRequired,
   },
   source: "cloudflare",
   tunnel_id: LEGACY,

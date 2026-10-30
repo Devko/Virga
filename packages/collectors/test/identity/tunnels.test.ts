@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { originScheme, tunnelsCollector } from "../../src/identity/tunnels.ts";
+import { accessRequired, originScheme, tunnelsCollector } from "../../src/identity/tunnels.ts";
 import { tunnelsRoutes } from "./fixtures/routes.ts";
 import {
   BLOG,
@@ -28,6 +28,8 @@ import {
 } from "./helpers.ts";
 
 const routes = tunnelsRoutes;
+const blogHost = (host: string) => `tunnel_hostname:${BLOG}:${host}`;
+const legacyHost = (host: string) => `tunnel_hostname:${LEGACY}:${host}`;
 
 describe("tunnels collector", () => {
   it("lists cfd tunnels and Mesh nodes that are not deleted, in chunks of 25", async () => {
@@ -92,22 +94,29 @@ describe("tunnels collector", () => {
       "service",
       "origin_scheme",
       "tunnel_id",
+      "access_required",
     ]);
-    expect(nodeIds(output, "tunnel_hostname")).toEqual([
-      "tunnel_hostname:app.example.com",
-      "tunnel_hostname:jump.example.com",
-      "tunnel_hostname:legacy.example.com",
-      "tunnel_hostname:rdp.example.com",
-      "tunnel_hostname:smb.example.com",
-      "tunnel_hostname:socket.example.com",
-      "tunnel_hostname:ssh.example.com",
-      "tunnel_hostname:status.example.com",
-      "tunnel_hostname:tcp.example.com",
-      "tunnel_hostname:tunnel.example.comsubpath",
-    ]);
-    expect(node(output, "tunnel_hostname:tunnel.example.comsubpath")).toEqual({
+    expect(nodeIds(output, "tunnel_hostname")).toEqual(
+      [
+        blogHost("admin.example.com"),
+        blogHost("app.example.com"),
+        blogHost("jump.example.com"),
+        blogHost("rdp.example.com"),
+        blogHost("smb.example.com"),
+        blogHost("socket.example.com"),
+        blogHost("ssh.example.com"),
+        blogHost("status.example.com"),
+        blogHost("tcp.example.com"),
+        blogHost("tunnel.example.comsubpath"),
+        legacyHost("legacy.example.com"),
+        legacyHost("open.example.com"),
+        legacyHost("ssh.example.com"),
+        legacyHost("wiki.example.com"),
+      ].sort(),
+    );
+    expect(node(output, blogHost("tunnel.example.comsubpath"))).toEqual({
       type: "tunnel_hostname",
-      nativeId: "tunnel.example.comsubpath",
+      nativeId: `${BLOG}:tunnel.example.comsubpath`,
       name: "tunnel.example.com",
       props: {
         hostname: "tunnel.example.com",
@@ -116,27 +125,60 @@ describe("tunnels collector", () => {
         service: "https://localhost:8001",
         origin_scheme: "https",
         tunnel_id: BLOG,
+        access_required: false,
       },
     });
-    expect(node(output, "tunnel_hostname:ssh.example.com").props).toEqual({
+    expect(node(output, blogHost("ssh.example.com")).props).toEqual({
       hostname: "ssh.example.com",
       path: "",
       service: "ssh://localhost:22",
       origin_scheme: "ssh",
       tunnel_id: BLOG,
+      access_required: false,
+    });
+    // Two tunnels serve ssh.example.com, each with its own node and origin.
+    expect(node(output, legacyHost("ssh.example.com")).props).toMatchObject({
+      service: "ssh://localhost:2222",
+      tunnel_id: LEGACY,
     });
     expect(edgeIds(output, "ROUTES_TO")).toContain(
-      `ROUTES_TO:tunnel_hostname:legacy.example.com->tunnel:${LEGACY}`,
+      `ROUTES_TO:${legacyHost("legacy.example.com")}->tunnel:${LEGACY}`,
     );
-    expect(edgeIds(output, "ROUTES_TO")).toHaveLength(10);
+    expect(edgeIds(output, "ROUTES_TO")).toHaveLength(14);
     expect(output.edges.filter((e) => e.dst === `tunnel:${BLOG}`).map((e) => e.src)).toHaveLength(
-      9,
+      10,
     );
+  });
+
+  it("reads originRequest.access.required per rule, falling back to the top-level setting", async () => {
+    const { output } = await run(tunnelsCollector, routes);
+    const required = (id: string) => node(output, id).props?.access_required;
+    expect(required(blogHost("admin.example.com"))).toBe(true);
+    expect(required(blogHost("app.example.com"))).toBe(false);
+    expect(required(legacyHost("legacy.example.com"))).toBe(true);
+    expect(required(legacyHost("wiki.example.com"))).toBe(true);
+    expect(required(legacyHost("open.example.com"))).toBe(false);
+
+    const access = (required: unknown) => ({ access: { required, teamName: "t", audTag: ["a"] } });
+    const cases: [Record<string, unknown>, unknown, boolean][] = [
+      [{}, undefined, false],
+      [{ originRequest: access(true) }, undefined, true],
+      [{ originRequest: access(false) }, access(true), false],
+      // Without required in its own access object, the rule does not inherit it.
+      [{ originRequest: { access: { teamName: "t" } } }, access(true), false],
+      [{ originRequest: { connectTimeout: 5 } }, access(true), true],
+      [{}, access(true), true],
+      [{ originRequest: access("true") }, undefined, false],
+      [{ originRequest: "access" }, access(true), true],
+    ];
+    for (const [rule, defaults, expected] of cases) {
+      expect(accessRequired(rule, defaults), JSON.stringify([rule, defaults])).toBe(expected);
+    }
   });
 
   it("parses the origin scheme of every service type", async () => {
     const { output } = await run(tunnelsCollector, routes);
-    const scheme = (host: string) => node(output, `tunnel_hostname:${host}`).props?.origin_scheme;
+    const scheme = (host: string) => node(output, blogHost(host)).props?.origin_scheme;
     expect(scheme("rdp.example.com")).toBe("rdp");
     expect(scheme("tcp.example.com")).toBe("tcp");
     expect(scheme("smb.example.com")).toBe("smb");
@@ -162,9 +204,7 @@ describe("tunnels collector", () => {
 
   it("drops credentials from the service URL", async () => {
     const { output } = await run(tunnelsCollector, routes);
-    expect(node(output, "tunnel_hostname:app.example.com").props?.service).toBe(
-      "http://localhost:8080",
-    );
+    expect(node(output, blogHost("app.example.com")).props?.service).toBe("http://localhost:8080");
     expect(JSON.stringify(output)).not.toContain(ORIGIN_PASSWORD);
   });
 
@@ -174,7 +214,9 @@ describe("tunnels collector", () => {
       without(routes, `${BASE}/cfd_tunnel/${BLOG}/configurations`),
     );
     expect(nodeIds(output, "tunnel")).toContain(`tunnel:${BLOG}`);
-    expect(nodeIds(output, "tunnel_hostname")).toEqual(["tunnel_hostname:legacy.example.com"]);
+    expect(nodeIds(output, "tunnel_hostname")).toEqual(
+      ["legacy", "open", "ssh", "wiki"].map((h) => legacyHost(`${h}.example.com`)),
+    );
   });
 
   it("skips a tunnel deleted after the plan step", async () => {

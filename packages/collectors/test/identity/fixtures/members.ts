@@ -76,7 +76,7 @@ export const memberExample = {
   },
 };
 
-/** Super Administrator through a legacy role. */
+/** Super Administrator through a legacy role, without two-factor authentication. */
 export const memberOwner = {
   id: "5647cdfbe6fbddc222c58114d8a028fb",
   roles: [
@@ -89,7 +89,11 @@ export const memberOwner = {
     },
   ],
   status: "accepted",
-  user: { email: "owner@example.com", id: "134f216a0b5d4c6e8f9a0b1c2d3e4f5a" },
+  user: {
+    email: "owner@example.com",
+    id: "134f216a0b5d4c6e8f9a0b1c2d3e4f5a",
+    two_factor_authentication_enabled: false,
+  },
 };
 
 /** Super Administrator through a policy; a deny policy grants nothing. */

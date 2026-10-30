@@ -23,6 +23,7 @@ export const GROUP_ENG = "aa0a4aab-672b-4bdb-bc33-a59f1130a11f";
 export const GROUP_CONTRACTORS = "bb1b5bbc-783c-4cec-cd44-b6a02241b22a";
 export const TOKEN_CI = "3537a672-e4d8-4d89-aab9-26cb622918a1";
 export const TOKEN_IDLE = "4648b783-f5e9-4e9a-bbca-37dc733029b2";
+export const TOKEN_LEAKED = "5759c894-a6fa-4f0b-8cdb-48ed844130c3";
 
 export const WORKER_MY = "e8f70fdbc8b1fb0b8ddb1af166186758";
 export const WORKER_API = "c81a2d22c29840ed9d61681a3270dbff";
@@ -136,7 +137,11 @@ const appBase = {
   updated_at: "2014-01-01T05:20:00.12345Z",
 };
 
-/** Public destinations: a path, a wildcard host, a path wildcard with an override, an unplaceable wildcard. */
+/**
+ * Public destinations: a path with a trailing slash, a wildcard host, a path
+ * wildcard with an override, a path wildcard inside the path, and a host
+ * wildcard the contract cannot express.
+ */
 export const appAdmin = {
   ...appBase,
   id: APP_ADMIN,
@@ -155,6 +160,7 @@ export const appAdmin = {
       overrides: [{ behavior: "public", path_pattern: "/api/health" }],
     },
     { type: "public", uri: "example.com/foo*/bar" },
+    { type: "public", uri: "shop*.example.com" },
   ],
   session_duration: "24h",
   scim_config: {
@@ -164,14 +170,21 @@ export const appAdmin = {
   },
 };
 
-/** Worker-level Access: one Worker, one Worker's previews, one Worker that does not exist. */
+/**
+ * Worker-level Access: one Worker with a public webhook path, one Worker's
+ * previews, one Worker that does not exist.
+ */
 export const appWorker = {
   ...appBase,
   id: APP_WORKER,
   name: "Access for my-worker",
   type: "self_hosted",
   destinations: [
-    { type: "worker", worker_id: WORKER_MY },
+    {
+      type: "worker",
+      worker_id: WORKER_MY,
+      overrides: [{ behavior: "public", path_pattern: "/webhooks/*" }],
+    },
     { type: "preview_worker", worker_id: WORKER_API },
     { type: "worker", worker_id: WORKER_UNKNOWN },
   ],
@@ -315,15 +328,30 @@ export const tokenCi = {
   updated_at: "2014-01-01T05:20:00.12345Z",
 };
 
-/** Never used, no expiry. */
+/** Never used, no expiry, and without the optional `enabled` field. */
 export const tokenIdle = {
   id: TOKEN_IDLE,
   client_id: "99c04c7e97272575f7610f8320010f68.access.example.com",
   created_at: "2024-03-01T00:00:00Z",
   duration: "forever",
-  enabled: true,
   name: "Old integration",
   updated_at: "2024-03-01T00:00:00Z",
+};
+
+/** Reported as leaked, which disables it until its secret is rotated. */
+export const tokenLeaked = {
+  id: TOKEN_LEAKED,
+  client_id: "aad15d8fa8383686a8721a9431121a79.access.example.com",
+  created_at: "2025-02-01T00:00:00Z",
+  duration: "8760h",
+  enabled: false,
+  expires_at: "2026-02-01T00:00:00Z",
+  last_seen_at: "2025-06-01T08:00:00Z",
+  leak_report_url: "https://github.com/example/repo/blob/main/config.yaml",
+  leak_reported_at: "2025-06-02T00:00:00Z",
+  leak_reporter: "github",
+  name: "Leaked deploy token",
+  updated_at: "2025-06-02T00:00:00Z",
 };
 
 /** The documented example, with secrets that must never reach the graph. */
