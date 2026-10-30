@@ -2,7 +2,22 @@
 
 - Date: 2026-10-30
 - Scope: what round 2 added (`apps/web`, `scripts/`, the `access-v2` and `undecided` changes), at commit d8480b1
-- Status: findings open; fixes are planned in round 4 of the [work packages](../team/work-packages.md)
+- Status: all findings fixed in round 4 of the [work packages](../team/work-packages.md) by `fix-tunnels`, `fix-deploy` and `fix-lifecycle`; `review-4` verifies them in round 5
+
+| Finding | Fixed by | Test |
+| --- | --- | --- |
+| R3-01 | `fix-tunnels` | `packages/collectors/test/identity/tunnels.test.ts` (two R3-01 tests); end to end: the R3-01 cases in `apps/core/test/e2e/account.ts`, run by `apps/core/test/e2e/scan.test.ts` |
+| R3-02 | `fix-tunnels` | `packages/collectors/test/identity/tunnels.test.ts` (four R3-02 tests); `packages/exposure/test/evaluate.test.ts` (three R3-02 cases); end to end: `apps/core/test/e2e/scan.test.ts` (R3-02) and the R3-02 cases in `apps/core/test/e2e/account.ts` |
+| R3-03 | `fix-deploy` | R3-03 tests in `scripts/test/config.test.ts` (configs next to and above the app), `run.test.ts` (`--config`, no named environment), `deploy.test.ts` (`CLOUDFLARE_ENV`, no `--env`), `topology.test.ts` (no `env` blocks) and `steps.test.ts` (the checked config in every Wrangler call) |
+| R3-04 | `fix-deploy` | `scripts/test/steps.test.ts` (three R3-04 tests), `scripts/test/topology.test.ts` (credentials in `secrets.required`) |
+| R3-05 | `fix-deploy` | `scripts/test/run.test.ts` (R3-05: builds run without any `CLOUDFLARE_` or `CF_` variable) |
+| R3-06 | `fix-deploy` | `scripts/test/topology.test.ts` (one owner per `database_id`), `scripts/test/steps.test.ts` (three R3-06 tests) |
+| R3-07 | `fix-lifecycle` | `packages/rules/test/evaluate.test.ts` (R3-07: an undecided row ends an expired suppression) |
+
+Related changes:
+
+- The last part of the R3-01 fix, which keeps a Service Auth policy for every address `public` behind `access_required`, came in round 3 with `fix-exposure` (`packages/exposure/test/evaluate.test.ts`). The [verification review](2026-10-30-verification-round-4.md) found a variant of it (R4-01).
+- `fix-lifecycle` also stops a sweep from moving `current_scan` (`packages/graph/test/write.test.ts`) and caps evidence strings inside list items (`packages/rules/test/evaluate.test.ts`).
 
 ## Summary
 

@@ -2,20 +2,20 @@
 
 - Date: 2026-10-30
 - Scope: all code merged up to commit 0677dde (round 1), read-only review by a reviewer agent
-- Status: all findings fixed (rounds 2 and 3); a verification review runs in round 4
+- Status: fixes landed in rounds 2 to 4. The [verification review](2026-10-30-verification-round-4.md) confirms seven of them and rates R2-02, R2-08 and R2-10 as partly fixed; their follow-ups R4-02, R4-06 and R4-07 are planned in round 5 of the [work packages](../team/work-packages.md)
 
-| Finding | Fixed by | Test |
-| --- | --- | --- |
-| R2-01 | `fix-exposure`, decision 0003 | `packages/exposure/test` (R2-01 cases) |
-| R2-02 | `undecided` | `packages/rules/test/evaluate.test.ts`, `undecided-*` fixtures |
-| R2-03 | `fix-exposure` | `packages/exposure/test` (R2-03 cases) |
-| R2-04 | `fix-collectors` | `packages/collectors/test/identity/tunnels.test.ts` (R2-04) |
-| R2-05 | `access-v2` | `packages/collectors/test/identity/targets.test.ts` |
-| R2-06 | `access-v2`; regression tests by `fix-collectors` | `packages/collectors/test/identity` (R2-06) |
-| R2-07 | `fix-core` | `apps/core/test` (R2-07, stale and superseded scans) |
-| R2-08 | `fix-rules` | `packages/rules/test/cf003.test.ts`, CF-003 fixtures |
-| R2-09 | `fix-collectors` (Worker `json` bindings); Pages env vars are collected, CF-024 reads them in round 4 | `packages/collectors/test/platform` (R2-09) |
-| R2-10 | integrator: `minimumReleaseAge` in `pnpm-workspace.yaml` | — |
+| Finding | Fixed by | Test | Verification (round 4) |
+| --- | --- | --- | --- |
+| R2-01 | `fix-exposure`, decision 0003 | `packages/exposure/test` (R2-01 cases) | fixed |
+| R2-02 | `undecided` | `packages/rules/test/evaluate.test.ts`, `undecided-*` fixtures | partly fixed: CF-021 still drops custom domains whose `enabled` is `null`, so their finding resolves; follow-up R4-02 |
+| R2-03 | `fix-exposure` | `packages/exposure/test` (R2-03 cases) | fixed |
+| R2-04 | `fix-collectors` | `packages/collectors/test/identity/tunnels.test.ts` (R2-04) | fixed |
+| R2-05 | `access-v2` | `packages/collectors/test/identity/targets.test.ts` | fixed |
+| R2-06 | `access-v2`; regression tests by `fix-collectors` | `packages/collectors/test/identity` (R2-06) | fixed |
+| R2-07 | `fix-core` | `apps/core/test` (R2-07, stale and superseded scans) | fixed |
+| R2-08 | `fix-rules` | `packages/rules/test/cf003.test.ts`, CF-003 fixtures | partly fixed: non-canonical spellings of the IPv4-mapped any-range are missed; follow-up R4-06 |
+| R2-09 | `fix-collectors` (Worker `json` bindings); `fix-lifecycle` (CF-024 reads Pages env vars, round 4) | `packages/collectors/test/platform` (R2-09), `packages/rules/test/evaluate.cf024.test.ts` | fixed for Worker `json` bindings; the Pages part landed after the review |
+| R2-10 | integrator: `minimumReleaseAge` in `pnpm-workspace.yaml` | — | partly fixed: not enforced for versions already in the lockfile; follow-up R4-07 |
 
 ## Summary
 
