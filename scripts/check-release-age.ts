@@ -967,7 +967,8 @@ function checkNestedManifest(path: string, shown: string): void {
  * the package manager, only the root may hold pnpm-workspace.yaml and .npmrc,
  * and no directory may hold .corepack.env. pnpm loads .pnpmfile.cjs on every
  * command and .pnp.cjs into every script it runs, so no directory may hold
- * either (R10-01). Walks the checkout without
+ * either (R10-01), and it reads package.yaml and package.json5 as manifests,
+ * which the project does not use (R10-02). Walks the checkout without
  * node_modules and .git, and refuses symbolic links rather than follow them,
  * since corepack and pnpm would. Names are compared as a case-insensitive file
  * system may open them (L-1), and at the root the files main reads must have
@@ -1005,6 +1006,11 @@ export function checkCheckout(root: string): void {
       if (name.startsWith(".pnpmfile")) {
         throw new CheckoutError(
           `${shown}: pnpm loads .pnpmfile.cjs on every command and runs its hooks, whose updateConfig can set lockfile-dir or any other setting the check refuses (R10-01); the project uses no pnpmfile, so the check refuses every name that starts with .pnpmfile`,
+        );
+      }
+      if (name === "package.yaml" || name === "package.json5") {
+        throw new CheckoutError(
+          `${shown}: pnpm reads package.yaml and package.json5 as project manifests, and the check reads package.json only; their pnpm field can make pnpm download and run a Node.js runtime (executionEnv) or change what it installs (R10-02), and the project uses neither`,
         );
       }
       if (name.startsWith(".pnp.")) {

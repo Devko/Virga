@@ -1916,8 +1916,8 @@ describe("R10-01: no pnpmfile, which pnpm loads on every command", () => {
       "apps/web/.pnpmfile.mjs",
       "packages/graph/.pnpmfile.cjs",
       ".PNPMFILE.CJS",
-      "apps/web/.pnpm​file.cjs",
-      "apps/web/.pnpmfile.ｃjs",
+      "apps/web/.pnpm\u200Bfile.cjs",
+      "apps/web/.pnpmfile.\uFF43js",
     ]) {
       await refusedBy(
         checkout({ [path]: PNPMFILE }),
@@ -1953,6 +1953,45 @@ describe("R10-01: no pnpmfile, which pnpm loads on every command", () => {
         new RegExp(
           `^error: ${shown.replaceAll(".", "\\.")}: pnpm run and pnpm exec load \\.pnp\\.cjs into every script they run`,
         ),
+      );
+    }
+  });
+});
+
+describe("R10-02: no package.yaml or package.json5", () => {
+  const MANIFEST =
+    "pnpm reads package\\.yaml and package\\.json5 as project manifests, and the check reads package\\.json only";
+
+  it("R10-02: refuses apps/x/package.yaml with pnpm.executionEnv.nodeVersion 23.0.0", async () => {
+    // The review's case: apps/* matches apps/x, and pnpm -r run build would
+    // fetch Node.js 23.0.0 and run the build with it.
+    await refusedBy(
+      checkout({
+        "apps/x/package.yaml": [
+          "name: x",
+          "scripts:",
+          "  build: node -v",
+          "pnpm:",
+          "  executionEnv:",
+          "    nodeVersion: 23.0.0",
+          "",
+        ].join("\n"),
+      }),
+      new RegExp(`^error: apps/x/package\\.yaml: ${MANIFEST}`),
+    );
+  });
+
+  it("R10-02: refuses package.yaml and package.json5 anywhere, however spelled", async () => {
+    for (const path of [
+      "package.yaml",
+      "package.json5",
+      "apps/web/package.json5",
+      "packages/graph/PACKAGE.YAML",
+      "apps/x/pac\u212Aage.yaml",
+    ]) {
+      await refusedBy(
+        checkout({ [path]: "{name: 'x'}\n" }),
+        new RegExp(`^error: ${path.replaceAll(".", "\\.")}: ${MANIFEST}`),
       );
     }
   });
