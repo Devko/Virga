@@ -994,8 +994,9 @@ export interface CheckOptions {
 export interface Failure {
   package: string;
   /**
-   * `mismatch`: the integrity is not the registry's. No exception accepts a
-   * mismatch or `unverified` (R8-03).
+   * `mismatch`: the integrity is not the registry's, or not of the strongest
+   * algorithm the registry publishes. No exception accepts a mismatch or
+   * `unverified` (R8-03).
    */
   reason: "too_young" | "not_registry" | "unverified" | "mismatch";
   detail: string;
@@ -1113,28 +1114,45 @@ function publishedDigests(dist: unknown): Digest[] {
   return digests;
 }
 
+/** Digest algorithms, weakest first. */
+const ALGORITHMS = ["sha1", "sha256", "sha384", "sha512"];
+
 /**
  * Whether `digest` names the bytes the registry publishes for the version
  * checked. pnpm installs whatever matches the lockfile's integrity, from
  * whichever registry or tarball URL it ends up using (.npmrc, a version field
  * in the entry), so only this ties the installed bytes to the publish time.
+ * pnpm verifies only the algorithm the lockfile names, so that must be the
+ * strongest one the registry publishes for the version: a sha1 that equals
+ * dist.shasum fails when dist.integrity has sha512.
  */
 function digestProblem(
   digest: Digest,
   dist: unknown,
   what: string,
 ): Omit<Failure, "package"> | undefined {
-  const published = publishedDigests(dist).filter((d) => d.algorithm === digest.algorithm);
+  const all = publishedDigests(dist);
+  const published = all.filter((d) => d.algorithm === digest.algorithm);
   if (published.length === 0) {
     return {
       reason: "unverified",
       detail: `the registry publishes no ${digest.algorithm} digest for this version to compare`,
     };
   }
-  if (published.some((d) => d.hex === digest.hex)) return undefined;
+  if (!published.some((d) => d.hex === digest.hex)) {
+    return {
+      reason: "mismatch",
+      detail: `${what} is not the ${digest.algorithm} digest the registry publishes for this version, so the bytes installed would not be the version checked`,
+    };
+  }
+  const strongest = all.reduce(
+    (best, d) => (ALGORITHMS.indexOf(d.algorithm) > ALGORITHMS.indexOf(best) ? d.algorithm : best),
+    digest.algorithm,
+  );
+  if (strongest === digest.algorithm) return undefined;
   return {
     reason: "mismatch",
-    detail: `${what} is not the ${digest.algorithm} digest the registry publishes for this version, so the bytes installed would not be the version checked`,
+    detail: `${what} is ${digest.algorithm}, but the registry publishes a ${strongest} digest for this version; pnpm verifies only the algorithm the lockfile names, so lock the ${strongest} integrity`,
   };
 }
 

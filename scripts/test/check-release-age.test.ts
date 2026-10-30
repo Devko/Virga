@@ -604,6 +604,73 @@ describe("R6-03: the locked integrity is the one the registry publishes", () => 
     const result = await checkReleaseAge(text, options(fetch));
     expect(result.failures).toEqual([]);
   });
+
+  it("TM-32: a sha1 integrity equal to dist.shasum fails when the registry publishes sha512", async () => {
+    const text = lockfile([
+      "  old@1.0.0:\n    resolution: {integrity: sha1-AQIDBAUGBwgJCgsMDQ4PEBESExQ=}",
+    ]);
+    const shasum = "0102030405060708090a0b0c0d0e0f1011121314";
+    const integrity = `sha512-${"A".repeat(86)}==`;
+    const { fetch } = mockFetch({
+      old: () =>
+        Response.json(
+          registryDocument("old", { "1.0.0": ago(30) }, { "1.0.0": { integrity, shasum } }),
+        ),
+    });
+    const result = await checkReleaseAge(
+      text,
+      options(fetch, {
+        exceptions: [{ package: "old@1.0.0", accepts: "too_young", reason: "not for this" }],
+      }),
+    );
+    expect(result.failures).toEqual([
+      {
+        package: "old@1.0.0",
+        reason: "mismatch",
+        detail:
+          "the lockfile's integrity is sha1, but the registry publishes a sha512 digest for this version; pnpm verifies only the algorithm the lockfile names, so lock the sha512 integrity",
+      },
+    ]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("TM-32: requires the strongest algorithm in dist.integrity", async () => {
+    const sha256 = `sha256-${"B".repeat(43)}=`;
+    const sha384 = `sha384-${"C".repeat(64)}`;
+    const sha512 = `sha512-${"D".repeat(86)}==`;
+    const sha1 = "sha1-AQIDBAUGBwgJCgsMDQ4PEBESExQ=";
+    const text = lockfile([
+      `  a@1.0.0:\n    resolution: {integrity: ${sha256}}`,
+      `  b@1.0.0:\n    resolution: {integrity: ${sha384}}`,
+      `  c@1.0.0:\n    resolution: {integrity: ${sha512}}`,
+      `  d@1.0.0:\n    resolution: {integrity: ${sha384}}`,
+    ]);
+    const published = (name: string, integrity: string) => () =>
+      Response.json(registryDocument(name, { "1.0.0": ago(30) }, { "1.0.0": { integrity } }));
+    const { fetch } = mockFetch({
+      a: published("a", `${sha256} ${sha512}`),
+      b: published("b", `${sha512} ${sha384}`),
+      c: published("c", `${sha1} ${sha512}`),
+      d: published("d", `${sha1} ${sha384}`),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    expect(result.failures.map((f) => [f.package, f.reason, f.detail])).toEqual([
+      [
+        "a@1.0.0",
+        "mismatch",
+        expect.stringMatching(
+          /^the lockfile's integrity is sha256, but the registry publishes a sha512 digest/,
+        ),
+      ],
+      [
+        "b@1.0.0",
+        "mismatch",
+        expect.stringMatching(
+          /^the lockfile's integrity is sha384, but the registry publishes a sha512 digest/,
+        ),
+      ],
+    ]);
+  });
 });
 
 describe("checkReleaseAge", () => {
