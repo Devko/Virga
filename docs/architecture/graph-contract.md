@@ -221,10 +221,14 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `tunnel_type` | string | `cfd_tunnel` or `warp_connector` (Mesh) |
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
+| `ingress_truncated` | boolean | `true` when the ingress yields more than 1,000 entry points and the rest were not emitted |
 
-`tunnel_hostname` — native ID: `<tunnel_id>:<hostname><path>`; name: hostname.
+`tunnel_hostname` — native ID: `<tunnel_id>:<hostname>:<path>`; name: hostname.
 
 - The tunnel ID keeps two tunnels that serve the same hostname apart.
+- The `:` between hostname and path keeps a hostname and a path from combining into another hostname's ID (review R5-04).
+- When the ID would exceed 512 characters, the path part becomes `sha256:<hex of the path>` (R5-05). The full path stays in `path`, and no rule is dropped for its length.
+- Fall-through expansion yields at most 1,000 `tunnel_hostname` nodes per tunnel (R5-06). Beyond that, the tunnel gets `ingress_truncated: true`, and the evaluator returns `unknown` for every entry point of that tunnel.
 - `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
 - For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
