@@ -1,0 +1,62 @@
+# Source: https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/get/
+# (condition.request_ip.in: "List of IPv4/IPv6 CIDR addresses")
+# Graph shape: docs/architecture/graph-contract.md, account_token.ip_condition
+# Review finding R4-06 (docs/reviews/2026-10-30-verification-round-4.md)
+description: >
+  Evaluated on 2026-10-29; none of these tokens expires and each can write
+  Workers scripts, but every allow list limits where it works, in spellings
+  other than the canonical one: an IPv4-mapped /24 written in hex, an
+  IPv4-mapped /8 with leading zeros, an expanded IPv6 /48 and an upper-case
+  address, and two /96 ranges next to the IPv4-mapped block.
+params: { now_ms: 1793232000000 }
+nodes:
+  - type: account_token
+    id: f0000000000000000000000000000001
+    name: mapped-office-in-hex
+    props:
+      status: active
+      issued_on: "2026-10-01T00:00:00Z"
+      modified_on: null
+      expires_on: null
+      not_before: null
+      ip_condition: { in: ["0:0:0:0:0:ffff:c633:6400/120"], not_in: [] }
+      policies:
+        - { effect: allow, permission_groups: [{ id: pg-1, name: Workers Scripts Write }], resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" } }
+  - type: account_token
+    id: f0000000000000000000000000000002
+    name: mapped-slash-8-expanded
+    props:
+      status: active
+      issued_on: "2026-10-01T00:00:00Z"
+      modified_on: null
+      expires_on: null
+      not_before: null
+      ip_condition: { in: ["0000:0000:0000:0000:0000:ffff:1100:0000/104"], not_in: [] }
+      policies:
+        - { effect: allow, permission_groups: [{ id: pg-1, name: Workers Scripts Write }], resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" } }
+  - type: account_token
+    id: f0000000000000000000000000000003
+    name: ipv6-expanded
+    props:
+      status: active
+      issued_on: "2026-10-01T00:00:00Z"
+      modified_on: null
+      expires_on: null
+      not_before: null
+      ip_condition: { in: ["2001:0db8:0000:0000:0000:0000:0000:0000/48", "2001:DB8::7"], not_in: [] }
+      policies:
+        - { effect: allow, permission_groups: [{ id: pg-1, name: Workers Scripts Write }], resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" } }
+  - type: account_token
+    id: f0000000000000000000000000000004
+    name: next-to-the-block
+    props:
+      status: active
+      issued_on: "2026-10-01T00:00:00Z"
+      modified_on: null
+      expires_on: null
+      not_before: null
+      ip_condition: { in: ["::fffe:0:0/96", "64:ff9b::/96"], not_in: [] }
+      policies:
+        - { effect: allow, permission_groups: [{ id: pg-1, name: Workers Scripts Write }], resources: { "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*" } }
+edges: []
+expect: []

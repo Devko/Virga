@@ -2916,6 +2916,151 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-003",
+    "name": "negative-restricted-in-any-spelling",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires and each can write Workers scripts, but every allow list limits where it works, in spellings other than the canonical one: an IPv4-mapped /24 written in hex, an IPv4-mapped /8 with leading zeros, an expanded IPv6 /48 and an upper-case address, and two /96 ranges next to the IPv4-mapped block.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000001",
+        "name": "mapped-office-in-hex",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0:0:0:0:0:ffff:c633:6400/120"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000002",
+        "name": "mapped-slash-8-expanded",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0000:0000:0000:0000:0000:ffff:1100:0000/104"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000003",
+        "name": "ipv6-expanded",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "2001:0db8:0000:0000:0000:0000:0000:0000/48",
+              "2001:DB8::7"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "f0000000000000000000000000000004",
+        "name": "next-to-the-block",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::fffe:0:0/96",
+              "64:ff9b::/96"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-003",
     "name": "negative-scan-clock",
     "description": "Without a now_ms override, time runs from the fixture scan's start at epoch 1 ms. This token expires 59 days after it, so it is not long-lived.\n",
     "nodes": [
@@ -3102,6 +3247,233 @@ export const FIXTURES: readonly RuleFixture[] = [
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-003",
+    "name": "positive-ip-allow-list-mapped-spellings",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires and each can write Workers scripts. Next to an office range, each allow list holds the IPv4-mapped block ::ffff:0:0/96 that admits every IPv4 client, in the spellings of the review: fully expanded, with a zero group before ffff, mixed with a dotted quad, and with leading zeros. The last one holds ::/64, which contains that block.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000001",
+        "name": "expanded",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0:0:0:0:0:ffff:0:0/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000002",
+        "name": "zero-group",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::0:ffff:0:0/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000003",
+        "name": "mixed",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0::ffff:0.0.0.0/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000004",
+        "name": "leading-zeros",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0000:0000:0000:0000:0000:ffff:0000:0000/96",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "e0000000000000000000000000000005",
+        "name": "around-the-block",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::/64",
+              "198.51.100.0/24"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "account_token:e0000000000000000000000000000001",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000002",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000003",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000004",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:e0000000000000000000000000000005",
+        "name": "last_used_on",
+        "value": 1793145600000
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000001",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000002",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000003",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000004",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:e0000000000000000000000000000005",
+        "severity": "high"
+      }
+    ]
   },
   {
     "rule": "CF-003",
