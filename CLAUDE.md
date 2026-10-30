@@ -40,7 +40,8 @@ These were checked on 2026-10-29; the details are in `docs/analysis.md`.
 
 ## Commands
 
-- `pnpm install`, then `pnpm ci` runs lint, `rules:check`, typecheck and all tests. Run it before every push.
+- `pnpm install`, then `pnpm run ci` runs lint, `rules:check`, typecheck, all tests and the script tests. Run it before every push. (`pnpm ci` without `run` is pnpm's own command, which is not implemented.)
+- `pnpm check:release-age` after any change to `pnpm-lock.yaml`: every locked version must have been published at least 14 days ago (R4-07). It needs network access to registry.npmjs.org, so `pnpm run ci` leaves it out; CI runs it in its own job before any install. A version that is too young is removed from the lockfile and resolved again; exceptions go into `EXCEPTIONS` in `scripts/check-release-age.ts` (see CONTRIBUTING.md).
 - `pnpm rules:build` after any change in `rules/`; it regenerates `packages/rules/src/*.gen.ts`, which are committed.
 - `pnpm format` applies Biome formatting.
 - `pnpm build` builds the web UI; `pnpm deploy:dry-run` bundles every Worker and checks their configs against each other without credentials; `pnpm deploy` deploys (see the operator guide).
