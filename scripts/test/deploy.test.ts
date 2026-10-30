@@ -138,6 +138,42 @@ describe("deploy.ts", () => {
     }
   });
 
+  it("R7-01: refuses NODE_DEBUG and NODE_DEBUG_NATIVE, also in a dry run", () => {
+    for (const [name, value] of [
+      ["NODE_DEBUG", "child_process"],
+      ["NODE_DEBUG", "http,tls"],
+      ["NODE_DEBUG_NATIVE", "INSPECTOR_SERVER"],
+    ] as const) {
+      const result = deploy(["--dry-run"], {
+        [name]: value,
+        CLOUDFLARE_API_TOKEN: "cfat_R701SECRETabcdefghijklmnopqrstuvwxyz0123",
+      });
+      expect(result.status, `${name}=${value}`).toBe(1);
+      expect(result.stderr).toContain(`error: unset ${name}: `);
+      expect(result.stdout + result.stderr).not.toContain("R701SECRET");
+      // Refused before reading any config.
+      expect(result.stderr).not.toContain("wrangler.jsonc");
+    }
+  });
+
+  it("R7-02: refuses the loader's library search paths and NODE_COMPILE_CACHE, also in a dry run", () => {
+    for (const name of [
+      "LD_LIBRARY_PATH",
+      "DYLD_LIBRARY_PATH",
+      "DYLD_FALLBACK_LIBRARY_PATH",
+      "DYLD_FRAMEWORK_PATH",
+      "DYLD_FALLBACK_FRAMEWORK_PATH",
+      "DYLD_VERSIONED_LIBRARY_PATH",
+      "DYLD_VERSIONED_FRAMEWORK_PATH",
+      "NODE_COMPILE_CACHE",
+    ]) {
+      const result = deploy(["--dry-run"], { [name]: join(root, "planted") });
+      expect(result.status, name).toBe(1);
+      expect(result.stderr).toContain(`error: unset ${name}: `);
+      expect(result.stderr).not.toContain("wrangler.jsonc");
+    }
+  });
+
   it("R5-03: prints the proxy settings it passes to Wrangler, without credentials", () => {
     const result = deploy(["--dry-run"], {
       HTTPS_PROXY: "http://alice:s3cret-pass@proxy.example:3128",

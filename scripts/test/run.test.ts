@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -19,11 +20,13 @@ import {
   configOverrides,
   dotEnvFiles,
   droppedSettings,
+  PROXY_VARS,
   parseJsonOutput,
   processRunner,
   proxyNotice,
   type RunnerOptions,
   redact,
+  UNSAFE_VARS,
   unsafeVars,
   type WranglerCommand,
   wranglerEnv,
@@ -324,6 +327,32 @@ describe("unsafeVars", () => {
     expect(unsafeVars({ NODE_OPTIONS: "", node_options: "--require x" }, "linux")).toEqual([]);
     expect(unsafeVars({ node_options: "--require x" }, "win32")).toEqual(["node_options"]);
   });
+
+  it("R7-01, R7-02: names NODE_DEBUG, the loader's library search paths and NODE_COMPILE_CACHE", () => {
+    const unsafe = [
+      "NODE_DEBUG",
+      "NODE_DEBUG_NATIVE",
+      "NODE_COMPILE_CACHE",
+      "LD_LIBRARY_PATH",
+      "DYLD_LIBRARY_PATH",
+      "DYLD_FALLBACK_LIBRARY_PATH",
+      "DYLD_FRAMEWORK_PATH",
+      "DYLD_FALLBACK_FRAMEWORK_PATH",
+      "DYLD_VERSIONED_LIBRARY_PATH",
+      "DYLD_VERSIONED_FRAMEWORK_PATH",
+    ];
+    const env = {
+      ...Object.fromEntries(unsafe.map((name) => [name, "/tmp/capture"])),
+      // These only turn a feature off or name a data file.
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_ICU_DATA: "/usr/share/icu",
+    };
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      expect(unsafeVars(env, platform).sort(), platform).toEqual([...unsafe].sort());
+    }
+    expect(unsafeVars({ NODE_DEBUG: "child_process" }, "linux")).toEqual(["NODE_DEBUG"]);
+    expect(unsafeVars({ ld_library_path: "/tmp/capture" }, "win32")).toEqual(["ld_library_path"]);
+  });
 });
 
 describe("dotEnvFiles", () => {
@@ -361,6 +390,43 @@ process.exitCode = 3;
 
 /** Source of a stand-in Wrangler bin file that lists the names of its environment, one per line. */
 const NAMES_BIN = "for (const name of Object.keys(process.env)) console.log(name);\n";
+
+/**
+ * A deploy step in its own Node process: records the Wrangler of the app in
+ * argv[2] and runs it with the token through the real processRunner.
+ */
+const NODE_DEBUG_CHILD = `import { readFileSync } from "node:fs";
+import { processRunner, sha256 } from ${JSON.stringify(new URL("../lib/run.ts", import.meta.url).href)};
+import { recordWranglers } from ${JSON.stringify(new URL("../lib/wrangler.ts", import.meta.url).href)};
+const [app, config] = process.argv.slice(2);
+const run = processRunner({
+  credentials: "token",
+  secrets: () => [process.env.CLOUDFLARE_API_TOKEN ?? ""],
+  wranglers: recordWranglers([app]),
+  print: () => {},
+});
+try {
+  const result = await run({ bin: "wrangler", cwd: app, config, configSha256: sha256(readFileSync(config)), args: ["deploy"], capture: true });
+  console.log("ran: " + result.code);
+} catch (error) {
+  console.log("refused: " + error.message);
+}
+`;
+
+/** This process's environment without Cloudflare, Wrangler, proxy or unsafe settings. */
+function plainEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (
+      /^(?:CLOUDFLARE|CF|WRANGLER)_/i.test(name) ||
+      PROXY_VARS.includes(name) ||
+      Object.hasOwn(UNSAFE_VARS, name.toUpperCase())
+    ) {
+      delete env[name];
+    }
+  }
+  return env;
+}
 
 const CONFIG_TEXT = '{ "name": "virga-web" }\n';
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -459,6 +525,28 @@ describe("processRunner", () => {
     expect(printed.join("\n")).not.toContain("the-deploy-token-value");
   });
 
+  it("R7-01: starts nothing under NODE_DEBUG, whose output in Node passes no redaction", () => {
+    const script = join(dir, "node-debug.mjs");
+    writeFileSync(script, NODE_DEBUG_CHILD);
+    const token = "cfat_R701SECRETabcdefghijklmnopqrstuvwxyz0123";
+    const child = (extra: Record<string, string>) =>
+      spawnSync(process.execPath, [script, app, config], {
+        env: { ...plainEnv(), CLOUDFLARE_API_TOKEN: token, ...extra },
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+    // Control: without NODE_DEBUG, the runner starts Wrangler with the token.
+    const plain = child({});
+    expect(plain.stdout).toBe("ran: 3\n");
+    expect(plain.stderr).toBe("");
+    for (const value of ["child_process", "*"]) {
+      const debug = child({ NODE_DEBUG: value });
+      expect(debug.stderr, value).not.toContain(token);
+      expect(debug.stderr, value).not.toContain("R701SECRET");
+      expect(debug.stdout, value).toMatch(/^refused: unset NODE_DEBUG: /);
+    }
+  });
+
   it("R3-03: refuses arguments that choose another config or environment", async () => {
     const run = runner({ credentials: "none" });
     for (const extra of [
@@ -516,7 +604,10 @@ describe("processRunner", () => {
 
   it("R5-03: gives Wrangler the allowlisted environment, not the operator's", async () => {
     try {
-      for (const [name, value] of Object.entries(SHELL)) vi.stubEnv(name, value);
+      // The runner starts nothing while NODE_DEBUG or LD_LIBRARY_PATH is set (R7-01, R7-02).
+      for (const [name, value] of Object.entries(SHELL)) {
+        if (!Object.hasOwn(UNSAFE_VARS, name)) vi.stubEnv(name, value);
+      }
       writeFileSync(join(names, "wrangler.jsonc"), CONFIG_TEXT);
       const result = await runner()(
         wrangler([], { cwd: names, config: join(names, "wrangler.jsonc") }),

@@ -111,7 +111,11 @@ Run it from a plain shell. A debugger terminal, for example, sets `NODE_OPTIONS`
 The script:
 
 1. Checks its own environment, also for a dry run, and refuses to run while:
-   - `NODE_OPTIONS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` or `OPENSSL_CONF` is set to anything. They load code into Node and the processes it starts, or turn off certificate checks, and they act on the script itself, which holds the token, before it could drop them;
+   - one of these is set to anything. They act on the script itself, which holds the token, before it could drop them:
+     - `NODE_OPTIONS`, `NODE_COMPILE_CACHE` and `OPENSSL_CONF` load code into Node and the processes it starts;
+     - `LD_PRELOAD`, `LD_AUDIT` and `DYLD_INSERT_LIBRARIES` load a library into them, and `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `DYLD_VERSIONED_LIBRARY_PATH` and `DYLD_VERSIONED_FRAMEWORK_PATH` make the dynamic loader look for their libraries there first;
+     - `NODE_DEBUG` and `NODE_DEBUG_NATIVE` make Node print its own debug output, which the script cannot redact. With `NODE_DEBUG=child_process` that is the environment of every process the script starts, the token included;
+     - `NODE_TLS_REJECT_UNAUTHORIZED` turns off certificate checks;
    - `CLOUDFLARE_ENV` or `WRANGLER_CI_OVERRIDE_NAME` is set: with them, Wrangler would deploy a named environment or under another Worker name, not the configuration the script checked;
    - `CF_API_BASE_URL` is set, or `CLOUDFLARE_API_BASE_URL`, `WRANGLER_API_ENVIRONMENT` or `CLOUDFLARE_COMPLIANCE_REGION` is set to anything but `https://api.cloudflare.com/client/v4`, `production` and `public`: the token goes only to the public API.
 
@@ -409,7 +413,9 @@ What stays behind:
 | Message or symptom | Cause and fix |
 | --- | --- |
 | `set CLOUDFLARE_API_TOKEN …` or `set CLOUDFLARE_ACCOUNT_ID …` | Export both. The account ID is 32 hex characters |
-| `unset NODE_OPTIONS: it can load code …` (or `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `OPENSSL_CONF`) | Unset the variable for the deploy, for example `env -u NODE_OPTIONS node scripts/deploy.ts`, or run it from a plain shell instead of a debugger terminal. It loads code into the deploy script, which holds the token, and into Wrangler. The script refuses any value, `--max-old-space-size` included |
+| `unset NODE_OPTIONS: it can load code …` (or `NODE_COMPILE_CACHE`, `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `OPENSSL_CONF`) | Unset the variable for the deploy, for example `env -u NODE_OPTIONS node scripts/deploy.ts`, or run it from a plain shell instead of a debugger terminal. It loads code into the deploy script, which holds the token, and into Wrangler. The script refuses any value, `--max-old-space-size` included |
+| `unset LD_LIBRARY_PATH: the dynamic loader looks there first …` (or `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `DYLD_VERSIONED_LIBRARY_PATH`, `DYLD_VERSIONED_FRAMEWORK_PATH`) | Unset it for the deploy, for example `env -u LD_LIBRARY_PATH node scripts/deploy.ts`. A library under the name of one Node needs, in a directory on that path, runs inside the deploy script with the token in its environment. If Node needs the variable to start at all, install a Node that does not |
+| `unset NODE_DEBUG: Node prints its own debug output …` (or `NODE_DEBUG_NATIVE`) | Unset it for the deploy. Node prints its debug output straight to the terminal, past the script's redaction; with `child_process` that output holds the token. To debug a Wrangler call, run the `npx wrangler` command by hand without the deploy token |
 | `unset NODE_TLS_REJECT_UNAUTHORIZED: it turns off certificate checks …` | Unset it. Behind a proxy that presents its own certificates, set `NODE_EXTRA_CA_CERTS` to its CA instead ([Behind a proxy](#behind-a-proxy)) |
 | `unable to get local issuer certificate` or `self-signed certificate in certificate chain` from Wrangler | A proxy presents its own certificates. Set `NODE_EXTRA_CA_CERTS` to its CA as a PEM file. `NODE_OPTIONS=--use-openssl-ca` and `NODE_USE_SYSTEM_CA` do not reach Wrangler |
 | `Proxy settings passed to Wrangler: …` | Not an error. Check that the host is your proxy, and see [Behind a proxy](#behind-a-proxy) |

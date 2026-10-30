@@ -249,21 +249,37 @@ export function proxyNotice(env: Env, platform: Platform = process.platform): st
 
 const LOADS_LIBRARY =
   "it loads a library into every process the deploy starts, and into the deploy";
+const SEARCHES_LIBRARIES =
+  "the dynamic loader looks there first for the libraries of the deploy and of every process it starts, so it can load code into them";
+const PRINTS_PAST_REDACTION =
+  "Node prints its own debug output straight to the terminal, past the deploy's redaction";
 
 /**
- * Variables that load code into Node and the processes it starts, or turn
- * off certificate checks, with the reason. They act on the deploy script
- * itself before it could drop them, so the deploy refuses to run while one
- * is set to anything (R5-03).
+ * Variables that load code into Node and the processes it starts, turn off
+ * certificate checks, or make Node print what the deploy holds, with the
+ * reason. They act on the deploy script itself before it could drop them, so
+ * the deploy refuses to run while one is set to anything (R5-03, R7-01,
+ * R7-02).
  */
 export const UNSAFE_VARS: Readonly<Record<string, string>> = {
   NODE_OPTIONS:
     "it can load code (--require, --import) into every Node process, the deploy and Wrangler included, and change their checks",
+  NODE_DEBUG: `${PRINTS_PAST_REDACTION}. With child_process, that is the environment of every process the deploy starts, the API token included`,
+  NODE_DEBUG_NATIVE: PRINTS_PAST_REDACTION,
+  NODE_COMPILE_CACHE:
+    "it makes Node run compiled code from that directory in place of the sources, in the deploy and every Node process it starts",
   NODE_TLS_REJECT_UNAUTHORIZED:
     "it turns off certificate checks. For a proxy that presents its own certificates, set NODE_EXTRA_CA_CERTS to its CA instead",
   LD_PRELOAD: LOADS_LIBRARY,
   LD_AUDIT: LOADS_LIBRARY,
+  LD_LIBRARY_PATH: SEARCHES_LIBRARIES,
   DYLD_INSERT_LIBRARIES: LOADS_LIBRARY,
+  DYLD_LIBRARY_PATH: SEARCHES_LIBRARIES,
+  DYLD_FALLBACK_LIBRARY_PATH: SEARCHES_LIBRARIES,
+  DYLD_FRAMEWORK_PATH: SEARCHES_LIBRARIES,
+  DYLD_FALLBACK_FRAMEWORK_PATH: SEARCHES_LIBRARIES,
+  DYLD_VERSIONED_LIBRARY_PATH: SEARCHES_LIBRARIES,
+  DYLD_VERSIONED_FRAMEWORK_PATH: SEARCHES_LIBRARIES,
   OPENSSL_CONF: "it can load OpenSSL engines and providers into Node",
 };
 
@@ -272,6 +288,13 @@ export function unsafeVars(env: Env, platform: Platform = process.platform): str
   const fold = caseOf(platform);
   return Object.keys(UNSAFE_VARS).flatMap((unsafe) =>
     Object.keys(env).filter((name) => fold(name) === unsafe && (env[name] ?? "") !== ""),
+  );
+}
+
+/** One `unset <name>: <reason>` line per UNSAFE_VARS entry set in `env`. */
+export function unsafeProblems(env: Env, platform: Platform = process.platform): string[] {
+  return unsafeVars(env, platform).map(
+    (name) => `unset ${name}: ${UNSAFE_VARS[name.toUpperCase()]}`,
   );
 }
 
@@ -395,7 +418,10 @@ function wranglerProblem(command: WranglerCommand, options: RunnerOptions): stri
  * directory that holds one (R5-03). Wrangler is the bin file of the package
  * recorded before the builds, run with this Node: never a node_modules/.bin
  * shim, a shell script that any build can append to (R6-01). All output
- * passes through `redact`.
+ * passes through `redact`. Like the deploy's first step, the runner starts
+ * nothing while an UNSAFE_VARS entry is set: Node's own NODE_DEBUG output
+ * would print the environment of each child, the token included, and no
+ * redaction sees it (R7-01).
  */
 export function processRunner(options: RunnerOptions): Runner {
   const print =
@@ -403,6 +429,11 @@ export function processRunner(options: RunnerOptions): Runner {
     ((stream, line) => (stream === "stdout" ? process.stdout : process.stderr).write(`${line}\n`));
   return (command) =>
     new Promise((resolve, reject) => {
+      const unsafe = unsafeProblems(process.env);
+      if (unsafe.length > 0) {
+        reject(new RefusedError(unsafe.join("\n")));
+        return;
+      }
       let file = "pnpm";
       let args = command.args;
       if (command.bin === "wrangler") {

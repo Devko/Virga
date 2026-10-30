@@ -28,8 +28,7 @@ import {
   proxyNotice,
   RefusedError,
   redact,
-  UNSAFE_VARS,
-  unsafeVars,
+  unsafeProblems,
 } from "./lib/run.ts";
 import {
   build,
@@ -78,11 +77,9 @@ async function main(): Promise<number> {
   const dryRun = values["dry-run"] === true;
   const root = fileURLToPath(new URL("..", import.meta.url));
 
-  const unsafe = unsafeVars(process.env);
+  const unsafe = unsafeProblems(process.env);
   if (unsafe.length > 0) {
-    for (const name of unsafe) {
-      console.error(`error: unset ${name}: ${UNSAFE_VARS[name.toUpperCase()]}`);
-    }
+    for (const problem of unsafe) console.error(`error: ${problem}`);
     return 1;
   }
 
