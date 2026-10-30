@@ -159,7 +159,7 @@ Three Workers in phase 1, a scanner container in phase 2. Each binding is grante
 
 | Worker | Exposure | Bindings | Role |
 | --- | --- | --- | --- |
-| `virga-broker` | No routes, `workers.dev` and previews off | Vault D1, master key (Secrets Store), rate budget Durable Object | Holds and uses tokens. RPC entrypoints `ApiCaller` (read calls with path allowlist) and `TokenIntake` (store, recheck, and remove with the account's rate budget) |
+| `virga-broker` | No routes, `workers.dev` and previews off | Vault D1, master key (Secrets Store), rate budget Durable Object | Holds and uses tokens. RPC entrypoints `ApiCaller` (read calls with path allowlist; rechecks a token before use once its check is 24 hours old) and `TokenIntake` (store, recheck, and remove with the account's rate budget) |
 | `virga-core` | No routes, `workers.dev` and previews off | Account graph Durable Object, scan Workflow, index D1, R2, Queue, `ApiCaller` | Cron, Workflows, collectors, evaluators, rules. RPC entrypoints `GraphReader` (read-only) and `Admin` |
 | `virga-web` | Custom domain, Worker-level Access, JWT validated in code | `GraphReader`, `Admin`, `TokenIntake`, static assets | UI, API, MCP. No vault, no D1, no Durable Object stubs |
 
