@@ -23,8 +23,9 @@ Every read from a scanned account goes through the broker, which allows only rea
 5. [Scan tokens per profile](#scan-tokens-per-profile)
 6. [Onboarding an account](#onboarding-an-account)
 7. [What the scanned account's audit log shows](#what-the-scanned-accounts-audit-log-shows)
-8. [Offboarding](#offboarding)
-9. [Troubleshooting](#troubleshooting)
+8. [Audit trail and OCSF export](#audit-trail-and-ocsf-export)
+9. [Offboarding](#offboarding)
+10. [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 
@@ -410,6 +411,15 @@ Where to look:
 - **Dashboard:** **Manage Account** > **Audit Logs**. The default filter hides `view` actions ("Action type is not view"); remove it, then filter by the token.
 - **API:** `GET /accounts/{account_id}/logs/audit?since=…&before=…` (both parameters are required). The filters `actor_token_id` and `action_type` accept `not`, so your own monitoring can leave Virga's reads out. Reading the audit log needs Account Settings Read.
 - **Retention:** 18 months; the dashboard queries the last 90 days.
+
+## Audit trail and OCSF export
+
+Every request to the JSON API and every MCP tool call by an identity that passed Access is recorded in the `tool_audit` table of `virga-index`: the Access email or service token client ID, the channel (`ui`, `api`, `mcp`), the route or tool name, the account ID and the outcome. Request bodies, tokens and strings from scanned accounts are never recorded. The channel `ui` comes from the `Sec-Fetch-Site` header, which a client can set, so it describes the call; only the identity is verified.
+
+- **Reading it:** admins open the Audit trail page, or call `GET /api/audit`. Viewers and service tokens get 403.
+- **Retention:** rows are deleted after 90 days by the hourly dispatcher. They hold the emails of the tool's users, so include the table in your privacy notice. Removing an account keeps its audit rows until they expire.
+
+Findings export as OCSF 1.9.0 Detection Findings from the account page (**Export findings**) or with `GET /api/accounts/{id}/findings/export?format=json|ndjson`. A SIEM collector authenticates with an Access service token and follows the `Link: rel="next"` header until there is none. Each response holds up to 1,000 findings and about 4 MiB. Strings from the scanned account stay JSON data and are listed under `unmapped.virga.untrusted`. The [mapping](../architecture/ocsf-export.md) says what the export holds and what it does not yet do.
 
 ## Offboarding
 
