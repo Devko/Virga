@@ -25,6 +25,10 @@ const GIT = "pages_project:this-is-my-project-01";
 const routes = pagesRoutes;
 
 describe("pages collector", () => {
+  it("asks for Pages Metadata Read, not Pages Read, which also reads content", () => {
+    expect(pagesCollector.permissions).toEqual(["Pages Metadata Read", "Queues Read"]);
+  });
+
   it("plans project chunks of 20 across pages of the project list", async () => {
     const { chunks } = await run(pagesCollector, routes);
     expect(chunks).toEqual([["docs", "landing", "this-is-my-project-01"]]);

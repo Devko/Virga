@@ -45,7 +45,7 @@ const BINDING_MAPS: Record<string, (value: Record<string, unknown>) => Binding> 
 export const pagesCollector: Collector<string> = {
   resourceClass: "pages",
   after: ["storage", "workers"],
-  permissions: ["Pages Read", "Queues Read"],
+  permissions: ["Pages Metadata Read", "Queues Read"],
 
   async plan(ctx) {
     const projects = await ctx.api.all<CfPagesProject>(`/accounts/${ctx.accountId}/pages/projects`);
