@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { devNull, tmpdir } from "node:os";
@@ -26,13 +27,15 @@ import {
   proxyNotice,
   type RunnerOptions,
   redact,
+  secretForms,
   UNSAFE_VARS,
   unsafeVars,
   type WranglerCommand,
   wranglerEnv,
 } from "../lib/run.ts";
+import { recordWorkspace } from "../lib/workspace.ts";
 import { recordWranglers, type WranglerInstall } from "../lib/wrangler.ts";
-import { type FakeWrangler, fakeWrangler, put } from "./helpers.ts";
+import { type FakeWrangler, fakeWrangler, put, workspaceLink } from "./helpers.ts";
 
 describe("redact", () => {
   it("removes known secrets and Cloudflare credential shapes", () => {
@@ -44,6 +47,21 @@ describe("redact", () => {
 
   it("leaves short values alone so it never redacts common words", () => {
     expect(redact("a b c", ["a"])).toBe("a b c");
+  });
+
+  it("deploy environment: redacts a value read with a trailing newline, in the form it is used", () => {
+    const set = "R10-REDACT-MARKER-0123456789\n";
+    const line = "Authorization: Bearer R10-REDACT-MARKER-0123456789";
+    // Output is redacted line by line, so the value as set never matches.
+    expect(redact(line, [set])).toBe(line);
+    expect(secretForms(set)).toEqual([set, "R10-REDACT-MARKER-0123456789"]);
+    expect(redact(line, secretForms(set))).toBe("Authorization: Bearer [redacted]");
+    expect(secretForms("  padded-value-0123  ")).toEqual([
+      "  padded-value-0123  ",
+      "padded-value-0123",
+    ]);
+    expect(secretForms("plain-value-0123")).toEqual(["plain-value-0123"]);
+    expect(secretForms("")).toEqual([]);
   });
 });
 
@@ -764,6 +782,38 @@ describe("processRunner and what the builds can change (R6-01)", () => {
     );
     rmSync(generated);
     await expect(runChecked()).rejects.toThrow(`${generated} cannot be read`);
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+  });
+
+  it("L-2: refuses to run Wrangler once a workspace link of its app leads elsewhere", async () => {
+    for (const name of ["rules", "graph"]) {
+      put(join(root, "packages", name, "package.json"), JSON.stringify({ name: `@virga/${name}` }));
+      put(join(root, "packages", name, "src", "index.ts"), "export {};\n");
+    }
+    workspaceLink(root, app, "rules");
+    const workspaces = new Map([[app, recordWorkspace(root, "web")]]);
+    const wranglers = recordWranglers([app]);
+    const runLinked = () =>
+      processRunner({ credentials: "token", secrets: () => [], wranglers, workspaces })({
+        bin: "wrangler",
+        cwd: app,
+        config,
+        configSha256: sha256(CONFIG_TEXT),
+        args: ["deploy"],
+        capture: true,
+      });
+    await runLinked();
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+    const link = join(app, "node_modules", "@virga", "rules");
+    rmSync(link);
+    symlinkSync(join(root, "packages", "graph"), link);
+    await expect(runLinked()).rejects.toThrow(
+      `apps/web/node_modules/@virga/rules leads to ${join(root, "packages", "graph")}, not to packages/rules`,
+    );
+    rmSync(link);
+    await expect(runLinked()).rejects.toThrow(
+      "the workspace links of apps/web changed after the deploy recorded them before the builds: apps/web/node_modules/@virga/rules.",
+    );
     expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
   });
 });

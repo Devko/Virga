@@ -23,7 +23,7 @@ locals {
 # Seeded ---------------------------------------------------------------------
 
 resource "cloudflare_workers_script" "cf002_seeded" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf002_seeded_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -31,14 +31,14 @@ resource "cloudflare_workers_script" "cf002_seeded" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf002_seeded" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf002_seeded.script_name
   enabled          = true # the misconfiguration: workers.dev, without Access
   previews_enabled = false
 }
 
 resource "cloudflare_zero_trust_access_application" "cf002_seeded" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf002_seeded_host
   type         = "self_hosted"
   domain       = local.cf002_seeded_host
@@ -47,8 +47,8 @@ resource "cloudflare_zero_trust_access_application" "cf002_seeded" {
 }
 
 resource "cloudflare_workers_custom_domain" "cf002_seeded" {
-  account_id = var.account_id
-  zone_id    = var.zone_id
+  account_id = local.account_id
+  zone_id    = local.zone_id
   hostname   = local.cf002_seeded_host
   service    = cloudflare_workers_script.cf002_seeded.script_name
 
@@ -59,7 +59,7 @@ resource "cloudflare_workers_custom_domain" "cf002_seeded" {
 # Clean ----------------------------------------------------------------------
 
 resource "cloudflare_workers_script" "cf002_clean" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf002_clean_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -67,14 +67,14 @@ resource "cloudflare_workers_script" "cf002_clean" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf002_clean" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf002_clean.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_zero_trust_access_application" "cf002_clean" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf002_clean_host
   type         = "self_hosted"
   domain       = local.cf002_clean_host
@@ -83,8 +83,8 @@ resource "cloudflare_zero_trust_access_application" "cf002_clean" {
 }
 
 resource "cloudflare_workers_custom_domain" "cf002_clean" {
-  account_id = var.account_id
-  zone_id    = var.zone_id
+  account_id = local.account_id
+  zone_id    = local.zone_id
   hostname   = local.cf002_clean_host
   service    = cloudflare_workers_script.cf002_clean.script_name
 

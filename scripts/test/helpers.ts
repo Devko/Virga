@@ -1,24 +1,50 @@
-import { chmodSync, cpSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, cpSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig } from "../lib/config.ts";
 
 export const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
+/** The workspace packages the rule compiler loads, with the ones each links in node_modules/@virga. */
+const COMPILER_PACKAGES: Record<string, readonly string[]> = {
+  "cf-api": [],
+  graph: [],
+  collectors: ["cf-api", "graph"],
+  rules: ["collectors", "graph"],
+};
+
+/**
+ * `from`/node_modules/@virga/<name>, a relative link to packages/<name> of
+ * `root`, as pnpm links a workspace package (L-2).
+ */
+export function workspaceLink(root: string, from: string, name: string) {
+  const at = join(from, "node_modules", "@virga", name);
+  mkdirSync(dirname(at), { recursive: true });
+  symlinkSync(relative(dirname(at), join(root, "packages", name)), at);
+}
+
 /**
  * What scripts/deploy.ts needs of a checkout under `root`, without apps:
  * the script and its lib, a package.json, and the rule compiler with the
- * committed rules and generated modules (R8-05). The compiler's dependencies
- * are the repository's, through a link to its node_modules.
+ * committed rules and generated modules (R8-05). The compiler's workspace
+ * packages are copies, linked as pnpm links them (L-2); `yaml` is the
+ * repository's.
  */
 export function deployCheckout(root: string) {
-  for (const path of ["scripts/deploy.ts", "scripts/lib", "packages/rules/src", "rules"]) {
+  for (const path of ["scripts/deploy.ts", "scripts/lib", "rules"]) {
     cpSync(join(REPO_ROOT, path), join(root, path), { recursive: true });
   }
-  cpSync(join(REPO_ROOT, "packages/rules/package.json"), join(root, "packages/rules/package.json"));
+  for (const [name, links] of Object.entries(COMPILER_PACKAGES)) {
+    for (const file of ["src", "package.json"]) {
+      cpSync(join(REPO_ROOT, "packages", name, file), join(root, "packages", name, file), {
+        recursive: true,
+      });
+    }
+    for (const link of links) workspaceLink(root, join(root, "packages", name), link);
+  }
   symlinkSync(
-    join(REPO_ROOT, "packages/rules/node_modules"),
-    join(root, "packages/rules/node_modules"),
+    realpathSync(join(REPO_ROOT, "packages/rules/node_modules/yaml")),
+    join(root, "packages/rules/node_modules/yaml"),
   );
   writeFileSync(join(root, "package.json"), '{ "type": "module" }');
 }

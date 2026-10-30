@@ -25,13 +25,13 @@ locals {
 }
 
 resource "cloudflare_zero_trust_tunnel_cloudflared" "cf004" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf004"
   config_src = "cloudflare"
 }
 
 resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cf004" {
-  account_id = var.account_id
+  account_id = local.account_id
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.cf004.id
 
   config = {
@@ -48,7 +48,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cf004" {
 }
 
 resource "cloudflare_zero_trust_access_application" "cf004_clean" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf004_clean_host
   type         = "self_hosted"
   domain       = local.cf004_clean_host
@@ -60,7 +60,7 @@ resource "cloudflare_zero_trust_access_application" "cf004_clean" {
 # the tunnel, which has no connector.
 
 resource "cloudflare_dns_record" "cf004_seeded" {
-  zone_id = var.zone_id
+  zone_id = local.zone_id
   name    = local.cf004_seeded_host
   type    = "CNAME"
   content = "${cloudflare_zero_trust_tunnel_cloudflared.cf004.id}.cfargotunnel.com"
@@ -70,7 +70,7 @@ resource "cloudflare_dns_record" "cf004_seeded" {
 }
 
 resource "cloudflare_dns_record" "cf004_clean" {
-  zone_id = var.zone_id
+  zone_id = local.zone_id
   name    = local.cf004_clean_host
   type    = "CNAME"
   content = "${cloudflare_zero_trust_tunnel_cloudflared.cf004.id}.cfargotunnel.com"

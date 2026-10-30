@@ -26,19 +26,19 @@ locals {
 }
 
 resource "cloudflare_workers_kv_namespace" "cf009_shared" {
-  account_id = var.account_id
+  account_id = local.account_id
   title      = "${local.p}-cf009-shared"
 }
 
 resource "cloudflare_workers_kv_namespace" "cf009_clean_own" {
-  account_id = var.account_id
+  account_id = local.account_id
   title      = "${local.p}-cf009-clean-own"
 }
 
 # Seeded: idle, and bound to the namespace that the live Worker uses.
 
 resource "cloudflare_workers_script" "cf009_seeded" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf009_seeded_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -51,7 +51,7 @@ resource "cloudflare_workers_script" "cf009_seeded" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf009_seeded" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf009_seeded.script_name
   enabled          = false
   previews_enabled = false
@@ -60,7 +60,7 @@ resource "cloudflare_workers_script_subdomain" "cf009_seeded" {
 # Live: invoked every hour by its cron trigger, bound to the same namespace.
 
 resource "cloudflare_workers_script" "cf009_live" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf009_live_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -73,14 +73,14 @@ resource "cloudflare_workers_script" "cf009_live" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf009_live" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf009_live.script_name
   enabled          = false
   previews_enabled = false
 }
 
 resource "cloudflare_workers_cron_trigger" "cf009_live" {
-  account_id  = var.account_id
+  account_id  = local.account_id
   script_name = cloudflare_workers_script.cf009_live.script_name
   schedules   = [{ cron = "0 * * * *" }]
 }
@@ -88,7 +88,7 @@ resource "cloudflare_workers_cron_trigger" "cf009_live" {
 # Clean: idle, and bound only to a namespace of its own.
 
 resource "cloudflare_workers_script" "cf009_clean" {
-  account_id         = var.account_id
+  account_id         = local.account_id
   script_name        = local.cf009_clean_name
   content            = local.dummy_worker
   main_module        = local.dummy_module
@@ -101,7 +101,7 @@ resource "cloudflare_workers_script" "cf009_clean" {
 }
 
 resource "cloudflare_workers_script_subdomain" "cf009_clean" {
-  account_id       = var.account_id
+  account_id       = local.account_id
   script_name      = cloudflare_workers_script.cf009_clean.script_name
   enabled          = false
   previews_enabled = false

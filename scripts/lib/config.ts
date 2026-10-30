@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 import { dotEnvFiles, dotEnvProblem, sha256 } from "./run.ts";
+import { recordWorkspace, type Sources, walkSources } from "./workspace.ts";
 
 export interface ServiceBinding {
   binding: string;
@@ -141,25 +142,6 @@ function checkSurroundings(root: string, app: string, configPath: string) {
 }
 
 /**
- * Symlinks under `dir`, the directory itself included, but not in its own
- * node_modules: pnpm links every dependency there, as the lockfile says.
- */
-function appLinks(dir: string): string[] {
-  if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) return [dir];
-  const links: string[] = [];
-  const pending = [dir];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const path = join(current, entry.name);
-      if (current === dir && entry.name === "node_modules") continue;
-      if (entry.isSymbolicLink()) links.push(path);
-      else if (entry.isDirectory()) pending.push(path);
-    }
-  }
-  return links.sort();
-}
-
-/**
  * Why corepack, the guide's pnpm, would run a pnpm the release-age check has
  * not dated for a command in apps/<app>, or an empty list. It takes the pnpm
  * version from the nearest package.json that names a package manager, and
@@ -203,35 +185,61 @@ function corepackProblems(app: string, dir: string): string[] {
 }
 
 /**
+ * Why pnpm would read settings of the app's own for a command run in
+ * apps/<app>, or null. The deploy's builds are such commands: `pnpm --dir
+ * apps/<app>` reads apps/<app>/.npmrc too, and `use-node-version` with
+ * `node-mirror:release` makes pnpm download a Node from any URL and run the
+ * build with it, as a child of the deploy (R9-02).
+ */
+function npmrcProblem(app: string, dir: string): string | null {
+  if (!existsSync(join(dir, ".npmrc"))) return null;
+  return `apps/${app}/.npmrc: pnpm reads it for every command run in apps/${app}, the deploy's builds included, and it can make pnpm download and run another Node (use-node-version, node-mirror) or install from another registry or lockfile. Remove it; pnpm settings belong in the root .npmrc`;
+}
+
+/**
  * The checks of apps/<app> that need no parsed config: one Wrangler config,
- * none above the app, no .env file, no symlink outside node_modules, and no
- * package manager of its own. Wrangler bundles, migrates and uploads what a
- * link points to, and Vite copies it, from wherever that is. The deploy runs
- * these before the builds and again after them (R6-01). Returns the config's
- * path, or null when the app has none.
+ * none above the app, no .env file, no symlink and no other node_modules
+ * directory outside its own node_modules, no package manager or pnpm
+ * settings of its own, and workspace links that lead to the workspace
+ * packages, which hold no symlink either (L-2). Wrangler bundles, migrates
+ * and uploads what a link points to, and Vite copies it, from wherever that
+ * is. The deploy runs these before the builds and again after them (R6-01).
+ * Returns the config's path, or null when the app has none. Throws a
+ * ConfigError, or a WorkspaceError for the workspace links.
  */
 export function checkAppDir(root: string, app: string): string | null {
   const dir = join(root, "apps", app);
   const configPath = findConfigFile(dir);
   if (configPath === null) return null;
   checkSurroundings(root, app, configPath);
-  let links: string[];
+  let found: Sources;
   try {
-    links = appLinks(dir);
+    found = walkSources(dir);
   } catch (error) {
     throw new ConfigError(
       `apps/${app} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  if (links.length > 0) {
-    const list = links.slice(0, SHOWN_LINKS).map((path) => shown(root, path));
-    const more = links.length > SHOWN_LINKS ? ` and ${links.length - SHOWN_LINKS} more` : "";
+  const list = (paths: readonly string[]) => {
+    const more = paths.length > SHOWN_LINKS ? ` and ${paths.length - SHOWN_LINKS} more` : "";
+    return `${paths
+      .slice(0, SHOWN_LINKS)
+      .map((path) => shown(root, path))
+      .join(", ")}${more}`;
+  };
+  if (found.links.length > 0) {
     throw new ConfigError(
-      `apps/${app} holds symlinks outside node_modules: ${list.join(", ")}${more}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
+      `apps/${app} holds symlinks outside node_modules: ${list(found.links)}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
     );
   }
-  const corepack = corepackProblems(app, dir);
-  if (corepack.length > 0) throw new ConfigError(corepack.join("\n"));
+  if (found.modules.length > 0) {
+    throw new ConfigError(
+      `apps/${app} holds node_modules directories other than its own: ${list(found.modules)}. Wrangler and Vite take a package from the nearest node_modules directory, so one there would replace the package pnpm installed. Remove them`,
+    );
+  }
+  const pnpm = [...corepackProblems(app, dir), npmrcProblem(app, dir) ?? []].flat();
+  if (pnpm.length > 0) throw new ConfigError(pnpm.join("\n"));
+  recordWorkspace(root, app);
   return configPath;
 }
 
@@ -257,12 +265,15 @@ export function readWorkerConfig(root: string, app: string): WorkerConfig | null
     ...parseWorkerConfig(raw, { app, dir, configPath, where }),
     configSha256: sha256(bytes),
   };
-  const assets = assetsDirectoryProblem(config);
-  if (assets !== null) throw new ConfigError(`${where}: ${assets}`);
+  const places = placeProblems(config);
+  if (places.length > 0) {
+    throw new ConfigError(places.map((problem) => `${where}: ${problem}`).join("\n"));
+  }
   return config;
 }
 
 type AssetsSource = Pick<WorkerConfig, "app" | "dir" | "name" | "assetsDirectory">;
+type PlaceSource = Pick<WorkerConfig, "app" | "dir" | "name" | "main" | "assetsDirectory" | "d1">;
 
 /**
  * `path` with every symlink followed, and the part that does not exist yet
@@ -286,36 +297,95 @@ function realPath(path: string): { real: string } | { dangling: string } {
   }
 }
 
+interface Place {
+  /** The key and its value, for messages. */
+  at: string;
+  value: string;
+  /** What Wrangler would do with what the path holds. */
+  use: string;
+  /** Where the path belongs. */
+  keep: string;
+  /** Refuse apps/<app> itself, with this reason. */
+  itself?: string;
+}
+
 /**
- * Why Wrangler would upload files from outside apps/<app> as the Worker's
- * assets, or null. assets.directory is resolved as Wrangler resolves it,
- * then with symlinks followed, so a link counts where it points. A directory
- * the build has yet to create is checked as written (R5-03).
+ * Why a path of the config leads Wrangler to files outside apps/<app> or in
+ * its node_modules, which holds the installed packages, or null. The path is
+ * resolved against the config's directory, as Wrangler resolves it, then with
+ * symlinks followed, so a link counts where it points. A path the build has
+ * yet to create is checked as written (R5-03).
  */
-export function assetsDirectoryProblem(worker: AssetsSource): string | null {
-  const directory = worker.assetsDirectory;
-  if (directory === null) return null;
-  const at = `assets.directory "${directory}"`;
+function placeProblem(worker: Pick<WorkerConfig, "app" | "dir">, place: Place): string | null {
   const app = `apps/${worker.app}`;
   let appDir: string;
   let resolved: ReturnType<typeof realPath>;
   try {
     appDir = realpathSync(worker.dir);
-    resolved = realPath(resolve(worker.dir, directory));
+    resolved = realPath(resolve(worker.dir, place.value));
   } catch (error) {
-    return `${at} cannot be resolved: ${error instanceof Error ? error.message : String(error)}`;
+    return `${place.at} cannot be resolved: ${error instanceof Error ? error.message : String(error)}`;
   }
   if ("dangling" in resolved) {
-    return `${at} passes through ${resolved.dangling}, a symlink to a path that does not exist. Remove the link`;
+    return `${place.at} passes through ${resolved.dangling}, a symlink to a path that does not exist. Remove the link`;
   }
   const inside = relative(appDir, resolved.real);
-  if (inside === "") {
-    return `${at} is ${app} itself; Wrangler would upload its sources and config with ${worker.name}. Use a directory below it, such as ./dist/client`;
-  }
+  if (inside === "" && place.itself !== undefined)
+    return `${place.at} is ${app} itself; ${place.itself}`;
   if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
-    return `${at} resolves to ${resolved.real} (symlinks followed), outside ${app}; Wrangler would upload what it holds with ${worker.name}. Keep the assets in a directory below ${app}`;
+    return `${place.at} resolves to ${resolved.real} (symlinks followed), outside ${app}; ${place.use}. ${place.keep}`;
+  }
+  if (inside.split(sep)[0]?.toLowerCase() === "node_modules") {
+    return `${place.at} resolves to ${resolved.real} (symlinks followed), inside ${app}/node_modules, which holds the installed packages; ${place.use}. ${place.keep}`;
   }
   return null;
+}
+
+/**
+ * Why Wrangler would upload files from outside apps/<app>, or from its
+ * node_modules, as the Worker's assets, or null (R5-03).
+ */
+export function assetsDirectoryProblem(worker: AssetsSource): string | null {
+  const directory = worker.assetsDirectory;
+  if (directory === null) return null;
+  const app = `apps/${worker.app}`;
+  return placeProblem(worker, {
+    at: `assets.directory "${directory}"`,
+    value: directory,
+    use: `Wrangler would upload what it holds with ${worker.name}`,
+    keep: `Keep the assets in a directory below ${app}, outside node_modules`,
+    itself: `Wrangler would upload its sources and config with ${worker.name}. Use a directory below it, such as ./dist/client`,
+  });
+}
+
+/**
+ * Why the config's paths lead Wrangler outside apps/<app> or into its
+ * node_modules: the main module it bundles, the assets it uploads, and the
+ * migrations directory of each D1 binding, Wrangler's default `migrations`
+ * included, whose SQL files it applies. Empty when none does.
+ */
+export function placeProblems(worker: PlaceSource): string[] {
+  const app = `apps/${worker.app}`;
+  const main =
+    worker.main === null
+      ? null
+      : placeProblem(worker, {
+          at: `main "${worker.main}"`,
+          value: worker.main,
+          use: `Wrangler would bundle it as the main module of ${worker.name}`,
+          keep: `Keep the main module below ${app}, outside node_modules`,
+        });
+  const migrations = worker.d1.map((db, i) =>
+    placeProblem(worker, {
+      at: `d1_databases[${i}].migrations_dir "${db.migrationsDir}"`,
+      value: db.migrationsDir,
+      use: `Wrangler would apply the SQL files there to ${db.databaseName ?? db.databaseId ?? db.binding}`,
+      keep: `Keep the migrations in a directory below ${app}, outside node_modules`,
+    }),
+  );
+  return [main, assetsDirectoryProblem(worker), ...migrations].filter(
+    (problem): problem is string => problem !== null,
+  );
 }
 
 /**

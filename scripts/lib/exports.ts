@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 import type { WorkerConfig } from "./config.ts";
 import { stripComments } from "./jsonc.ts";
 
@@ -47,7 +47,7 @@ export function moduleExports(source: string): ModuleExports {
 export function loadExports(worker: WorkerConfig): ModuleExports | null {
   if (worker.main === null) return null;
   try {
-    return moduleExports(readFileSync(join(worker.dir, worker.main), "utf8"));
+    return moduleExports(readFileSync(resolve(worker.dir, worker.main), "utf8"));
   } catch {
     return null;
   }

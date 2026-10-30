@@ -208,6 +208,86 @@ describe("readWorkerConfig", () => {
     expect(readWorkerConfig(REPO_ROOT, "web")?.assetsDirectory).toBe("./dist/client");
   });
 
+  /** What readWorkerConfig says about apps/web with these keys: null when it accepts them. */
+  const keys = (config: Record<string, unknown>): string | null => {
+    writeFileSync(
+      join(root, "apps", "web", "wrangler.jsonc"),
+      JSON.stringify({ name: "virga-web", ...config }),
+    );
+    try {
+      readWorkerConfig(root, "web");
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  };
+  const BUNDLE = "Wrangler would bundle it as the main module of virga-web";
+  const MIGRATE = "Wrangler would apply the SQL files there to virga-x";
+
+  it("main: refuses a main module outside the app directory, with symlinks followed", () => {
+    app({});
+    const real = realpathSync(root);
+    mkdirSync(join(root, "outside"));
+    expect(keys({ main: "../../outside/index.ts" })).toBe(
+      `apps/web/wrangler.jsonc: main "../../outside/index.ts" resolves to ${join(real, "outside", "index.ts")} (symlinks followed), outside apps/web; ${BUNDLE}. Keep the main module below apps/web, outside node_modules`,
+    );
+    expect(keys({ main: join(root, "outside", "index.ts") })).toContain(
+      `resolves to ${join(real, "outside", "index.ts")} (symlinks followed), outside apps/web; ${BUNDLE}`,
+    );
+    symlinkSync(join(root, "outside"), join(root, "apps", "web", "src"));
+    expect(keys({ main: "src/index.ts" })).toContain(
+      `main "src/index.ts" resolves to ${join(real, "outside", "index.ts")} (symlinks followed), outside apps/web`,
+    );
+    rmSync(join(root, "apps", "web", "src"));
+    symlinkSync(join(root, "missing"), join(root, "apps", "web", "src"));
+    expect(keys({ main: "src/index.ts" })).toContain(
+      `main "src/index.ts" passes through ${join(root, "apps", "web", "src")}, a symlink to a path that does not exist`,
+    );
+    rmSync(join(root, "apps", "web", "src"));
+    // Below the app, relative or absolute, it is fine.
+    expect(keys({ main: "src/index.ts" })).toBeNull();
+    expect(keys({ main: join(root, "apps", "web", "src", "index.ts") })).toBeNull();
+  });
+
+  it("main, migrations_dir: refuses a path inside the app's node_modules, which pnpm fills", () => {
+    app({});
+    const real = realpathSync(root);
+    mkdirSync(join(root, "apps", "web", "node_modules", ".cache", "migrations"), {
+      recursive: true,
+    });
+    expect(keys({ main: "node_modules/.cache/index.js" })).toBe(
+      `apps/web/wrangler.jsonc: main "node_modules/.cache/index.js" resolves to ${join(real, "apps", "web", "node_modules", ".cache", "index.js")} (symlinks followed), inside apps/web/node_modules, which holds the installed packages; ${BUNDLE}. Keep the main module below apps/web, outside node_modules`,
+    );
+    const db = { binding: "DB", database_name: "virga-x" };
+    expect(
+      keys({ d1_databases: [{ ...db, migrations_dir: "./node_modules/.cache/migrations" }] }),
+    ).toContain(
+      `d1_databases[0].migrations_dir "./node_modules/.cache/migrations" resolves to ${join(real, "apps", "web", "node_modules", ".cache", "migrations")} (symlinks followed), inside apps/web/node_modules, which holds the installed packages; ${MIGRATE}`,
+    );
+    expect(keys({ assets: { directory: "node_modules/.cache" } })).toContain(
+      `assets.directory "node_modules/.cache" resolves to ${join(real, "apps", "web", "node_modules", ".cache")} (symlinks followed), inside apps/web/node_modules`,
+    );
+  });
+
+  it("migrations_dir: refuses a migrations directory outside the app directory, also Wrangler's default through a link", () => {
+    app({});
+    const real = realpathSync(root);
+    const db = { binding: "DB", database_name: "virga-x" };
+    expect(keys({ d1_databases: [db, { ...db, migrations_dir: "../core/migrations" }] })).toBe(
+      `apps/web/wrangler.jsonc: d1_databases[1].migrations_dir "../core/migrations" resolves to ${join(real, "apps", "core", "migrations")} (symlinks followed), outside apps/web; ${MIGRATE}. Keep the migrations in a directory below apps/web, outside node_modules`,
+    );
+    expect(keys({ d1_databases: [{ ...db, migrations_dir: "/etc" }] })).toContain(
+      `d1_databases[0].migrations_dir "/etc" resolves to ${realpathSync("/etc")} (symlinks followed), outside apps/web`,
+    );
+    mkdirSync(join(root, "outside"));
+    symlinkSync(join(root, "outside"), join(root, "apps", "web", "migrations"));
+    expect(keys({ d1_databases: [db] })).toContain(
+      `d1_databases[0].migrations_dir "migrations" resolves to ${join(real, "outside")} (symlinks followed), outside apps/web`,
+    );
+    rmSync(join(root, "apps", "web", "migrations"));
+    expect(keys({ d1_databases: [db, { ...db, migrations_dir: "./db/migrations" }] })).toBeNull();
+  });
+
   it("R6-01: records the sha256 of the bytes it checked", () => {
     const text = `{ "name": "virga-web" } // ü\n`;
     app({ "wrangler.jsonc": text });
@@ -298,6 +378,24 @@ describe("checkAppDir", () => {
     expect(problem()).toBeNull();
     writeFileSync(web("package.json"), "{ not json");
     expect(problem()).toMatch(/^apps\/web\/package\.json cannot be read: /);
+  });
+
+  it("R9-02: refuses an .npmrc in the app directory, which can make pnpm fetch and run another Node", () => {
+    checkout();
+    writeFileSync(
+      web(".npmrc"),
+      "use-node-version=23.0.0\nnode-mirror:release=http://127.0.0.1:18787/download/release/\n",
+    );
+    expect(problem()).toBe(
+      "apps/web/.npmrc: pnpm reads it for every command run in apps/web, the deploy's builds included, and it can make pnpm download and run another Node (use-node-version, node-mirror) or install from another registry or lockfile. Remove it; pnpm settings belong in the root .npmrc",
+    );
+    // With a .corepack.env as well, both are named.
+    writeFileSync(web(".corepack.env"), "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\n");
+    expect(
+      problem()
+        ?.split("\n")
+        .map((line) => line.split(":")[0]),
+    ).toEqual(["apps/web/.corepack.env", "apps/web/.npmrc"]);
   });
 
   it("R6-01: runs the checks of readWorkerConfig that need no parsed config", () => {

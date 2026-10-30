@@ -15,29 +15,29 @@ locals {
 }
 
 resource "cloudflare_r2_bucket" "cf021_seeded" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf021-seeded"
 }
 
 resource "cloudflare_r2_managed_domain" "cf021_seeded" {
-  account_id  = var.account_id
+  account_id  = local.account_id
   bucket_name = cloudflare_r2_bucket.cf021_seeded.name
   enabled     = true # the misconfiguration: public through r2.dev
 }
 
 resource "cloudflare_r2_bucket" "cf021_clean" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf021-clean"
 }
 
 resource "cloudflare_r2_managed_domain" "cf021_clean" {
-  account_id  = var.account_id
+  account_id  = local.account_id
   bucket_name = cloudflare_r2_bucket.cf021_clean.name
   enabled     = false
 }
 
 resource "cloudflare_zero_trust_access_application" "cf021_clean" {
-  account_id   = var.account_id
+  account_id   = local.account_id
   name         = local.cf021_clean_host
   type         = "self_hosted"
   domain       = local.cf021_clean_host
@@ -46,10 +46,10 @@ resource "cloudflare_zero_trust_access_application" "cf021_clean" {
 }
 
 resource "cloudflare_r2_custom_domain" "cf021_clean" {
-  account_id  = var.account_id
+  account_id  = local.account_id
   bucket_name = cloudflare_r2_bucket.cf021_clean.name
   domain      = local.cf021_clean_host
-  zone_id     = var.zone_id
+  zone_id     = local.zone_id
   enabled     = true
   min_tls     = "1.2"
 

@@ -14,7 +14,14 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PROXY_VARS, UNSAFE_VARS } from "../lib/run.ts";
-import { deployCheckout, type FakeWrangler, fakeWrangler, put, REPO_ROOT } from "./helpers.ts";
+import {
+  deployCheckout,
+  type FakeWrangler,
+  fakeWrangler,
+  put,
+  REPO_ROOT,
+  workspaceLink,
+} from "./helpers.ts";
 
 /**
  * Runs scripts/deploy.ts from a copy of scripts/ in a checkout without
@@ -202,7 +209,7 @@ describe("deploy.ts", () => {
  * or the generated rules from the broker's call, as a process left running by
  * a build could.
  */
-const LOGGING_BIN = String.raw`const { appendFileSync, existsSync } = require("node:fs");
+const LOGGING_BIN = String.raw`const { appendFileSync, existsSync, rmSync, symlinkSync } = require("node:fs");
 const { basename, join, resolve } = require("node:path");
 const root = resolve(__dirname, "../../../../../..");
 const app = basename(process.cwd());
@@ -213,6 +220,14 @@ if (app === "broker" && existsSync(join(root, "rewrite-later"))) {
 }
 if (app === "broker" && existsSync(join(root, "rewrite-rules-later"))) {
   appendFileSync(join(root, "packages", "rules", "src", "rules.gen.ts"), "\n");
+}
+if (existsSync(join(root, "print-token"))) {
+  process.stderr.write("token: " + (process.env.CLOUDFLARE_API_TOKEN ?? "").trim() + "\n");
+}
+if (app === "broker" && existsSync(join(root, "retarget-later"))) {
+  const link = join(root, "apps", "core", "node_modules", "@virga", "rules");
+  rmSync(link);
+  symlinkSync(join(root, "packages", "graph"), link);
 }
 `;
 
@@ -253,6 +268,8 @@ describe("deploy.ts and the builds (R6-01)", () => {
     put(join(app("web"), "package.json"), '{ "scripts": { "build": "node build.mjs" } }');
     put(join(app("web"), "build.mjs"), BUILD);
     fake = fakeWrangler(root, ["broker", "core", "web"].map(app), LOGGING_BIN);
+    // virga-core bundles the generated rules through this link (L-2).
+    workspaceLink(root, app("core"), "rules");
     // A stand-in for pnpm that logs each call and runs build.mjs for `pnpm --dir <app> run build`.
     put(
       join(root, "path", "pnpm"),
@@ -329,6 +346,27 @@ describe("deploy.ts and the builds (R6-01)", () => {
     expect(result.stdout + result.stderr).not.toContain(TOKEN);
   });
 
+  it("R9-02: refuses an .npmrc in an app, before and after the builds", () => {
+    const npmrc = "use-node-version=23.0.0\nnode-mirror:release=http://127.0.0.1:18787/\n";
+    put(join(app("core"), ".npmrc"), npmrc);
+    let result = deploy([], REAL);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/core/.npmrc: pnpm reads it for every command run in apps/core",
+    );
+    expect(result.stdout).not.toContain("Building");
+    expect(log("builds.log")).toBe("");
+    rmSync(join(app("core"), ".npmrc"));
+
+    build(`writeFileSync(".npmrc", ${JSON.stringify(npmrc)});\n`);
+    result = deploy([], REAL);
+    expect(result.stdout).toContain("Building virga-web");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("error: apps/web/.npmrc: pnpm reads it");
+    expect(calls()).toBe("");
+    expect(result.stdout + result.stderr).not.toContain(TOKEN);
+  });
+
   const generated = () => join(root, "packages", "rules", "src", "rules.gen.ts");
   const STALE =
     "error: packages/rules/src/rules.gen.ts is not what the rule compiler makes of rules/";
@@ -389,6 +427,88 @@ appendFileSync("../../packages/rules/src/rules.gen.ts", "// planted\\n");
         .split("\n")
         .map((line) => line.split(" ")[0]),
     ).toEqual(["broker", ""]);
+  });
+
+  it("deploy environment: redacts a token read with a trailing newline in the form Wrangler uses", () => {
+    const marker = "R10-TRIMMED-TOKEN-MARKER-0123456789";
+    writeFileSync(join(root, "print-token"), "");
+    // A store ID, so that a real deploy gets to its first Wrangler call.
+    put(
+      join(app("broker"), "wrangler.jsonc"),
+      committed("broker", "wrangler.jsonc").replace(
+        "<SECRETS_STORE_ID>",
+        "0123456789abcdef0123456789abcdef",
+      ),
+    );
+    const result = deploy([], { ...REAL, CLOUDFLARE_API_TOKEN: `${marker}\n` });
+    // The stand-in prints the token from the first Wrangler call, d1 list, and no JSON.
+    expect(calls()).toContain("broker token d1 list --json");
+    expect(result.stderr).toContain("token: [redacted]");
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).not.toContain(marker);
+  });
+
+  it("deploy environment: redacts the web settings from the start, in the output of the builds too", () => {
+    const markers = {
+      ACCESS_AUD: "R10-ACCESS-AUD-MARKER-0123456789",
+      ADMIN_EMAILS: " r10-admin-marker@example.com \n",
+    };
+    build(
+      `console.log("aud=" + process.env.ACCESS_AUD + " admins=" + process.env.ADMIN_EMAILS.trim());\n`,
+    );
+    const result = deploy(["--dry-run"], markers);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("aud=[redacted] admins=[redacted]");
+    expect(result.stdout + result.stderr).not.toMatch(/R10-ACCESS-AUD|r10-admin-marker/);
+  });
+
+  const coreRules = () => join(app("core"), "node_modules", "@virga", "rules");
+
+  it("L-2: a build that retargets the link through which virga-core bundles the rules stops the deploy before any Wrangler call", () => {
+    // A copy of packages/rules whose rules.gen.ts no compiler made.
+    build(`import { appendFileSync, cpSync, rmSync, symlinkSync } from "node:fs";
+cpSync("../../packages/rules", "../../planted/rules", { recursive: true });
+appendFileSync("../../planted/rules/src/rules.gen.ts", "// planted\\n");
+rmSync("../core/node_modules/@virga/rules");
+symlinkSync("../../../../planted/rules", "../core/node_modules/@virga/rules");
+`);
+    for (const args of [[], ["--dry-run"]]) {
+      const result = deploy(args, REAL);
+      expect(result.stdout).toContain("Building virga-web");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `error: apps/core/node_modules/@virga/rules leads to ${join(root, "planted", "rules")}, not to packages/rules, the workspace package @virga/rules`,
+      );
+      expect(calls()).toBe("");
+      expect(result.stdout + result.stderr).not.toContain(TOKEN);
+      rmSync(coreRules());
+      rmSync(join(root, "planted"), { recursive: true });
+      workspaceLink(root, app("core"), "rules");
+    }
+  });
+
+  it("L-2: refuses a workspace link retargeted after the checks, before the Wrangler call that bundles through it", () => {
+    writeFileSync(join(root, "retarget-later"), "");
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `error: apps/core/node_modules/@virga/rules leads to ${join(root, "packages", "graph")}, not to packages/rules`,
+    );
+    expect(
+      calls()
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(["broker", ""]);
+  });
+
+  it("L-2: checks the generated rules that virga-core bundles, and refuses a core without that link", () => {
+    rmSync(coreRules());
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/core/node_modules/@virga/rules is missing; virga-core bundles the generated rules through it. Run pnpm install first",
+    );
+    expect(calls()).toBe("");
   });
 
   const UNSAFE = `{ "bindings": [{ "name": "API", "type": "service", "service": "virga-broker", "entrypoint": "ApiCaller" }] }`;

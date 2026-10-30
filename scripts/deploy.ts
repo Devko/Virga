@@ -6,10 +6,10 @@
 // their migrations, checks the master key (D-15), then deploys virga-broker,
 // virga-core and virga-web in that order. Safe to run again. Wrangler always
 // gets the checked config as --config, and only while it and the generated
-// rules hold the bytes that were checked; it never gets a named environment,
-// loads no .env file, gets only allowlisted variables of the operator's
-// environment, and runs only while its files are those recorded before the
-// builds (R6-01, R8-05).
+// rules hold the bytes that were checked and the app's workspace links lead
+// to packages/; it never gets a named environment, loads no .env file, gets
+// only allowlisted variables of the operator's environment, and runs only
+// while its files are those recorded before the builds (R6-01, R8-05, L-2).
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, checkAppDir, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
-import { checkRules, loadRuleCompiler } from "./lib/rules.ts";
+import { bundledRulesDir, checkRules, loadRuleCompiler } from "./lib/rules.ts";
 import {
   API_VARS,
   apiOverrides,
@@ -30,6 +30,7 @@ import {
   proxyNotice,
   RefusedError,
   redact,
+  secretForms,
   unsafeProblems,
 } from "./lib/run.ts";
 import {
@@ -48,6 +49,7 @@ import {
   withSecretsFile,
 } from "./lib/steps.ts";
 import { checkTopology, WORKERS } from "./lib/topology.ts";
+import { recordWorkspace, WorkspaceError, workspaceChanges } from "./lib/workspace.ts";
 import {
   describeChanges,
   recordWranglers,
@@ -113,7 +115,10 @@ async function main(): Promise<number> {
     }
   }
 
-  secrets.push(token);
+  // Before anything runs, the builds included: the token, and every web
+  // setting the deploy may upload, each also trimmed.
+  secrets.push(...secretForms(token));
+  for (const name of WEB_SETTINGS) secrets.push(...secretForms(process.env[name] ?? ""));
   const credentials = dryRun ? "none" : "token";
   for (const line of proxyNotice(process.env)) console.log(line);
   const dropped = droppedSettings(process.env, credentials);
@@ -130,6 +135,8 @@ async function main(): Promise<number> {
     return false;
   });
   const dirOf = (app: string) => join(root, "apps", app);
+  // The workspace packages each app bundles through node_modules/@virga (L-2).
+  const workspaces = new Map(present.map(({ app }) => [dirOf(app), recordWorkspace(root, app)]));
   const wranglers = recordWranglers(present.map(({ app }) => dirOf(app)));
   for (const install of new Map([...wranglers.values()].map((w) => [w.bin, w])).values()) {
     console.log(
@@ -142,7 +149,13 @@ async function main(): Promise<number> {
   /** The generated rules by path, with the sha256 of the bytes checked after the builds. */
   const checked = new Map<string, string>();
   const ctx: Context = {
-    run: processRunner({ credentials, secrets: () => secrets, wranglers, checked: () => checked }),
+    run: processRunner({
+      credentials,
+      secrets: () => secrets,
+      wranglers,
+      workspaces,
+      checked: () => checked,
+    }),
     log: (line) => console.log(line),
     todo: [],
   };
@@ -157,6 +170,10 @@ async function main(): Promise<number> {
   for (const [dir, install] of wranglers) {
     const changed = describeChanges(dir, wranglerChanges(install, cache));
     if (changed !== null) throw new WranglerError(changed);
+  }
+  for (const workspace of workspaces.values()) {
+    const changed = workspaceChanges(workspace);
+    if (changed !== null) throw new WorkspaceError(changed);
   }
   const workers: WorkerConfig[] = [];
   for (const { app } of present) {
@@ -174,8 +191,12 @@ async function main(): Promise<number> {
   ctx.log(`Configs: ${workers.map((w) => w.name).join(", ")}; service bindings match`);
 
   // virga-core bundles the generated rules as they are, so the deploy, not
-  // only CI's rules:check, compares them with the compiler's output (R8-05).
-  for (const [path, sha] of await checkRules(ctx, root, checkGenerated)) checked.set(path, sha);
+  // only CI's rules:check, compares them with the compiler's output (R8-05),
+  // in the package virga-core takes them from (L-2).
+  const rulesDir = bundledRulesDir(workspaces.get(dirOf("core")));
+  for (const [path, sha] of await checkRules(ctx, root, checkGenerated, rulesDir)) {
+    checked.set(path, sha);
+  }
 
   const broker = workers.find((w) => w.app === "broker") as WorkerConfig;
   const web = workers.find((w) => w.app === "web");
@@ -224,7 +245,8 @@ try {
     error instanceof DeployError ||
     error instanceof ConfigError ||
     error instanceof RefusedError ||
-    error instanceof WranglerError
+    error instanceof WranglerError ||
+    error instanceof WorkspaceError
   ) {
     console.error(`error: ${redact(error.message, secrets)}`);
   } else {

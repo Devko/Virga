@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readWorkerConfig } from "../lib/config.ts";
 import { loadExports, moduleExports } from "../lib/exports.ts";
@@ -55,6 +56,14 @@ describe("loadExports", () => {
         "default",
       ]),
     );
+  });
+
+  it("main: reads an absolute main module, as Wrangler resolves it", () => {
+    const broker = readWorkerConfig(REPO_ROOT, "broker");
+    if (!broker?.main) throw new Error("broker config missing");
+    const absolute = { ...broker, main: resolve(broker.dir, broker.main) };
+    expect(loadExports(absolute)?.names).toEqual(loadExports(broker)?.names);
+    expect(loadExports(absolute)?.names.has("ApiCaller")).toBe(true);
   });
 
   it("returns null without a readable main module", () => {

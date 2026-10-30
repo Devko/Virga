@@ -13,12 +13,12 @@
 # serves no content at all; the databases stay empty.
 
 resource "cloudflare_d1_database" "cf022_shared" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf022-shared"
 }
 
 resource "cloudflare_pages_project" "cf022_seeded" {
-  account_id        = var.account_id
+  account_id        = local.account_id
   name              = "${local.p}-cf022-seeded"
   production_branch = "main"
 
@@ -36,17 +36,17 @@ resource "cloudflare_pages_project" "cf022_seeded" {
 }
 
 resource "cloudflare_d1_database" "cf022_clean_production" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf022-clean-production"
 }
 
 resource "cloudflare_d1_database" "cf022_clean_preview" {
-  account_id = var.account_id
+  account_id = local.account_id
   name       = "${local.p}-cf022-clean-preview"
 }
 
 resource "cloudflare_pages_project" "cf022_clean" {
-  account_id        = var.account_id
+  account_id        = local.account_id
   name              = "${local.p}-cf022-clean"
   production_branch = "main"
 
