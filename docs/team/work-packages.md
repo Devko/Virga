@@ -105,7 +105,7 @@ The integrator adds the CF-024 fixtures for the `unread` and `unknown` entries o
 
 | WP | Scope | Owns | Done when |
 | --- | --- | --- | --- |
-| `collectors-4` | R5-06 leftovers: the 1 MiB props budget per tunnel; a truncated tunnel makes `tunnels` coverage `partial` ([decision 0005](../decisions/0005-truncated-collection-coverage.md)) | `packages/collectors/**`, `apps/core/src/scan/**`, `apps/core/test/**` | Tests at the budget boundary, with the review's long path, and a finding past the cap that stays open |
+| `collectors-4` | R5-06 leftovers: the 1 MiB props budget per tunnel; a truncated tunnel makes `tunnels` coverage `partial` ([decision 0005](../decisions/0005-truncated-collection-coverage.md)) | `packages/collectors/**`, `apps/core/**` | Tests at the budget boundary, with the review's long path, and a finding past the cap that stays open |
 | `deploy-env` | R5-03 leftover: build Wrangler's environment from an allowlist; keep `assets.directory` inside the app directory | `scripts/**`, `docs/operator/**` | Tests per variable class and per path case; the dry run passes |
 | `web-removing` | The `removing` state in the SPA (notice, retry, no Start scan) and in the MCP `list_accounts` description | `apps/web/**` | Render and route tests |
 | `review-6` | Read-only verification of R4-01 to R4-07 and R5-01 to R5-08; review of the round 5 and round 6 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
