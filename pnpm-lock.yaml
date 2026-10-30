@@ -131,6 +131,8 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
 
+  packages/scanner-io: {}
+
   spikes/s03-do-sqlite:
     dependencies:
       '@virga/graph':
