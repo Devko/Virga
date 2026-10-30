@@ -131,7 +131,7 @@ describe("SPA views render account strings as text", () => {
     const brokerFailed = html(null, null);
     expectInert(brokerFailed);
     expect(brokerFailed).toContain('class="problem"');
-    expect(brokerFailed).toContain("Nothing was removed");
+    expect(brokerFailed).toContain("the account was kept");
     expect(brokerFailed).not.toContain("cannot revoke");
     const coreFailed = html(true, null);
     expect(coreFailed).toContain('class="problem"');

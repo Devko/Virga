@@ -79,8 +79,7 @@ export interface CoverageView {
   detail: Untrusted<string> | null;
 }
 
-export const RULE_RUN_STATUSES = ["evaluated", "not_evaluated", "error"] as const;
-export type RuleRunStatus = (typeof RULE_RUN_STATUSES)[number];
+export type RuleRunStatus = "evaluated" | "not_evaluated" | "error";
 
 /** One rule's run in the latest scan. Not evaluated and undecided are not passes. */
 export interface RuleRunView {

@@ -354,7 +354,7 @@ export function RemovalResult({ result }: { result: RemovalView }) {
     <div className={done ? "notice" : "problem"} role="status">
       <p>
         {token === null
-          ? "The broker could not remove the token. Nothing was removed; try again."
+          ? "The broker did not finish removing the token, so the account was kept. Try again: removal is safe to repeat."
           : token.removed
             ? "The broker deleted the stored token and cleared the account's rate budget."
             : "The broker held no token for this account; its rate budget was cleared."}
