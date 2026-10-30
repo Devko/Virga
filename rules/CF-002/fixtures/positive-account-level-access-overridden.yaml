@@ -1,0 +1,34 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# (destination type all_workers)
+# Precedence: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
+# Graph shape: docs/architecture/graph-contract.md, access_app target { kind: all_workers, scope, overrides }
+description: >
+  Account-level Worker Access covers every Worker with a staff policy. A
+  host app on the Custom Domain of portal bypasses Access for everyone, and
+  host apps take precedence, so the account-level protection no longer
+  decides those requests. books has no host app and stays protected.
+nodes:
+  - { type: worker_script, id: portal, name: portal }
+  - { type: worker_custom_domain, id: portal.example.com, name: portal.example.com, props: { zone_id: z1, hostname: portal.example.com, service: portal, environment: null } }
+  - { type: worker_script, id: books, name: books }
+  - { type: worker_custom_domain, id: books.example.com, name: books.example.com, props: { zone_id: z1, hostname: books.example.com, service: books, environment: null } }
+  - type: access_app
+    id: wa-all
+    name: All Workers
+    props: { app_type: self_hosted, targets: [{ kind: all_workers, scope: all, overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: ha-portal
+    name: Portal
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: portal.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - { type: access_policy, id: pol-staff, name: Staff, props: { decision: allow, include: [{ kind: group, value: grp-staff }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-bypass, name: Public, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: ROUTES_TO, src: "worker_custom_domain:portal.example.com", dst: "worker_script:portal" }
+  - { type: ROUTES_TO, src: "worker_custom_domain:books.example.com", dst: "worker_script:books" }
+  - { type: ALLOWS, src: "access_policy:pol-staff", dst: "access_app:wa-all", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-bypass", dst: "access_app:ha-portal", props: { precedence: 1 } }
+exposure:
+  - { entry: "worker_custom_domain:portal.example.com", decision: public, confidence: 2 }
+  - { entry: "worker_custom_domain:books.example.com", decision: access, confidence: 1 }
+expect:
+  - { fingerprint: "CF-002:worker_script:portal", severity: high }

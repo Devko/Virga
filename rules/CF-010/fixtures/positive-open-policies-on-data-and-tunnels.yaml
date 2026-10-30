@@ -15,23 +15,23 @@ nodes:
   - { type: worker_version, id: a1, props: { script_node_id: "worker_script:admin" } }
   - { type: worker_custom_domain, id: admin.example.com, name: admin.example.com, props: { zone_id: z1, hostname: admin.example.com, service: admin, environment: null } }
   - { type: d1_database, id: users-db, name: users }
-  - { type: tunnel, id: t1, name: monitoring, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: grafana.example.net, name: grafana.example.net, props: { hostname: grafana.example.net, path: "", service: "http://localhost:3000", origin_scheme: http, tunnel_id: t1 } }
+  - { type: tunnel, id: 0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f, name: monitoring, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net", name: grafana.example.net, props: { hostname: grafana.example.net, path: "", service: "http://localhost:3000", origin_scheme: http, tunnel_id: 0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f, access_required: false } }
   - { type: pages_project, id: docs, name: docs, props: { production_branch: main, subdomain: docs.pages.dev, preview_deployments: none } }
   - { type: pages_domain, id: docs.example.org, name: docs.example.org, props: { project: docs, status: active } }
   - { type: kv_namespace, id: kv-docs, name: docs-cache }
   - type: access_app
     id: app-admin
     name: Admin
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-grafana
     name: Grafana
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: grafana.example.net, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: grafana.example.net, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-docs
     name: Docs
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: docs.example.org, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: docs.example.org, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_group
     id: grp-all
     name: All users
@@ -52,7 +52,7 @@ edges:
   - { type: DEPLOYS, src: "worker_script:admin", dst: "worker_version:a1", props: { percentage: 100 } }
   - { type: BINDS, src: "worker_version:a1", dst: "d1_database:users-db", key: DB, props: { binding_type: d1 } }
   - { type: ROUTES_TO, src: "worker_custom_domain:admin.example.com", dst: "worker_script:admin" }
-  - { type: ROUTES_TO, src: "tunnel_hostname:grafana.example.net", dst: "tunnel:t1" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net", dst: "tunnel:0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f" }
   - { type: ROUTES_TO, src: "pages_domain:docs.example.org", dst: "pages_project:docs", props: { environment: production } }
   - { type: BINDS, src: "pages_project:docs", dst: "kv_namespace:kv-docs", key: "production:CACHE", props: { binding_type: kv_namespace, environment: production } }
   - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:app-admin", props: { precedence: 1 } }

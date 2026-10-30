@@ -17,11 +17,11 @@ nodes:
   - type: access_app
     id: app-1
     name: App
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: app.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: app.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-2
     name: Intranet
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
 edges: []
 expect:
   - { fingerprint: "CF-007:dns_record:rec-app-direct", severity: high }

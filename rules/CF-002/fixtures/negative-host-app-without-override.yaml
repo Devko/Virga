@@ -2,10 +2,12 @@
 # Wildcards cover one label: https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/
 # Graph shape: docs/architecture/graph-contract.md, access_app targets, access_policy, ALLOWS
 description: >
-  plain has a bypass host app but no Worker-level Access to override. deep
-  has Worker-level Access, and the wildcard app that admits everyone does not
-  cover its two-label subdomain. strict has Worker-level Access and a host
-  app whose only policy is limited to an email domain.
+  plain has a bypass host app but nothing it overrides: its Worker-level
+  Access and the account-level Worker Access cover only preview URLs, and
+  plain has none. deep has Worker-level Access, and the wildcard app that
+  admits everyone does not cover its two-label subdomain. strict has
+  Worker-level Access and a host app whose only policy is limited to an
+  email domain.
 nodes:
   - { type: worker_script, id: plain, name: plain }
   - { type: worker_custom_domain, id: plain.example.com, name: plain.example.com, props: { zone_id: z1, hostname: plain.example.com, service: plain, environment: null } }
@@ -16,23 +18,31 @@ nodes:
   - type: access_app
     id: ha-plain
     name: plain bypass
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: plain.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: plain.example.com, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: wa-plain-previews
+    name: plain previews (Worker)
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: plain, scope: previews, overrides: [] }], session_duration: null, allowed_idps: [] }
+  - type: access_app
+    id: wa-previews
+    name: All previews
+    props: { app_type: self_hosted, targets: [{ kind: all_workers, scope: previews, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: wa-deep
     name: deep (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: deep, scope: all }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: deep, scope: all, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: ha-wildcard
     name: Everything one level under example.com
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: wa-strict
     name: strict (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: strict, scope: all }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: strict, scope: all, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: ha-strict
     name: strict host
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: strict.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: strict.example.org, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_policy
     id: pol-bypass
     name: Public
@@ -50,6 +60,8 @@ edges:
   - { type: ROUTES_TO, src: "worker_custom_domain:a.b.example.com", dst: "worker_script:deep" }
   - { type: ROUTES_TO, src: "worker_custom_domain:strict.example.org", dst: "worker_script:strict" }
   - { type: ALLOWS, src: "access_policy:pol-bypass", dst: "access_app:ha-plain", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:wa-plain-previews", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:wa-previews", props: { precedence: 1 } }
   - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:wa-deep", props: { precedence: 1 } }
   - { type: ALLOWS, src: "access_policy:pol-everyone", dst: "access_app:ha-wildcard", props: { precedence: 1 } }
   - { type: ALLOWS, src: "access_policy:pol-corp", dst: "access_app:wa-strict", props: { precedence: 1 } }

@@ -3,10 +3,10 @@
 # Graph shape: docs/architecture/graph-contract.md, tunnel_hostname
 description: A public hostname whose ingress rule only answers with a fixed status code.
 nodes:
-  - { type: tunnel, id: t-1, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: gone.example.com, name: gone.example.com, props: { hostname: gone.example.com, path: "", service: "http_status:404", origin_scheme: http_status, tunnel_id: t-1 } }
+  - { type: tunnel, id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, name: office, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: "c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com", name: gone.example.com, props: { hostname: gone.example.com, path: "", service: "http_status:404", origin_scheme: http_status, tunnel_id: c1744f8b-faa1-48a4-9e5c-02ac921467fa, access_required: false } }
 edges:
-  - { type: ROUTES_TO, src: "tunnel_hostname:gone.example.com", dst: "tunnel:t-1" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com", dst: "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa" }
 exposure:
-  - { entry: "tunnel_hostname:gone.example.com", decision: public, confidence: 2 }
+  - { entry: "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com", decision: public, confidence: 2 }
 expect: []

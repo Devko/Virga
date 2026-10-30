@@ -12,23 +12,23 @@ nodes:
   - { type: worker_version, id: api-1, props: { script_node_id: "worker_script:api" } }
   - { type: worker_route, id: r-api, name: "api.example.com/*", props: { zone_id: z1, pattern: "api.example.com/*", script: api } }
   - { type: kv_namespace, id: kv-tokens, name: tokens }
-  - { type: tunnel, id: t1, name: lab, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
-  - { type: tunnel_hostname, id: lab.example.net, name: lab.example.net, props: { hostname: lab.example.net, path: "", service: "http://localhost:8000", origin_scheme: http, tunnel_id: t1 } }
+  - { type: tunnel, id: e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f, name: lab, props: { tunnel_type: cfd_tunnel, status: healthy, config_src: cloudflare } }
+  - { type: tunnel_hostname, id: "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f:lab.example.net", name: lab.example.net, props: { hostname: lab.example.net, path: "", service: "http://localhost:8000", origin_scheme: http, tunnel_id: e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f, access_required: false } }
   - { type: worker_script, id: billing, name: billing }
   - { type: worker_version, id: billing-1, props: { script_node_id: "worker_script:billing" } }
   - { type: d1_database, id: billing-db, name: billing }
   - type: access_app
     id: app-api
     name: API
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-lab
     name: Lab
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: wa-billing
     name: billing (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: billing, scope: all }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: billing, scope: all, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - { type: access_policy, id: pol-office, name: Office bypass, props: { decision: bypass, include: [{ kind: ip, value: 198.51.100.0/24 }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-public, name: Public, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-worker, name: Worker bypass, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
@@ -36,7 +36,7 @@ edges:
   - { type: DEPLOYS, src: "worker_script:api", dst: "worker_version:api-1", props: { percentage: 100 } }
   - { type: BINDS, src: "worker_version:api-1", dst: "kv_namespace:kv-tokens", key: TOKENS, props: { binding_type: kv_namespace } }
   - { type: ROUTES_TO, src: "worker_route:r-api", dst: "worker_script:api" }
-  - { type: ROUTES_TO, src: "tunnel_hostname:lab.example.net", dst: "tunnel:t1" }
+  - { type: ROUTES_TO, src: "tunnel_hostname:e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f:lab.example.net", dst: "tunnel:e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f" }
   - { type: DEPLOYS, src: "worker_script:billing", dst: "worker_version:billing-1", props: { percentage: 100 } }
   - { type: BINDS, src: "worker_version:billing-1", dst: "d1_database:billing-db", key: DB, props: { binding_type: d1 } }
   - { type: ALLOWS, src: "access_policy:pol-office", dst: "access_app:app-api", props: { precedence: 1 } }

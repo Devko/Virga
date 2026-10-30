@@ -17,6 +17,13 @@
 -- undecided (decided = 0) and lists the unknown prefixes instead. Access is
 -- required for the same reason as in CF-021. One finding per tunnel hostname.
 --
+-- `access_required` needs no case of its own. The evaluator never decides
+-- such a hostname `public`, because cloudflared rejects requests without an
+-- Access token, and the rule reads only its decision: a second copy of that
+-- judgement here could hide a hostname the evaluator does find public, for
+-- example once audience tags are collected. An `unknown` row of such a
+-- hostname stays undecided for the same reason.
+--
 -- The spec has this rule reference the Security Insight "Unprotected
 -- Cloudflare Tunnels" instead of duplicating it. `enriches` stays null for
 -- now: the insights table types insights by API issue_type, a category such

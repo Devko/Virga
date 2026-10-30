@@ -1,0 +1,39 @@
+# Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
+# (destinations of type all_workers and all_preview_workers)
+# Worker-level Access: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
+# Graph shape: docs/architecture/graph-contract.md, access_app target { kind: all_workers, scope, overrides }
+description: >
+  Bypass policies on account-level Worker Access. pol-all bypasses for an
+  IP range on every Worker, and ledger's deployed version binds a D1
+  database. pol-previews bypasses for everyone on preview URLs only, and an
+  old version of api behind a version URL binds the sessions KV namespace.
+nodes:
+  - { type: worker_script, id: ledger, name: ledger }
+  - { type: worker_version, id: ledger-1, props: { script_node_id: "worker_script:ledger" } }
+  - { type: d1_database, id: ledger-db, name: ledger }
+  - { type: worker_script, id: api, name: api, props: { preview_urls: true } }
+  - { type: worker_version, id: api-new, props: { script_node_id: "worker_script:api" } }
+  - { type: worker_version, id: api-old, props: { script_node_id: "worker_script:api" } }
+  - { type: worker_preview_url, id: api-old-api.acme.workers.dev, name: api-old-api.acme.workers.dev, props: { script: api, kind: version, version_id: api-old, alias: null } }
+  - { type: kv_namespace, id: kv-sessions, name: sessions }
+  - type: access_app
+    id: wa-all
+    name: All Workers
+    props: { app_type: self_hosted, targets: [{ kind: all_workers, scope: all, overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - type: access_app
+    id: wa-previews
+    name: All previews
+    props: { app_type: self_hosted, targets: [{ kind: all_workers, scope: previews, overrides: [] }], session_duration: 24h, allowed_idps: [] }
+  - { type: access_policy, id: pol-all, name: Office, props: { decision: bypass, include: [{ kind: ip, value: 198.51.100.0/24 }], require: [], exclude: [], session_duration: null } }
+  - { type: access_policy, id: pol-previews, name: Public previews, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
+edges:
+  - { type: DEPLOYS, src: "worker_script:ledger", dst: "worker_version:ledger-1", props: { percentage: 100 } }
+  - { type: BINDS, src: "worker_version:ledger-1", dst: "d1_database:ledger-db", key: DB, props: { binding_type: d1 } }
+  - { type: DEPLOYS, src: "worker_script:api", dst: "worker_version:api-new", props: { percentage: 100 } }
+  - { type: ROUTES_TO, src: "worker_preview_url:api-old-api.acme.workers.dev", dst: "worker_version:api-old" }
+  - { type: BINDS, src: "worker_version:api-old", dst: "kv_namespace:kv-sessions", key: SESSIONS, props: { binding_type: kv_namespace } }
+  - { type: ALLOWS, src: "access_policy:pol-all", dst: "access_app:wa-all", props: { precedence: 1 } }
+  - { type: ALLOWS, src: "access_policy:pol-previews", dst: "access_app:wa-previews", props: { precedence: 1 } }
+expect:
+  - { fingerprint: "CF-011:access_policy:pol-all", severity: high }
+  - { fingerprint: "CF-011:access_policy:pol-previews", severity: high }

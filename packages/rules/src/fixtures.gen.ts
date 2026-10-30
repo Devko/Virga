@@ -1244,7 +1244,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-002",
     "name": "negative-host-app-without-override",
-    "description": "plain has a bypass host app but no Worker-level Access to override. deep has Worker-level Access, and the wildcard app that admits everyone does not cover its two-label subdomain. strict has Worker-level Access and a host app whose only policy is limited to an email domain.\n",
+    "description": "plain has a bypass host app but nothing it overrides: its Worker-level Access and the account-level Worker Access cover only preview URLs, and plain has none. deep has Worker-level Access, and the wildcard app that admits everyone does not cover its two-label subdomain. strict has Worker-level Access and a host app whose only policy is limited to an email domain.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -1304,7 +1304,43 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "plain.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-plain-previews",
+        "name": "plain previews (Worker)",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "worker",
+              "script": "plain",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1321,7 +1357,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "deep",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1338,7 +1375,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1355,7 +1393,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "strict",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1372,7 +1411,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "strict.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1451,6 +1491,22 @@ export const FIXTURES: readonly RuleFixture[] = [
         "type": "ALLOWS",
         "src": "access_policy:pol-bypass",
         "dst": "access_app:ha-plain",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:wa-plain-previews",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-corp",
+        "dst": "access_app:wa-previews",
         "props": {
           "precedence": 1
         }
@@ -1640,6 +1696,162 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-002",
+    "name": "positive-account-level-access-overridden",
+    "description": "Account-level Worker Access covers every Worker with a staff policy. A host app on the Custom Domain of portal bypasses Access for everyone, and host apps take precedence, so the account-level protection no longer decides those requests. books has no host app and stays protected.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "portal",
+        "name": "portal"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "portal.example.com",
+        "name": "portal.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "portal.example.com",
+          "service": "portal",
+          "environment": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "books",
+        "name": "books"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "books.example.com",
+        "name": "books.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "books.example.com",
+          "service": "books",
+          "environment": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-all",
+        "name": "All Workers",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "all",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-portal",
+        "name": "Portal",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "portal.example.com",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-staff",
+        "name": "Staff",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-staff"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:portal.example.com",
+        "dst": "worker_script:portal"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:books.example.com",
+        "dst": "worker_script:books"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-staff",
+        "dst": "access_app:wa-all",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:ha-portal",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_custom_domain:portal.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "worker_custom_domain:books.example.com",
+        "decision": "access",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:portal",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-002",
     "name": "positive-host-app-overrides-worker-access",
     "description": "Both Workers have Worker-level Access with a group policy. On the api Worker's domain, a path app bypasses Access for /public; on the shop Worker's domain, a wildcard host app admits everyone. Host and path apps take precedence, so Worker-level Access no longer decides those requests.\n",
     "nodes": [
@@ -1685,7 +1897,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "api",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1702,7 +1915,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "shop",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1719,7 +1933,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "api.example.com",
-              "path": "/public"
+              "path": "/public",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1736,7 +1951,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1866,6 +2082,223 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "fingerprint": "CF-002:worker_script:shop",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-002",
+    "name": "positive-preview-access-overridden",
+    "description": "Account-level Worker Access covers only preview URLs, with a staff policy. A wildcard host app on acme.workers.dev admits everyone and takes precedence on the version URL of api. docs has a Bypass host app on its Custom Domain, which the previews-only protection never covered, so docs is not reported.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "a1",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "a1-api.acme.workers.dev",
+        "name": "a1-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "a1",
+          "alias": null
+        }
+      },
+      {
+        "type": "worker_script",
+        "id": "docs",
+        "name": "docs"
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "docs.example.com",
+        "name": "docs.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "docs.example.com",
+          "service": "docs",
+          "environment": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-workers-dev",
+        "name": "Everything on workers.dev",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "*.acme.workers.dev",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "ha-docs",
+        "name": "Docs",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "docs.example.com",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-staff",
+        "name": "Staff",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "group",
+              "value": "grp-staff"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-everyone",
+        "name": "Anyone with a login",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-bypass",
+        "name": "Public docs",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:a1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:a1-api.acme.workers.dev",
+        "dst": "worker_version:a1"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:docs.example.com",
+        "dst": "worker_script:docs"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-staff",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
+        "dst": "access_app:ha-workers-dev",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-bypass",
+        "dst": "access_app:ha-docs",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "worker_preview_url:a1-api.acme.workers.dev",
+        "decision": "access",
+        "confidence": 1
+      },
+      {
+        "entry": "worker_custom_domain:docs.example.com",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-002:worker_script:api",
         "severity": "high"
       }
     ]
@@ -2296,7 +2729,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-003",
     "name": "negative-read-only-or-restricted",
-    "description": "Evaluated on 2026-10-29; none of these tokens expires. Read permissions only; a risky write permission limited to an IP range; a write permission outside the risky list; and a risky permission that a policy denies.\n",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires. Read permissions only; a risky write permission limited to an IP range; one limited to a /8 and an IPv4-mapped /24, the widest ranges that still count; a write permission outside the risky list; and a risky permission that a policy denies.\n",
     "params": {
       "now_ms": 1793232000000
     },
@@ -2350,6 +2783,39 @@ export const FIXTURES: readonly RuleFixture[] = [
             "in": [
               "198.51.100.0/24",
               "2001:db8::/32"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "a0000000000000000000000000000005",
+        "name": "partner-network",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-01-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "17.0.0.0/8",
+              "::ffff:198.51.100.0/120"
             ],
             "not_in": []
           },
@@ -2639,6 +3105,232 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-003",
+    "name": "positive-ip-allow-list-without-limit",
+    "description": "Evaluated on 2026-10-29; none of these tokens expires and each can write Workers scripts. Their IP allow lists admit every address: 0.0.0.0/0 with ::/0 (the review's case), IPv4 in two halves, a narrow IPv4 range next to ::/0, an IPv6 range wider than /32, and an IPv4-mapped IPv6 range that covers all of IPv4.\n",
+    "params": {
+      "now_ms": 1793232000000
+    },
+    "nodes": [
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000001",
+        "name": "anywhere",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0.0.0.0/0",
+              "::/0"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000002",
+        "name": "two-halves",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "0.0.0.0/1",
+              "128.0.0.0/1"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000003",
+        "name": "office-or-any-ipv6",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "198.51.100.0/24",
+              "::/0"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000004",
+        "name": "global-unicast",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "198.51.100.0/24",
+              "2000::/3"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "account_token",
+        "id": "d0000000000000000000000000000005",
+        "name": "mapped",
+        "props": {
+          "status": "active",
+          "issued_on": "2026-10-01T00:00:00Z",
+          "modified_on": null,
+          "expires_on": null,
+          "not_before": null,
+          "ip_condition": {
+            "in": [
+              "::ffff:0.0.0.0/96"
+            ],
+            "not_in": []
+          },
+          "policies": [
+            {
+              "effect": "allow",
+              "permission_groups": [
+                {
+                  "id": "pg-1",
+                  "name": "Workers Scripts Write"
+                }
+              ],
+              "resources": {
+                "com.cloudflare.api.account.023e105f4ecef8ad9ca31a8372d0c353": "*"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "edges": [],
+    "exposure": [],
+    "vulns": [],
+    "signals": [
+      {
+        "node": "account_token:d0000000000000000000000000000001",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000002",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000003",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000004",
+        "name": "last_used_on",
+        "value": 1793145600000
+      },
+      {
+        "node": "account_token:d0000000000000000000000000000005",
+        "name": "last_used_on",
+        "value": 1793145600000
+      }
+    ],
+    "expect": [
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000001",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000002",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000003",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000004",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-003:account_token:d0000000000000000000000000000005",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-003",
     "name": "positive-long-lived-write-tokens",
     "description": "Evaluated on 2026-10-29. Five active, unrestricted tokens with risky write permissions: one without expiry (high); one whose DNS grant covers all zones of the account (critical); one with the dashboard name of an Access permission, unused for 120 days (critical); one never used since it was issued in May (critical); one with only a not_in IP list (high).\n",
     "params": {
@@ -2901,7 +3593,7 @@ export const FIXTURES: readonly RuleFixture[] = [
     "nodes": [
       {
         "type": "tunnel",
-        "id": "t-1",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
         "name": "office",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -2911,27 +3603,28 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "gone.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com",
         "name": "gone.example.com",
         "props": {
           "hostname": "gone.example.com",
           "path": "",
           "service": "http_status:404",
           "origin_scheme": "http_status",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:gone.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:gone.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:gone.example.com",
         "decision": "public",
         "confidence": 2
       }
@@ -2942,98 +3635,8 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-004",
-    "name": "negative-protected-or-unknown",
-    "description": "Access protects the SSH hostname and Service Auth the API. The evaluator could not decide a third hostname, which only answers with a status code: it would not qualify even if it were public, so it is not undecided either.\n",
-    "nodes": [
-      {
-        "type": "tunnel",
-        "id": "t-1",
-        "name": "office",
-        "props": {
-          "tunnel_type": "cfd_tunnel",
-          "status": "healthy",
-          "config_src": "cloudflare"
-        }
-      },
-      {
-        "type": "tunnel_hostname",
-        "id": "ssh.example.com",
-        "name": "ssh.example.com",
-        "props": {
-          "hostname": "ssh.example.com",
-          "path": "",
-          "service": "ssh://localhost:22",
-          "origin_scheme": "ssh",
-          "tunnel_id": "t-1"
-        }
-      },
-      {
-        "type": "tunnel_hostname",
-        "id": "api.example.com",
-        "name": "api.example.com",
-        "props": {
-          "hostname": "api.example.com",
-          "path": "",
-          "service": "https://localhost:8443",
-          "origin_scheme": "https",
-          "tunnel_id": "t-1"
-        }
-      },
-      {
-        "type": "tunnel_hostname",
-        "id": "odd.example.com",
-        "name": "odd.example.com",
-        "props": {
-          "hostname": "odd.example.com",
-          "path": "",
-          "service": "http_status:503",
-          "origin_scheme": "http_status",
-          "tunnel_id": "t-1"
-        }
-      }
-    ],
-    "edges": [
-      {
-        "type": "ROUTES_TO",
-        "src": "tunnel_hostname:ssh.example.com",
-        "dst": "tunnel:t-1"
-      },
-      {
-        "type": "ROUTES_TO",
-        "src": "tunnel_hostname:api.example.com",
-        "dst": "tunnel:t-1"
-      },
-      {
-        "type": "ROUTES_TO",
-        "src": "tunnel_hostname:odd.example.com",
-        "dst": "tunnel:t-1"
-      }
-    ],
-    "exposure": [
-      {
-        "entry": "tunnel_hostname:ssh.example.com",
-        "decision": "access",
-        "confidence": 2
-      },
-      {
-        "entry": "tunnel_hostname:api.example.com",
-        "decision": "service_auth",
-        "confidence": 2
-      },
-      {
-        "entry": "tunnel_hostname:odd.example.com",
-        "decision": "unknown",
-        "confidence": 0
-      }
-    ],
-    "vulns": [],
-    "signals": [],
-    "expect": []
-  },
-  {
-    "rule": "CF-004",
-    "name": "positive-public-tunnel-hostnames",
-    "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access.\n",
+    "name": "negative-origin-enforced-access",
+    "description": "cloudflared requires an Access token for both hostnames. No Access app covers the SSH hostname, and a Bypass for everyone covers the wiki; Access alone would leave both public. The evaluator decides them access with confidence 1, decided by the tunnel hostname, and CF-004 follows the exposure rows.\n",
     "nodes": [
       {
         "type": "tunnel",
@@ -3047,157 +3650,110 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "ssh.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "name": "ssh.example.com",
         "props": {
           "hostname": "ssh.example.com",
           "path": "",
           "service": "ssh://localhost:22",
           "origin_scheme": "ssh",
-          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": true
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "jump.example.com",
-        "name": "jump.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com",
+        "name": "wiki.example.com",
         "props": {
-          "hostname": "jump.example.com",
-          "path": "",
-          "service": "bastion",
-          "origin_scheme": "other",
-          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
-        }
-      },
-      {
-        "type": "tunnel_hostname",
-        "id": "app.example.com",
-        "name": "app.example.com",
-        "props": {
-          "hostname": "app.example.com",
+          "hostname": "wiki.example.com",
           "path": "",
           "service": "http://localhost:8080",
           "origin_scheme": "http",
-          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": true
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-wiki",
+        "name": "Wiki",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "wiki.example.com",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-public",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:ssh.example.com",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:jump.example.com",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com",
         "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
-        "type": "ROUTES_TO",
-        "src": "tunnel_hostname:app.example.com",
-        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+        "type": "ALLOWS",
+        "src": "access_policy:pol-public",
+        "dst": "access_app:app-wiki",
+        "props": {
+          "precedence": 1
+        }
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:ssh.example.com",
-        "decision": "public",
-        "confidence": 2
-      },
-      {
-        "entry": "tunnel_hostname:jump.example.com",
-        "decision": "public",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "decision": "access",
         "confidence": 1
       },
       {
-        "entry": "tunnel_hostname:app.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com",
         "decision": "access",
-        "confidence": 2
-      },
-      {
-        "entry": "tunnel_hostname:app.example.com",
-        "path": "/api",
-        "decision": "public",
-        "confidence": 2
+        "confidence": 1
       }
     ],
     "vulns": [],
     "signals": [],
-    "expect": [
-      {
-        "fingerprint": "CF-004:tunnel_hostname:ssh.example.com",
-        "severity": "critical"
-      },
-      {
-        "fingerprint": "CF-004:tunnel_hostname:jump.example.com",
-        "severity": "critical"
-      },
-      {
-        "fingerprint": "CF-004:tunnel_hostname:app.example.com",
-        "severity": "high"
-      }
-    ]
+    "expect": []
   },
   {
     "rule": "CF-004",
-    "name": "positive-rdp-on-path",
-    "description": "An ingress rule with a path routes RDP. The hostname node is keyed by hostname and path; exposure is public.\n",
+    "name": "negative-protected-or-unknown",
+    "description": "Access protects the SSH hostname and Service Auth the API. The evaluator could not decide a third hostname, which only answers with a status code: it would not qualify even if it were public, so it is not undecided either.\n",
     "nodes": [
       {
         "type": "tunnel",
-        "id": "t-2",
-        "name": "dc",
-        "props": {
-          "tunnel_type": "cfd_tunnel",
-          "status": "down",
-          "config_src": "cloudflare"
-        }
-      },
-      {
-        "type": "tunnel_hostname",
-        "id": "remote.example.com/desk",
-        "name": "remote.example.com",
-        "props": {
-          "hostname": "remote.example.com",
-          "path": "/desk",
-          "service": "rdp://10.0.0.5:3389",
-          "origin_scheme": "rdp",
-          "tunnel_id": "t-2"
-        }
-      }
-    ],
-    "edges": [
-      {
-        "type": "ROUTES_TO",
-        "src": "tunnel_hostname:remote.example.com/desk",
-        "dst": "tunnel:t-2"
-      }
-    ],
-    "exposure": [
-      {
-        "entry": "tunnel_hostname:remote.example.com/desk",
-        "decision": "public",
-        "confidence": 2
-      }
-    ],
-    "vulns": [],
-    "signals": [],
-    "expect": [
-      {
-        "fingerprint": "CF-004:tunnel_hostname:remote.example.com/desk",
-        "severity": "critical"
-      }
-    ]
-  },
-  {
-    "rule": "CF-004",
-    "name": "undecided-unknown-exposure",
-    "description": "The evaluator could not decide the database hostname, nor the /internal path of a web app that Access protects otherwise. Either would qualify if it were public, so both rows are undecided. On a third hostname the evaluator could not decide /, but /api is public, which decides it.\n",
-    "nodes": [
-      {
-        "type": "tunnel",
-        "id": "t-1",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
         "name": "office",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -3207,82 +3763,205 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "db.example.com",
-        "name": "db.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "name": "ssh.example.com",
         "props": {
-          "hostname": "db.example.com",
+          "hostname": "ssh.example.com",
           "path": "",
-          "service": "tcp://localhost:5432",
-          "origin_scheme": "tcp",
-          "tunnel_id": "t-1"
+          "service": "ssh://localhost:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       },
       {
         "type": "tunnel_hostname",
-        "id": "web.example.com",
-        "name": "web.example.com",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:api.example.com",
+        "name": "api.example.com",
         "props": {
-          "hostname": "web.example.com",
-          "path": "",
-          "service": "http://localhost:8080",
-          "origin_scheme": "http",
-          "tunnel_id": "t-1"
-        }
-      },
-      {
-        "type": "tunnel_hostname",
-        "id": "mixed.example.com",
-        "name": "mixed.example.com",
-        "props": {
-          "hostname": "mixed.example.com",
+          "hostname": "api.example.com",
           "path": "",
           "service": "https://localhost:8443",
           "origin_scheme": "https",
-          "tunnel_id": "t-1"
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:odd.example.com",
+        "name": "odd.example.com",
+        "props": {
+          "hostname": "odd.example.com",
+          "path": "",
+          "service": "http_status:503",
+          "origin_scheme": "http_status",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
         }
       }
     ],
     "edges": [
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:db.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:web.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:api.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:mixed.example.com",
-        "dst": "tunnel:t-1"
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:odd.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
     "exposure": [
       {
-        "entry": "tunnel_hostname:db.example.com",
-        "decision": "unknown",
-        "confidence": 0
-      },
-      {
-        "entry": "tunnel_hostname:web.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
         "decision": "access",
         "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:web.example.com",
-        "path": "/internal",
-        "decision": "unknown",
-        "confidence": 0
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:api.example.com",
+        "decision": "service_auth",
+        "confidence": 2
       },
       {
-        "entry": "tunnel_hostname:mixed.example.com",
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:odd.example.com",
         "decision": "unknown",
         "confidence": 0
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-004",
+    "name": "positive-public-tunnel-hostnames",
+    "description": "Three published hostnames of one tunnel, all public. SSH and the bastion jump host are critical; the HTTP app is high. Only the /api path of the HTTP app is public, the rest sits behind Access. A second tunnel serves ssh.example.com as well; its hostname node is keyed by its own tunnel ID, so it is a finding of its own.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
       },
       {
-        "entry": "tunnel_hostname:mixed.example.com",
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "name": "ssh.example.com",
+        "props": {
+          "hostname": "ssh.example.com",
+          "path": "",
+          "service": "ssh://localhost:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel",
+        "id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+        "name": "office-dr",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "name": "ssh.example.com",
+        "props": {
+          "hostname": "ssh.example.com",
+          "path": "",
+          "service": "ssh://10.1.0.4:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
+        "name": "jump.example.com",
+        "props": {
+          "hostname": "jump.example.com",
+          "path": "",
+          "service": "bastion",
+          "origin_scheme": "other",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
+        "name": "app.example.com",
+        "props": {
+          "hostname": "app.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "dst": "tunnel:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
+        "decision": "public",
+        "confidence": 1
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "path": "/api",
         "decision": "public",
         "confidence": 2
@@ -3292,16 +3971,217 @@ export const FIXTURES: readonly RuleFixture[] = [
     "signals": [],
     "expect": [
       {
-        "fingerprint": "CF-004:tunnel_hostname:db.example.com",
-        "decided": false
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "severity": "critical"
       },
       {
-        "fingerprint": "CF-004:tunnel_hostname:web.example.com",
-        "decided": false
+        "fingerprint": "CF-004:tunnel_hostname:9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:ssh.example.com",
+        "severity": "critical"
       },
       {
-        "fingerprint": "CF-004:tunnel_hostname:mixed.example.com",
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:jump.example.com",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:app.example.com",
         "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
+    "name": "positive-rdp-on-path",
+    "description": "An ingress rule with a path routes RDP. The hostname node is keyed by tunnel, hostname and path; exposure is public.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3",
+        "name": "dc",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "down",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
+        "name": "remote.example.com",
+        "props": {
+          "hostname": "remote.example.com",
+          "path": "/desk",
+          "service": "rdp://10.0.0.5:3389",
+          "origin_scheme": "rdp",
+          "tunnel_id": "5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3",
+          "access_required": false
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
+        "dst": "tunnel:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
+        "decision": "public",
+        "confidence": 2
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:5d0e7b9a-2c4f-4a61-8e3d-b7f9c0a1d2e3:remote.example.com/desk",
+        "severity": "critical"
+      }
+    ]
+  },
+  {
+    "rule": "CF-004",
+    "name": "undecided-unknown-exposure",
+    "description": "The evaluator could not decide the database hostname, nor the /internal path of a web app that Access protects otherwise. Either would qualify if it were public, so both rows are undecided. On a third hostname the evaluator could not decide /, but /api is public, which decides it. The evaluator leaves the grafana hostname unknown although cloudflared requires an Access token for it; CF-004 does not decide what the evaluator left open, so that row is undecided too.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
+        "name": "db.example.com",
+        "props": {
+          "hostname": "db.example.com",
+          "path": "",
+          "service": "tcp://localhost:5432",
+          "origin_scheme": "tcp",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
+        "name": "web.example.com",
+        "props": {
+          "hostname": "web.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "name": "mixed.example.com",
+        "props": {
+          "hostname": "mixed.example.com",
+          "path": "",
+          "service": "https://localhost:8443",
+          "origin_scheme": "https",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": false
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "name": "grafana.example.com",
+        "props": {
+          "hostname": "grafana.example.com",
+          "path": "",
+          "service": "http://localhost:3000",
+          "origin_scheme": "http",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": true
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
+        "decision": "access",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
+        "path": "/internal",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "path": "/api",
+        "decision": "public",
+        "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "decision": "unknown",
+        "confidence": 0
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:db.example.com",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:web.example.com",
+        "decided": false
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "decided": false
       }
     ]
   },
@@ -3728,7 +4608,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "app.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -3745,7 +4626,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -4806,7 +5688,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "admin.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5046,7 +5929,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-010",
     "name": "negative-target-without-data",
-    "description": "An Allow-Everyone policy sits on apps whose targets reach no data store and no tunnel: a Worker with only a service binding, a wildcard that does not cover a two-label subdomain, a Worker whose D1 binding is in a version without traffic, a Pages domain whose binding belongs to the preview environment, and an app the policy was removed from.\n",
+    "description": "An Allow-Everyone policy sits on apps whose targets reach no data store and no tunnel: a Worker with only a service binding, a wildcard that does not cover a two-label subdomain, a Worker whose D1 binding is in a version without traffic, a Pages domain whose binding belongs to the preview environment, account-level Worker Access on previews when no version behind a version URL binds data, and an app the policy was removed from.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -5185,7 +6068,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "static.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5202,7 +6086,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.net",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5219,7 +6104,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "gradual.example.org",
-              "path": "/admin"
+              "path": "/admin",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5236,7 +6122,25 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "site.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5253,7 +6157,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "data.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5428,6 +6333,14 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "type": "ALLOWS",
         "src": "access_policy:pol-everyone",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-everyone",
         "dst": "access_app:app-data",
         "props": {
           "precedence": 1
@@ -5439,6 +6352,206 @@ export const FIXTURES: readonly RuleFixture[] = [
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-010",
+    "name": "positive-account-level-worker-access",
+    "description": "Two apps use account-level Worker Access with a policy that admits everyone. wa-all covers every Worker, and ledger's deployed version binds a D1 database. wa-previews covers only preview URLs, and an old version of api behind a version URL binds the sessions KV namespace.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "ledger",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_version",
+        "id": "ledger-1",
+        "props": {
+          "script_node_id": "worker_script:ledger"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "ledger-db",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-new",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-old",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "api-old-api.acme.workers.dev",
+        "name": "api-old-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "api-old",
+          "alias": null
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-sessions",
+        "name": "sessions"
+      },
+      {
+        "type": "access_app",
+        "id": "wa-all",
+        "name": "All Workers",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "all",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-all",
+        "name": "Anyone",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-previews",
+        "name": "Anyone (previews)",
+        "props": {
+          "decision": "allow",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:ledger",
+        "dst": "worker_version:ledger-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:ledger-1",
+        "dst": "d1_database:ledger-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:api-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:api-old-api.acme.workers.dev",
+        "dst": "worker_version:api-old"
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:api-old",
+        "dst": "kv_namespace:kv-sessions",
+        "key": "SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-all",
+        "dst": "access_app:wa-all",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-previews",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-010:access_policy:pol-all",
+        "severity": "critical"
+      },
+      {
+        "fingerprint": "CF-010:access_policy:pol-previews",
+        "severity": "critical"
+      }
+    ]
   },
   {
     "rule": "CF-010",
@@ -5483,7 +6596,7 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel",
-        "id": "t1",
+        "id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f",
         "name": "monitoring",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -5493,14 +6606,15 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "grafana.example.net",
+        "id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net",
         "name": "grafana.example.net",
         "props": {
           "hostname": "grafana.example.net",
           "path": "",
           "service": "http://localhost:3000",
           "origin_scheme": "http",
-          "tunnel_id": "t1"
+          "tunnel_id": "0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f",
+          "access_required": false
         }
       },
       {
@@ -5537,7 +6651,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "admin.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5554,7 +6669,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "grafana.example.net",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5571,7 +6687,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "docs.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5675,8 +6792,8 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:grafana.example.net",
-        "dst": "tunnel:t1"
+        "src": "tunnel_hostname:0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f:grafana.example.net",
+        "dst": "tunnel:0b6e2f1a-9c8d-4b7e-a5f4-3d2c1b0a9e8f"
       },
       {
         "type": "ROUTES_TO",
@@ -5836,7 +6953,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "api",
-              "scope": "previews"
+              "scope": "previews",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5853,7 +6971,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "web",
-              "scope": "previews"
+              "scope": "previews",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5965,7 +7084,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-011",
     "name": "negative-path-app-or-no-data",
-    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
+    "description": "Bypass policies that do not qualify: one on a path app for the public assets of a Worker with data (the recommended split; /static/* is a path too, unlike /*), one on an app in front of a Worker without data store bindings, one on a Pages domain whose data binding belongs to the preview environment, and one on account-level Worker Access for previews when no Worker has a version URL. An Allow policy for Everyone on the data Worker is CF-010's concern, not this rule's.\n",
     "nodes": [
       {
         "type": "worker_script",
@@ -6044,12 +7163,20 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "shop.example.com",
-              "path": "/assets"
+              "path": "/assets",
+              "overrides": []
             },
             {
               "kind": "hostname",
               "host": "shop.example.com",
-              "path": "/favicon.ico"
+              "path": "/static/*",
+              "overrides": []
+            },
+            {
+              "kind": "hostname",
+              "host": "shop.example.com",
+              "path": "/favicon.ico",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6066,7 +7193,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "shop.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6083,7 +7211,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "landing.acme.workers.dev",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6100,7 +7229,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "site.pages.dev",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6145,6 +7275,40 @@ export const FIXTURES: readonly RuleFixture[] = [
         "type": "access_policy",
         "id": "pol-site",
         "name": "Public site",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": null,
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-previews",
+        "name": "Public previews",
         "props": {
           "decision": "bypass",
           "include": [
@@ -6261,12 +7425,220 @@ export const FIXTURES: readonly RuleFixture[] = [
         "props": {
           "precedence": 1
         }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-previews",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
       }
     ],
     "exposure": [],
     "vulns": [],
     "signals": [],
     "expect": []
+  },
+  {
+    "rule": "CF-011",
+    "name": "positive-account-level-worker-access",
+    "description": "Bypass policies on account-level Worker Access. pol-all bypasses for an IP range on every Worker, and ledger's deployed version binds a D1 database. pol-previews bypasses for everyone on preview URLs only, and an old version of api behind a version URL binds the sessions KV namespace.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "ledger",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_version",
+        "id": "ledger-1",
+        "props": {
+          "script_node_id": "worker_script:ledger"
+        }
+      },
+      {
+        "type": "d1_database",
+        "id": "ledger-db",
+        "name": "ledger"
+      },
+      {
+        "type": "worker_script",
+        "id": "api",
+        "name": "api",
+        "props": {
+          "preview_urls": true
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-new",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_version",
+        "id": "api-old",
+        "props": {
+          "script_node_id": "worker_script:api"
+        }
+      },
+      {
+        "type": "worker_preview_url",
+        "id": "api-old-api.acme.workers.dev",
+        "name": "api-old-api.acme.workers.dev",
+        "props": {
+          "script": "api",
+          "kind": "version",
+          "version_id": "api-old",
+          "alias": null
+        }
+      },
+      {
+        "type": "kv_namespace",
+        "id": "kv-sessions",
+        "name": "sessions"
+      },
+      {
+        "type": "access_app",
+        "id": "wa-all",
+        "name": "All Workers",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "all",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "wa-previews",
+        "name": "All previews",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "all_workers",
+              "scope": "previews",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-all",
+        "name": "Office",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "ip",
+              "value": "198.51.100.0/24"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-previews",
+        "name": "Public previews",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:ledger",
+        "dst": "worker_version:ledger-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:ledger-1",
+        "dst": "d1_database:ledger-db",
+        "key": "DB",
+        "props": {
+          "binding_type": "d1"
+        }
+      },
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:api",
+        "dst": "worker_version:api-new",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_preview_url:api-old-api.acme.workers.dev",
+        "dst": "worker_version:api-old"
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:api-old",
+        "dst": "kv_namespace:kv-sessions",
+        "key": "SESSIONS",
+        "props": {
+          "binding_type": "kv_namespace"
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-all",
+        "dst": "access_app:wa-all",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-previews",
+        "dst": "access_app:wa-previews",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-011:access_policy:pol-all",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-011:access_policy:pol-previews",
+        "severity": "high"
+      }
+    ]
   },
   {
     "rule": "CF-011",
@@ -6302,7 +7674,7 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel",
-        "id": "t1",
+        "id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f",
         "name": "lab",
         "props": {
           "tunnel_type": "cfd_tunnel",
@@ -6312,14 +7684,15 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "tunnel_hostname",
-        "id": "lab.example.net",
+        "id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f:lab.example.net",
         "name": "lab.example.net",
         "props": {
           "hostname": "lab.example.net",
           "path": "",
           "service": "http://localhost:8000",
           "origin_scheme": "http",
-          "tunnel_id": "t1"
+          "tunnel_id": "e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f",
+          "access_required": false
         }
       },
       {
@@ -6349,7 +7722,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "api.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6366,7 +7740,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.net",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6383,7 +7758,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "billing",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6467,8 +7843,8 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "type": "ROUTES_TO",
-        "src": "tunnel_hostname:lab.example.net",
-        "dst": "tunnel:t1"
+        "src": "tunnel_hostname:e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f:lab.example.net",
+        "dst": "tunnel:e4d3c2b1-a0f9-4e8d-b7c6-5a4b3c2d1e0f"
       },
       {
         "type": "DEPLOYS",
@@ -6526,6 +7902,192 @@ export const FIXTURES: readonly RuleFixture[] = [
       },
       {
         "fingerprint": "CF-011:access_policy:pol-worker",
+        "severity": "high"
+      }
+    ]
+  },
+  {
+    "rule": "CF-011",
+    "name": "positive-root-path-covers-the-host",
+    "description": "Two apps carry a path that still covers the whole host. pol-files bypasses Access on files.example.com with path \"/\", in front of a Worker with an R2 binding. pol-ops bypasses Access for a country on ops.example.org with path \"/*\", a tunnel hostname.\n",
+    "nodes": [
+      {
+        "type": "worker_script",
+        "id": "files",
+        "name": "files"
+      },
+      {
+        "type": "worker_version",
+        "id": "files-1",
+        "props": {
+          "script_node_id": "worker_script:files"
+        }
+      },
+      {
+        "type": "worker_custom_domain",
+        "id": "files.example.com",
+        "name": "files.example.com",
+        "props": {
+          "zone_id": "z1",
+          "hostname": "files.example.com",
+          "service": "files",
+          "environment": null
+        }
+      },
+      {
+        "type": "r2_bucket",
+        "id": "customer-exports",
+        "name": "customer-exports"
+      },
+      {
+        "type": "tunnel",
+        "id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876",
+        "name": "ops",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org",
+        "name": "ops.example.org",
+        "props": {
+          "hostname": "ops.example.org",
+          "path": "",
+          "service": "https://localhost:9443",
+          "origin_scheme": "https",
+          "tunnel_id": "3f2e1d0c-9b8a-4765-a432-10fedcba9876",
+          "access_required": false
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-files",
+        "name": "Files",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "files.example.com",
+              "path": "/",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-ops",
+        "name": "Ops",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "ops.example.org",
+              "path": "/*",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-files",
+        "name": "Public files",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-ops",
+        "name": "Home country",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "geo",
+              "value": "DE"
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "DEPLOYS",
+        "src": "worker_script:files",
+        "dst": "worker_version:files-1",
+        "props": {
+          "percentage": 100
+        }
+      },
+      {
+        "type": "BINDS",
+        "src": "worker_version:files-1",
+        "dst": "r2_bucket:customer-exports",
+        "key": "EXPORTS",
+        "props": {
+          "binding_type": "r2_bucket"
+        }
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "worker_custom_domain:files.example.com",
+        "dst": "worker_script:files"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:3f2e1d0c-9b8a-4765-a432-10fedcba9876:ops.example.org",
+        "dst": "tunnel:3f2e1d0c-9b8a-4765-a432-10fedcba9876"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-files",
+        "dst": "access_app:app-files",
+        "props": {
+          "precedence": 1
+        }
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-ops",
+        "dst": "access_app:app-ops",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [],
+    "vulns": [],
+    "signals": [],
+    "expect": [
+      {
+        "fingerprint": "CF-011:access_policy:pol-files",
+        "severity": "high"
+      },
+      {
+        "fingerprint": "CF-011:access_policy:pol-ops",
         "severity": "high"
       }
     ]
