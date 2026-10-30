@@ -127,10 +127,10 @@ Emitted only when the script has `preview_urls: true`.
 | --- | --- | --- |
 | `bucket` | string | |
 | `kind` | string | `r2_dev` or `custom` |
-| `enabled` | boolean \| null | `null` when the API omits the field or sends another type (custom domains) |
+| `enabled` | boolean \| null | `null` when the API omits the field or sends another type |
 | `zone_id` | string \| null | |
 
-Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point; review R4-02 proposes emitting it with `enabled: null` instead.
+Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point. Round 6 changes that (R4-02): the `r2.dev` domain is emitted unless the API says it is disabled, with `enabled` `null` when that cannot be read. CF-021 version 3 and the exposure evaluator already treat any `enabled` other than `false` as possibly public, for custom and `r2.dev` domains: CF-021 returns an undecided row, and the evaluator decides the domain `unknown`.
 
 `d1_database` — native ID: database UUID; name: database name. Props: `created_at` (string \| null).
 
@@ -258,7 +258,7 @@ Known limits of the per-rule model, and which way each errs:
 - Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
 - A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
 - A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
-- `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point. This was already true before round 4.
+- Until the collector follows the ID form above (round 6), `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point (R5-04). This was already true before round 4.
 
 ### tokens
 
