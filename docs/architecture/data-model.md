@@ -153,9 +153,17 @@ Front matter at the top of `rule.sql`, parsed as YAML:
 
 Output contract: each row has `rule_id`, `fingerprint` (starting with `<rule_id>:`), `severity` and `subject_id` (the node the finding is about), an optional `decided` (1 by default; 0 for an undecided row), plus evidence columns. An undecided row meets the same contract and its fingerprint is unique in the result too, so a rule that decides a subject on one path and cannot on another returns one decided row. List-valued evidence uses `json_group_array(DISTINCT …)`, not `group_concat`, because hostnames and names can contain commas. Evidence lists are capped at 100 items. Strings are capped at 2,048 characters, also inside list items that are objects or lists. Every node ID in an evidence list also lands in `finding_nodes`, with the column name as the role. Rules that depend on time read the `now_ms` parameter (the scan start).
 
-Rules that read `exposure` require `exposure` and `access`. Where the entry points that decide such a rule have exposure `unknown`, and the rule would qualify if they were `public` (or, for CF-009, if they were not), the rule returns an undecided row instead of none; one entry point that decides the subject makes the row decided, with only the deciding entry points as evidence. CF-001, CF-002, CF-004, CF-009, CF-021 and CF-022 do this since version 2.
+Rules that read `exposure` require `exposure` and `access`; the compiler enforces it from the tables a rule reads (below). Where the entry points that decide such a rule have exposure `unknown`, and the rule would qualify if they were `public` (or, for CF-009, if they were not), the rule returns an undecided row instead of none; one entry point that decides the subject makes the row decided, with only the deciding entry points as evidence. CF-001, CF-002, CF-004, CF-009, CF-021 and CF-022 do this since version 2.
 
 Undecided rows do not need exposure. CF-024 version 2 returns them for plain-text variables whose value the collector could not inspect (`looks_secret` `null`), without reading exposure: a Worker or Pages project with such a variable and none that looks like a secret gets an undecided row.
+
+Round 5 changed three rules:
+
+| Rule | Version | Change |
+| --- | --- | --- |
+| CF-003 | 3 | Reads IPv4-mapped ranges in `ip_condition` in every IPv6 spelling, not only the canonical one the tokens collector writes (R4-06) |
+| CF-004 | 3 | `via_fallthrough` in the evidence, so a fall-through entry point is told apart from a hostname rule |
+| CF-021 | 3 | A custom or `r2.dev` domain whose `enabled` state is unknown makes the bucket's row undecided instead of dropping the domain (R4-02) |
 
 A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`, `src`, `dst`, `key`, `props`, optional `deleted`), `exposure`, `vulns` (severity by name, `kev`), `signals` and the `expect` list. An `expect` entry has a `fingerprint`, an optional `severity`, and `decided: false` for an undecided row, which takes no severity; the fixture fails when a row's decided state differs from its entry. Fixtures load through the regular write path, so every fixture also exercises the batch upsert.
 
@@ -163,12 +171,17 @@ A fixture describes nodes (`type`, native `id`, `name`, `props`), edges (`type`,
 
 1. parses and validates the front matter (unknown keys fail)
 2. replaces `:name` parameters with positional `?` and an ordered binding list, and rejects positional `?`, a second statement, and parameters that are undeclared or unused
-3. prepares the statement against the current schema in Node SQLite and checks the required output columns
-4. checks the fixtures and runs all of them:
+3. prepares the statement against the current schema in Node SQLite, checks the required output columns, and runs `EXPLAIN` on it:
+   - It refuses any write: `OpenWrite`, `Clear`, a write transaction, or a schema or virtual table change. That includes `WITH … INSERT/UPDATE/DELETE … RETURNING`, which passes the parser's `SELECT`/`WITH` check (R4-05).
+   - It refuses a program of more than 20,000 operations. Durable Object SQLite failed one of about 21,700 with `SQLITE_NOMEM` (2026-10-30); Node SQLite accepts it.
+   - It collects the tables the program reads, mapping root pages through `sqlite_schema`.
+4. checks the fixtures and runs all of them with `PRAGMA query_only` on:
    - Fixture files must be named `positive-`, `negative-` or `undecided-<name>.yaml`; any other file fails.
    - A positive fixture needs at least one hit, a negative fixture expects no rows, and an undecided fixture needs at least one undecided row.
-   - A rule that requires `exposure` needs an undecided fixture.
-5. rejects `requires` entries that are neither a resource class nor a derived input (`exposure`, `packages`, `vulns`)
+   - A rule that reads or requires `exposure` needs an undecided fixture.
+5. checks `requires` (R4-04):
+   - Entries that are neither a resource class nor a derived input (`exposure`, `packages`, `vulns`) fail.
+   - A rule that reads `exposure` must list `exposure` and `access`, one that reads `vulns` must list `vulns`, and one that reads `insights` must list `insights`.
 6. writes `rules.gen.ts` and `fixtures.gen.ts`
 
 `pnpm rules:check` does the same and fails if the generated files are stale. The core Worker's tests run every fixture again in Durable Object SQLite, because it allows fewer SQL functions than Node does. The tests in `packages/rules` run every fixture through the findings lifecycle (an undecided row must leave a seeded open finding unchanged), check the fixture name prefixes above, and require a fixture with an undecided row for every rule that requires `exposure`.
