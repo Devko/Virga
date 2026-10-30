@@ -134,7 +134,7 @@ async function main(): Promise<number> {
   const wranglers = recordWranglers(present.map(({ app }) => dirOf(app)));
   for (const install of new Map([...wranglers.values()].map((w) => [w.bin, w])).values()) {
     console.log(
-      `Wrangler ${install.version}: ${install.bin}, ${install.files.size} files recorded before the builds`,
+      `Wrangler ${install.version}: ${install.bin}; ${install.files.size} files and directories recorded before the builds`,
     );
   }
   const ctx: Context = {

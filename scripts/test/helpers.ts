@@ -109,6 +109,9 @@ export function fakeWrangler(root: string, appDirs: readonly string[], bin: stri
   put(join(platform, "bin", "esbuild"), "a binary", 0o755);
   mkdirSync(join(store, "esbuild@0.28.2", "node_modules", "@esbuild"), { recursive: true });
   symlinkSync(platform, join(store, "esbuild@0.28.2", "node_modules", "@esbuild", "linux-x64"));
+  // pnpm hoists every package here, where Node searches from every package in the store.
+  mkdirSync(join(store, "node_modules"));
+  symlinkSync(esbuild, join(store, "node_modules", "esbuild"));
   const shims: string[] = [];
   for (const appDir of appDirs) {
     mkdirSync(join(appDir, "node_modules", ".bin"), { recursive: true });

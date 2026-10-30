@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   describeChanges,
@@ -41,7 +41,8 @@ describe("recordWrangler", () => {
       bin: fake.bin,
       version: "4.151.0",
     });
-    expect([...install.files.keys()].sort()).toEqual(
+    const files = [...install.files.keys()].filter((path) => !path.endsWith(sep));
+    expect(files.sort()).toEqual(
       [
         join(fake.wrangler, "package.json"),
         fake.bin,
@@ -56,6 +57,29 @@ describe("recordWrangler", () => {
       ].sort(),
     );
     expect(install.files.get(fake.bin)).toBe(createHash("sha256").update(BIN).digest("hex"));
+    // The node_modules directories a bare require from these packages searches.
+    const store = join(root, "node_modules", ".pnpm");
+    for (const dir of [
+      join(fake.wrangler, "node_modules"),
+      join(store, "wrangler@4.151.0", "node_modules"),
+      join(store, "esbuild@0.28.2", "node_modules"),
+      join(store, "node_modules"),
+      join(root, "node_modules"),
+    ]) {
+      expect(install.files.has(`${dir}${sep}`), dir).toBe(true);
+    }
+  });
+
+  it("R6-01: names a package planted where a require from Wrangler would find it", () => {
+    const install = recordWrangler(web);
+    // pnpm's hoisting directory, which Node searches from every package in the store.
+    const hoisted = join(root, "node_modules", ".pnpm", "node_modules");
+    put(join(hoisted, "bufferutil", "index.js"), "// planted\n");
+    expect(wranglerChanges(install)).toEqual([`${hoisted}${sep}`]);
+    rmSync(join(hoisted, "bufferutil"), { recursive: true });
+    expect(wranglerChanges(install)).toEqual([]);
+    put(join(hoisted, "@aws-sdk", "signature-v4-crt", "index.js"), "// planted\n");
+    expect(wranglerChanges(install)).toEqual([`${hoisted}${sep}`]);
   });
 
   it("R6-01: finds nothing changed when nothing changed", () => {
@@ -132,7 +156,14 @@ describe("recordWrangler", () => {
       "darwin-arm64",
     );
     put(join(planted, "package.json"), "{}");
-    expect(wranglerChanges(install)).toEqual([join(planted, "package.json")]);
+    const nodeModules = join(root, "node_modules", ".pnpm", "esbuild@0.28.2", "node_modules");
+    expect(wranglerChanges(install)).toEqual([
+      `${nodeModules}${sep}`,
+      // Where the planted package's own requires would look.
+      `${join(nodeModules, "@esbuild", "darwin-arm64", "node_modules")}${sep}`,
+      join(planted, "package.json"),
+      `${join(nodeModules, "@esbuild", "node_modules")}${sep}`,
+    ]);
   });
 
   it("R6-01: names an app whose node_modules/wrangler now points to another package", () => {

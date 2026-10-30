@@ -27,9 +27,11 @@ export interface WranglerInstall {
   bin: string;
   version: string;
   /**
-   * sha256 of every file Node can load for Wrangler, by path: the package and
-   * every package it depends on, resolved as Node resolves them, plus the
-   * app's Wrangler shims. A symlink is recorded as `link:` and its target.
+   * sha256 of every file of the package and of every package it depends on,
+   * resolved as Node resolves them, and of the app's Wrangler shims, by path.
+   * A symlink is recorded as `link:` and its target. A path that ends in a
+   * separator is a node_modules directory Node searches from one of these
+   * packages, with a hash of its entries.
    */
   files: ReadonlyMap<string, string>;
 }
@@ -44,7 +46,7 @@ const isRecord = (value: unknown): value is Json =>
 const CHUNK = 1 << 20;
 
 /** sha256 of a file, read in chunks: workerd's binary alone is over 100 MB. */
-function sha256(path: string): string {
+function fileSha256(path: string): string {
   const hash = createHash("sha256");
   const buffer = Buffer.alloc(CHUNK);
   const fd = openSync(path, "r");
@@ -62,11 +64,11 @@ function sha256(path: string): string {
   return hash.digest("hex");
 }
 
-/** How an entry is recorded: its content's sha256, a symlink's target, or its kind. */
-function fingerprint(path: string): string {
+/** How an entry is recorded: a symlink's target, a file's sha256 (or just `file`), or its kind. */
+function fingerprint(path: string, content = true): string {
   const stat = lstatSync(path);
   if (stat.isSymbolicLink()) return `link:${readlinkSync(path)}`;
-  if (stat.isFile()) return sha256(path);
+  if (stat.isFile()) return content ? fileSha256(path) : "file";
   return stat.isDirectory() ? "directory" : "other";
 }
 
@@ -79,13 +81,40 @@ function readPackage(dir: string): Json | null {
   }
 }
 
+/** The node_modules directories Node searches for a bare name required from `dir`, in order. */
+const lookupPaths = (dir: string) =>
+  createRequire(join(dir, "package.json")).resolve.paths("x") ?? [];
+
 /** The directory Node loads `name` from when a module in `dir` requires it, with symlinks followed. */
 function resolvePackage(dir: string, name: string): string | null {
-  for (const base of createRequire(join(dir, "package.json")).resolve.paths(name) ?? []) {
+  for (const base of lookupPaths(dir)) {
     const candidate = join(base, name);
     if (existsSync(candidate)) return realpathSync(candidate);
   }
   return null;
+}
+
+/**
+ * What a bare require could find in the node_modules directory `base`: its
+ * entries, scoped ones included, each with its kind or link target. Names
+ * that start with a dot are no package names.
+ */
+function listing(base: string): string {
+  if (!existsSync(base)) return "absent";
+  const lines: string[] = [];
+  const list = (dir: string, prefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      const path = join(dir, entry.name);
+      if (prefix === "" && entry.name.startsWith("@") && entry.isDirectory()) {
+        list(path, `${entry.name}/`);
+      } else {
+        lines.push(`${prefix}${entry.name} ${fingerprint(path, false)}`);
+      }
+    }
+  };
+  list(base, "");
+  return createHash("sha256").update(lines.sort().join("\n")).digest("hex");
 }
 
 /** The package and every package it depends on, by real path. */
@@ -171,7 +200,8 @@ export function recordWrangler(
   }
 
   const files = new Map<string, string>();
-  for (const pkgDir of closure(dir)) {
+  const packages = closure(dir);
+  for (const pkgDir of packages) {
     let hashed = cache.get(pkgDir);
     if (hashed === undefined) {
       hashed = new Map();
@@ -179,6 +209,11 @@ export function recordWrangler(
       cache.set(pkgDir, hashed);
     }
     for (const [path, hash] of hashed) files.set(path, hash);
+  }
+  // A package planted where a require from Wrangler would find it, for
+  // example an optional one it tries to load, changes one of these.
+  for (const base of new Set(packages.flatMap(lookupPaths))) {
+    files.set(`${base}${sep}`, listing(base));
   }
   // The shims are not run by the deploy, but by `npx wrangler` in the operator guide.
   const shims = join(appDir, "node_modules", ".bin");
