@@ -133,7 +133,7 @@ describe("parseWorkerConfig", () => {
       previewUrls: null,
       hasRoutes: false,
       hasAssets: false,
-      hasEnvironments: false,
+      keys: [["name"]],
       services: [],
       d1: [],
       vars: {},
@@ -165,10 +165,10 @@ describe("parseWorkerConfig", () => {
     expect(config).toMatchObject({
       hasRoutes: true,
       hasAssets: true,
-      hasEnvironments: true,
       vars: { ADMIN_EMAILS: "a@example.com" },
       requiredSecrets: ["ACCESS_AUD"],
     });
+    expect(config.keys).toContainEqual(["env", "staging"]);
   });
 
   it("collects every problem in one error", () => {
@@ -199,6 +199,28 @@ describe("parseWorkerConfig", () => {
     expect(message.split("\n").every((line) => line.startsWith("apps/core/wrangler.jsonc: "))).toBe(
       true,
     );
+  });
+
+  it("R5-02: records the path of every key, but not the names inside vars", () => {
+    const config = parseWorkerConfig(
+      {
+        name: "virga-web",
+        vars: { ANY_NAME: { nested: true } },
+        unsafe: { bindings: [{ name: "API", type: "service" }] },
+        "odd.key": [[{ deep: 1 }]],
+      },
+      source,
+    );
+    expect(config.keys).toEqual([
+      ["name"],
+      ["vars"],
+      ["unsafe"],
+      ["unsafe", "bindings"],
+      ["unsafe", "bindings", 0, "name"],
+      ["unsafe", "bindings", 0, "type"],
+      ["odd.key"],
+      ["odd.key", 0, 0, "deep"],
+    ]);
   });
 
   it("rejects a config that is not an object", () => {

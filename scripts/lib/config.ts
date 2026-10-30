@@ -30,6 +30,9 @@ export interface ClassBinding {
   scriptName: string | null;
 }
 
+/** Where a key sits in a config: object keys, and array indexes as numbers. */
+export type KeyPath = readonly (string | number)[];
+
 /** The parts of a Wrangler configuration that the deploy script checks. */
 export interface WorkerConfig {
   /** Directory name under apps/, for example `broker`. */
@@ -44,7 +47,11 @@ export interface WorkerConfig {
   previewUrls: boolean | null;
   hasRoutes: boolean;
   hasAssets: boolean;
-  hasEnvironments: boolean;
+  /**
+   * Every key in the config, parents before children, so that checkTopology
+   * can refuse what it does not check (R5-02). The names inside `vars` are free.
+   */
+  keys: KeyPath[];
   services: ServiceBinding[];
   d1: D1Binding[];
   secretsStore: SecretsStoreBinding[];
@@ -252,7 +259,7 @@ export function parseWorkerConfig(raw: unknown, source: Source): WorkerConfig {
     previewUrls,
     hasRoutes: raw.routes !== undefined || raw.route !== undefined,
     hasAssets: raw.assets !== undefined,
-    hasEnvironments: raw.env !== undefined,
+    keys: keyPaths(raw),
     services,
     d1,
     secretsStore,
@@ -261,4 +268,13 @@ export function parseWorkerConfig(raw: unknown, source: Source): WorkerConfig {
     vars: isRecord(vars) ? vars : {},
     requiredSecrets,
   };
+}
+
+function keyPaths(value: unknown, path: KeyPath = []): KeyPath[] {
+  if (Array.isArray(value)) return value.flatMap((item, i) => keyPaths(item, [...path, i]));
+  if (!isRecord(value) || (path.length === 1 && path[0] === "vars")) return [];
+  return Object.entries(value).flatMap(([key, child]) => [
+    [...path, key],
+    ...keyPaths(child, [...path, key]),
+  ]);
 }
