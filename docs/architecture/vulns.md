@@ -70,6 +70,7 @@ For a package and an advisory, every npm entry whose name equals the package nam
 
 `severity_rank` is 0 none, 1 low, 2 medium, 3 high, 4 critical (data model). The entry's own `severity` applies when it has one, otherwise the top level.
 
+0. A record whose ID starts with `MAL-` (the OpenSSF malicious packages database, compared exactly) ranks 4, whatever its severity fields hold ([decision 0008](../decisions/0008-malicious-package-advisories.md)). Such records mark a version as malware and carry no severity; an unknown rank would keep CF-001 from running for the whole account and hide the package. A withdrawn `MAL-` record matches nothing, and a `MAL-` match whose version cannot be decided stays unknown. The `kev` flag comes from the CISA catalog as for any record.
 1. CVSS v3.0 and v3.1 vectors (`CVSS_V3`) decide when there is at least one. The base score follows the FIRST specifications, including each version's Roundup; temporal and environmental metrics are validated and ignored. The highest score counts: 0.0 none, 0.1 to 3.9 low, 4.0 to 6.9 medium, 7.0 to 8.9 high, 9.0 to 10.0 critical. A vector that does not parse makes the rank unknown, unless a valid vector already gives critical.
 2. Without a v3 vector, `database_specific.severity` as GitHub advisories carry it: `LOW` 1, `MODERATE` 2, `HIGH` 3, `CRITICAL` 4. Any other value is unknown.
 3. Otherwise the rank is unknown, for example with only a CVSS v4 or v2 vector.
@@ -116,7 +117,6 @@ The lists `unknown` and `unparsed` hold package IDs from the scanned account. A 
 - **Packages.** No collector emits `package` nodes or `CONTAINS` edges. Extraction from Worker versions waits for [S-04](../spikes/S-04-worker-dependencies.md): `package_dependencies` came back `null` in a temporary account, and source maps were not returned.
 - **Advisory mirror and its sync.** Where the OSV npm records and the KEV catalog come from, how they are stored (R2, indexed by package name), how often they sync, and how the tool reaches osv.dev and cisa.gov (these are not Cloudflare API calls and do not go through the broker) are open. The sync decides `feedComplete`.
 - **Scheduling.** Neither the scan nor a daily schedule runs the rematch.
-- **Malicious packages.** OSV `MAL-` records carry no severity, so a match is `severity unknown` and keeps CF-001 `not_evaluated`. Ranking them critical needs a decision.
 - **CVSS v4.** Advisories with only a v4 vector and no database severity are unknown. GitHub advisories carry a database severity, so this mostly concerns other sources.
 - **Aliases.** Two records that alias each other, for example a GitHub malware advisory and its `MAL-` record, give two matches. Matches are not merged by alias.
 - **Real data.** The limits come from the schema and estimates; check them against a copy of the real mirror before relying on them. A record over a limit is rejected and makes the result incomplete.

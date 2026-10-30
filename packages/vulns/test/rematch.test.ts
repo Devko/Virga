@@ -357,6 +357,118 @@ describe("rematch", () => {
     });
   });
 
+  describe("decision 0008: MAL- records rank critical", () => {
+    const pkg = { ecosystem: "npm", name: "virga-fixture-a" };
+    const malicious = (fields: Record<string, unknown> = {}, id = "MAL-2099-0001") =>
+      readOsvFeed([
+        JSON.stringify({
+          id,
+          modified: "2026-10-01T00:00:00Z",
+          affected: [{ package: pkg, versions: ["4.17.20"] }],
+          ...fields,
+        }),
+      ]);
+    const low = "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N";
+    const MAL = row(A, "MAL-2099-0001", { severityRank: 4, firstSeen: AT });
+
+    it.each<[string, Record<string, unknown>]>([
+      ["no severity", {}],
+      ["a low database severity", { database_specific: { severity: "LOW" } }],
+      ["a low CVSS v3 vector", { severity: [{ type: "CVSS_V3", score: low }] }],
+      ["a broken CVSS v3 vector", { severity: [{ type: "CVSS_V3", score: "CVSS:3.1/AV:N" }] }],
+      [
+        "only a CVSS v4 vector",
+        { severity: [{ type: "CVSS_V4", score: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N" }] },
+      ],
+      [
+        "a low severity on the entry",
+        {
+          affected: [
+            { package: pkg, versions: ["4.17.20"], severity: [{ type: "CVSS_V3", score: low }] },
+          ],
+        },
+      ],
+    ])("ranks a match 4 with %s", (_, fields) => {
+      const result = run([A], [], { feed: malicious(fields) });
+      expect(result.rows).toEqual([MAL]);
+      expect(result.unknown).toEqual([]);
+      expect(result.complete).toBe(true);
+    });
+
+    it("ranks a GHSA record for the same package by its own severity", () => {
+      const ghsa = {
+        id: "GHSA-vrga-mal0-0000",
+        modified: "2026-10-01T00:00:00Z",
+        aliases: ["CVE-2099-0002"],
+        database_specific: { severity: "MODERATE" },
+        affected: [
+          {
+            package: pkg,
+            ranges: [{ type: "SEMVER", events: [{ introduced: "0" }, { fixed: "4.17.21" }] }],
+          },
+        ],
+      };
+      const both = readOsvFeed([
+        JSON.stringify(ghsa),
+        JSON.stringify({
+          id: "MAL-2099-0001",
+          modified: "2026-10-01T00:00:00Z",
+          aliases: ["GHSA-vrga-mal0-0000"],
+          affected: [{ package: pkg, versions: ["4.17.20"] }],
+        }),
+      ]);
+      const result = run([A, A_FIXED], [], { feed: both });
+      expect(result.rows).toEqual([
+        row(A, "GHSA-vrga-mal0-0000", {
+          aliases: ["CVE-2099-0002"],
+          severityRank: 2,
+          kev: true,
+          fixedIn: "4.17.21",
+          firstSeen: AT,
+        }),
+        { ...MAL, aliases: ["GHSA-vrga-mal0-0000"] },
+      ]);
+      expect(result.complete).toBe(true);
+    });
+
+    it("sets kev from the catalog as for any record", () => {
+      const listed = malicious({ aliases: ["CVE-2099-12345"] });
+      expect(run([A], [], { feed: listed }).rows).toEqual([
+        { ...MAL, aliases: ["CVE-2099-12345"], kev: true },
+      ]);
+    });
+
+    it("does not match a withdrawn MAL- record", () => {
+      const withdrawn = malicious({ withdrawn: "2026-10-02T00:00:00Z" });
+      const result = run([A], [row(A, "MAL-2099-0001")], { feed: withdrawn });
+      expect(result.rows).toEqual([row(A, "MAL-2099-0001", { status: "fixed" })]);
+    });
+
+    it("keeps a MAL- match it cannot decide unknown", () => {
+      const odd = malicious({
+        affected: [
+          {
+            package: pkg,
+            ranges: [{ type: "ECOSYSTEM", events: [{ introduced: "0" }, { fixed: "4.x" }] }],
+          },
+        ],
+      });
+      const result = run([A], [], { feed: odd });
+      expect(result.rows).toEqual([]);
+      expect(result.unknown).toEqual([
+        { packageId: A, vulnId: "MAL-2099-0001", reason: "version not decidable" },
+      ]);
+    });
+
+    it.each(["mal-2099-0001", "XMAL-2099-0001", "GHSA-MAL-0001"])(
+      "ranks %s by its severity fields",
+      (id) => {
+        const result = run([A], [], { feed: malicious({}, id) });
+        expect(result.unknown).toEqual([{ packageId: A, vulnId: id, reason: "severity unknown" }]);
+      },
+    );
+  });
+
   it("does not take an empty feed for the end of every advisory unless it is complete", () => {
     const empty = readOsvFeed([]);
     const open = row(A, "GHSA-vrga-0001-test1");
