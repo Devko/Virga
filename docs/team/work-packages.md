@@ -136,6 +136,22 @@ Round 8 status (2026-10-30): all packages are merged and verified. The cloud ses
 - The [round 7 review](../reviews/2026-10-30-review-round-7.md) found R7-01 (`NODE_DEBUG` prints the token) and R7-02 (`LD_LIBRARY_PATH` and the macOS `DYLD_*` paths load code into the deploy). The local integrator fixed both in `UNSAFE_VARS` (58e72bd), with `NODE_COMPILE_CACHE`; `processRunner` refuses them too.
 - The [round 8 verification](../reviews/2026-10-30-verification-round-8.md) (two read-only reviewers and a scoped security audit) confirms R6-01, R6-02, R6-03, R6-05, R6-06, R6-07, R7-01 and R7-02 as fixed and R6-04 as partly fixed. It found R8-01 to R8-03, all in the release-age gate, and eight leads that need a Cloudflare API shape or GitHub settings to settle (R8-04 to R8-11). Decision 0006 and the graph contract overstated the run-time guard; both are corrected.
 
+## Packages for phase 1, round 9
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `supply-chain-3` | R8-01 (config dependencies refused), R8-02 gate half (no `packageManager` outside the root `package.json`, no `.corepack.env`), R8-03 (an exception names its reason and source); every workflow under the release-age guard test; `deploy-dry-run` needs `check` | `scripts/check-release-age.ts`, its test, `CONTRIBUTING.md`, `.github/workflows/**` | Tests per finding; the real checkout passes the gate |
+| `deploy-3` | R8-02 build half (builds start from the root, `COREPACK_ENV_FILE=0`, app-level pins refused); R8-05 (the deploy compares the generated rules with compiler output); R8-04 (the guide's deploy example and workstation steps run the release-age check first) | `scripts/**` except the gate and its test, `docs/operator/**`, `packages/rules/src/cli.ts` and a Node-only generate module | A stale `rules.gen.ts` stops the deploy; a test over the guide's example; the dry run passes |
+| `rules-6` | Run-time guard hardening from the round 8 verification: a read is one statement on every adapter, settings always set back (with `defer_foreign_keys`), guard state a drop cannot keep where workerd offers one, unrewritten placeholders refused at compile time | `packages/graph/**`, `packages/rules/**` except the generate code, `apps/core/test/rules-runtime.test.ts`, `spikes/s03-do-sqlite/**`, decision 0006, the contract's "A rule run only reads" | Tests in workerd for the drop and re-create tail and the shadowing view; every rule still runs on both adapters |
+| `web-export` | Phase 1 backlog 13: OCSF export of findings, the tool audit trail for UI, API and MCP calls, the non-affiliation notice in the UI footer (D-01) | `apps/web/**`, `apps/core/**` except `test/rules-runtime.test.ts`, a new `docs/architecture/ocsf-export.md`, the audit table in `docs/architecture/data-model.md` | Tests per route and per channel; untrusted strings stay data |
+| `terraform-1` | Phase 1 backlog 14: the test range in Terraform (written, not applied); phase 4: fix snippets per rule ([decision 0007](../decisions/0007-later-phases-before-the-phase-1-gate.md)) | `infra/test-range/**`, `rules/*/fix/**` | A seeded case and a clean counterpart per phase 1 rule, listed in a manifest; snippets per rule; `rules:check` unchanged |
+| `docs-4` | Phase 1 backlog 15: threat model v1; phase 4: the non-affiliation notice in the README and docs (D-01), versioning policy, changelog | `README.md`, a new `docs/architecture/threat-model.md`, a new `docs/release/**`, a new `CHANGELOG.md` | Every trust boundary has its threats, controls with file references, and residual risks with review IDs |
+| `review-9` | Read-only review of the round 9 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
+
+Phase 2 logic (the `vulns` table, advisory matching, CycloneDX SBOMs, scanner output validation) starts as its own packages once `rules-6` is merged, because it changes `packages/graph`.
+
+Not in round 9: the leads R8-06 to R8-11 wait for an observed API shape (S-05 and a test account), and the hardening notes outside these packages stay listed in the round 8 verification.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
