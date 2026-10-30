@@ -231,18 +231,18 @@ Not in the query: the spec's "a matching WAF virtual patch lowers one level". Th
 
 ## Tool audit table
 
-The tool audit trail ([design spec](../concept/design-spec.md), "Audit trail") is not part of any account's graph. It lives in the account index, the core Worker's D1 database `virga-index`, as `tool_audit` ([migration 0003](../../apps/core/migrations/0003_tool_audit.sql)). The web Worker writes one row per JSON API request and per MCP tool call, through `Admin.recordToolCall`, after its answer is ready; a write that fails is logged by error name and does not change the answer. A request that the Access check refuses is not recorded, and neither are the SPA's static files.
+The tool audit trail ([design spec](../concept/design-spec.md), "Audit trail") is not part of any account's graph. It lives in the account index, the core Worker's D1 database `virga-index`, as `tool_audit` ([migration 0003](../../apps/core/migrations/0003_tool_audit.sql)). The web Worker writes one row per JSON API request and per MCP tool call that runs, through `Admin.recordToolCall`, after its answer is ready; a write that fails is logged by error name and does not change the answer. An MCP request runs at most 8 tool calls (`MAX_TOOL_CALLS` in `apps/web/src/mcp.ts`); when `tools/call` requests in it run no tool, it adds one `refused` row for the first of them, written after the rows of the tools that ran, so one request writes at most 9 rows. A request that the Access check refuses is not recorded, and neither are the SPA's static files. The Access check refuses every identity that this table cannot store (the `identity` rule below, `isIdentity` in `apps/web/src/auth.ts`), so no identity is served without being recorded.
 
 | Column | Value |
 | --- | --- |
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`; newest first is `ORDER BY id DESC`, and ids are never reused |
 | `at` | When core wrote the row, epoch milliseconds |
-| `identity` | The Access identity: a lowercase email, or a service token's client ID (`common_name`); 1 to 320 characters, no spaces, controls or bidi characters |
+| `identity` | The Access identity: a lowercase email, or a service token's client ID (`common_name`); 1 to 320 characters, with no space, C0 or C1 control, U+00A0, U+200B to U+200F, U+2028 to U+202E, U+2066 to U+2069 or U+FEFF. The web Worker refuses any other identity with 403 before serving it (R9-04) |
 | `identity_type` | `email` or `service_token` |
 | `channel` | `ui` (`Sec-Fetch-Site: same-origin`, the SPA), `api` (other API clients) or `mcp` (tool calls). Clients can set the header, so the channel describes the call; only the identity is verified |
-| `action` | The route template, such as `GET /api/accounts/{id}/findings`, `GET unmatched` for a path that matched no route, or the MCP tool name (`unknown_tool` for a name that is not one). Never the raw URL or query; at most 100 characters of `[A-Za-z0-9_ /{}.-]` |
+| `action` | The route template, such as `GET /api/accounts/{id}/findings`, `GET unmatched` for a path that matched no route, or the MCP tool name (`unknown_tool` for a name that is not one, or for an MCP body over 64 KiB, which is not read). Never the raw URL or query; at most 100 characters of `[A-Za-z0-9_ /{}.-]` |
 | `account_id` | The account ID from the path or the tool's `account_id` argument when it is 32 hex characters, else `NULL` |
-| `outcome` | The HTTP status for API requests; `ok`, `not_found`, `error` or `refused` for tool calls (`refused`: no tool ran, for example an unknown tool, invalid input or a foreign `Origin`); at most 32 characters of `[a-z0-9_]` |
+| `outcome` | The HTTP status for API requests; `ok`, `not_found`, `error` or `refused` for tool calls (`refused`: no tool ran, for example an unknown tool, invalid input, a foreign `Origin`, a call past the 8 per request, or a body over 64 KiB, answered with 413; one `refused` row per request names the first such call); at most 32 characters of `[a-z0-9_]` |
 
 No column holds a request body, a token, a header value or a string from a scanned account: `Admin.recordToolCall` checks every field against the shapes above and refuses the row otherwise, and `CHECK` constraints repeat the bounds.
 
