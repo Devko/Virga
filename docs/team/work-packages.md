@@ -159,6 +159,21 @@ Round 9 status (2026-10-30): all nine packages are merged, and the [round 9 veri
 
 Not in round 9: the leads R8-06 to R8-11 wait for an observed API shape (S-05 and a test account), and the hardening notes outside these packages stay listed in the round 8 verification.
 
+## Packages for phase 1, round 10
+
+From the [round 9 verification](../reviews/2026-10-30-verification-round-9.md), decisions [0008](../decisions/0008-malicious-package-advisories.md) and [0010](../decisions/0010-cyclonedx-schema-validation.md), and leftovers that need no Cloudflare account. Decision 0009 (the advisory mirror) waits for the spike that settles its download format.
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `supply-chain-4` | R9-01 (the gate reads the root `.npmrc` strictly and refuses it below the root, also the gate half of R9-02); H-1 (`continue-on-error` and `if: always()` in the workflow guard); L-1 (file names compared with full case folding); the strongest integrity the registry publishes; an allowlist for `package.json` `pnpm` fields; an exact `.nvmrc` | `scripts/check-release-age.ts`, its test, `CONTRIBUTING.md`, `.github/workflows/**`, `.npmrc`, `.nvmrc` | Tests per finding; the real checkout passes the gate |
+| `deploy-4` | R9-02 deploy half (an app `.npmrc` refused before and after the builds); L-2 (links of the workspace packages an app bundles); `migrations_dir` and `main` kept in the app; redaction of a token with a trailing newline and of the web settings before the builds; H-2 in the guide; test range: ignore saved plans and `*.tfvars.json`, tie the zone to the account | `scripts/**` except the gate and its test, `docs/operator/**`, `infra/**`, `.gitignore` | Tests per case; the dry run passes |
+| `broker-2` | TM-04: `ApiCaller` rechecks a stored token when its last check is older than 24 hours, before it serves a call; a token that fails is removed and the call fails as unreadable | `apps/broker/**`, `packages/cf-api/**` | Tests for a passed, a failed and an unreachable recheck; no write endpoint added |
+| `core-6` | TM-11 (a scan whose rules ended `error` is not `complete`); TM-09 (adding and removing one account serialized); audit purge throughput; a `vulns` rematch step with no feed configured (CF-001 stays `not evaluated` with a reason); guard baseline H-3 and decision 0006 wording H-4 | `apps/core/**`, `packages/graph/src/sql.ts` and its tests, `docs/decisions/0006-read-only-rule-runs.md` | Tests per case in workerd |
+| `web-audit-2` | R9-03 (a refused MCP call over 64 KiB is recorded); R9-04 (one identity check for web and core); audit rows per request capped; export escaping and OCSF `untruncated_size` | `apps/web/**`, `docs/architecture/ocsf-export.md` | Tests per finding |
+| `vulns-2` | R9-05 (npm names case-insensitive; the purl spelling in the data model); duplicate JSON keys rejected; decision 0008 (`MAL-` ranks critical); `package` nodes and `vulns` in the contract | `packages/vulns/**`, `docs/architecture/vulns.md`, `docs/architecture/data-model.md`, the package and vulns parts of `docs/architecture/graph-contract.md` | Tests per finding |
+| `scanner-io-2` | R9-06 (containers bounded, measured in workerd); the gitleaks secret guard on partial matches; invisible characters in kept strings; decision 0010 (vendored CycloneDX 1.6 schema, `@cfworker/json-schema` in tests) | `packages/scanner-io/**`, `docs/architecture/scanner-io.md`, the lockfile entries of the new dev dependency | Every SBOM the tests build validates against the schema |
+| `review-10` | Read-only review of the round 10 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
