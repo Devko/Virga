@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { TriggerResult } from "../src/rpc.ts";
 import {
   ACCOUNT,
   accounts,
@@ -21,6 +22,7 @@ import {
   NodeDetails,
   RemovalResult,
   SummaryView,
+  scanMessage,
 } from "./views.tsx";
 
 const TAGS = new Set(
@@ -147,6 +149,18 @@ describe("SPA views render account strings as text", () => {
       expect(html).toContain("Repeating the removal is safe");
       expect(html).not.toContain("cannot revoke");
     }
+  });
+
+  it("Start scan says why no scan began, also for an account being removed (R5-08)", () => {
+    type Reason = Extract<TriggerResult, { started: false }>["reason"];
+    const refused = (reason: Reason) => scanMessage({ started: false, reason, id: null });
+    expect(scanMessage({ started: true, id: "scan-x" })).toBe("Scan started.");
+    expect(refused("removing")).toBe("The account is being removed.");
+    expect(refused("running")).toBe("A scan is already running.");
+    expect(refused("exists")).toBe("A scan was started a moment ago.");
+    expect(refused("unknown_account")).toBe("The account is not onboarded.");
+    expect(refused("paused" as Reason)).toBe("The scan did not start.");
+    expect(refused("constructor" as Reason)).toBe("The scan did not start.");
   });
 
   it("caps deep and long JSON", () => {

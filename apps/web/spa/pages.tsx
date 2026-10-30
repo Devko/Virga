@@ -22,6 +22,7 @@ import {
   NodeDetails,
   RemovalResult,
   SummaryView,
+  scanMessage,
 } from "./views.tsx";
 
 // Cytoscape is most of the bundle and only this page needs it.
@@ -56,20 +57,12 @@ function ScanButton({ accountId, onStarted }: { accountId: string; onStarted: ()
       else setState({ busy: false, error: error instanceof Error ? error : new Error("failed") });
     }
   };
-  const message = (r: TriggerResult) =>
-    r.started
-      ? "Scan started."
-      : r.reason === "running"
-        ? "A scan is already running."
-        : r.reason === "exists"
-          ? "A scan was started a moment ago."
-          : "The account is not onboarded.";
   return (
     <div className="actions">
       <button type="button" onClick={start} disabled={state.busy}>
         {state.busy ? "Starting…" : "Start scan"}
       </button>
-      {state.result && <span role="status">{message(state.result)}</span>}
+      {state.result && <span role="status">{scanMessage(state.result)}</span>}
       {state.error && <Problem error={state.error} />}
     </div>
   );

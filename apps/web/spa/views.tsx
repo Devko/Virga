@@ -8,6 +8,7 @@ import type {
   RuleRunStatus,
   RuleRunView,
   ScanSummaryView,
+  TriggerResult,
 } from "../src/rpc.ts";
 import type { IntakeView, RemovalView } from "./api.ts";
 import { Link, paths } from "./router.tsx";
@@ -344,6 +345,19 @@ export function IntakeResult({ intake }: { intake: IntakeView }) {
       )}
     </div>
   );
+}
+
+const SCAN_REFUSED: Record<Extract<TriggerResult, { started: false }>["reason"], string> = {
+  unknown_account: "The account is not onboarded.",
+  removing: "The account is being removed.",
+  running: "A scan is already running.",
+  exists: "A scan was started a moment ago.",
+};
+
+/** The answer to Start scan; a reason this build does not know is not reported as one it does. */
+export function scanMessage(r: TriggerResult): string {
+  if (r.started) return "Scan started.";
+  return Object.hasOwn(SCAN_REFUSED, r.reason) ? SCAN_REFUSED[r.reason] : "The scan did not start.";
 }
 
 /** What a removal did, step by step; a step that is null failed or did not run. */
