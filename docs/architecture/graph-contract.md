@@ -420,6 +420,10 @@ What the scan records, and what rules and the evaluator may rely on:
 - **Sweep** runs only for `complete` classes. A sweep never moves the current scan. The write path refuses the sweep of a scan that is not current.
 - **Only the current scan writes.** Writes from a scan marked failed as stale, from one that ended, or from one a newer scan took over are refused (`StaleScanError`). That scan stops and ends `failed`, with the reason in `summary.detail`.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
+- **Inputs a rule reads** (reviews R4-04, R4-05). The rule compiler derives them from the tables the rule's program reads (`EXPLAIN`, root pages mapped through `sqlite_schema`):
+  - reading `exposure` needs `exposure` and `access` in `requires`, `vulns` needs `vulns`, and `insights` needs `insights`; a rule that lacks one fails the build;
+  - a rule's statement may not write: `OpenWrite`, `Clear`, schema or virtual table changes and write transactions are refused.
+- **A removed account is not scanned** (R4-03). A scan whose begin step runs after `Admin.removeAccount` is `skipped` and writes nothing. The emptied graph refuses to begin a scan until the account is added again.
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
 - **Undecided.** Where the exposure that decides a rule is `unknown`, or a value it needs could not be read (for example `plain_text_vars` entries with `looks_secret` `null` in CF-024), the rule returns an undecided row (`decided = 0`). An undecided row is not a hit and changes no finding, except that a suppression past its end returns to open (R3-07).
 - **`rule_runs`** records hits (decided rows), undecided rows, and for a failed run its error message (at most 500 characters).
