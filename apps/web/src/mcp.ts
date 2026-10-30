@@ -87,8 +87,12 @@ export function virgaMcpServer(env: Env): McpServer {
         "One account's latest scan: coverage per resource class, counts of nodes, findings and " +
         "exposure, and per rule its status, hits (decided rows), undecided rows and error. " +
         "Unknown is a result: a rule that is not_evaluated, or a row that is undecided, is not " +
-        "a pass. For an account with status `removing` the graph may already be deleted, so " +
-        "empty counts do not mean a clean account.",
+        "a pass. A class with coverage `partial`: some chunks were written before one failed, or " +
+        "every chunk was written but one left resources out, and then its detail reads " +
+        "`truncated (<count>): <reasons>`. A partial class is not swept and rules that require " +
+        "it are not_evaluated, so their findings neither open nor resolve. For an account with " +
+        "status `removing` the graph may already be deleted, so empty counts do not mean a " +
+        "clean account.",
       inputSchema: z.object({ account_id: accountId }),
       annotations: READ_ONLY,
     },
