@@ -215,6 +215,18 @@ const COLLECT: Record<Product, (ctx: CollectorContext, g: GraphBuilder) => Promi
   },
 };
 
+/**
+ * A read of one bucket's domains. `null` means only that the bucket was
+ * deleted after listing (404); a `null` result is kept apart from that.
+ */
+const readDomains = <T>(ctx: CollectorContext, path: string) =>
+  unlessGone(ctx.api.get<T | null>(path).then((result) => ({ result })));
+
+/**
+ * The r2.dev and custom domains of a bucket. A response that does not say
+ * which domains there are fails the chunk, so the class is not complete; it
+ * never reads as "no entry point" (review R6-06).
+ */
 async function collectBucketDomains(
   ctx: CollectorContext,
   bucket: string,
@@ -222,22 +234,36 @@ async function collectBucketDomains(
 ): Promise<void> {
   const base = `/accounts/${ctx.accountId}/r2/buckets/${bucket}/domains`;
   const bucketId = nodeId("r2_bucket", bucket);
-  const managed = await unlessGone(ctx.api.get<CfManagedDomain>(`${base}/managed`));
-  const managedHost = str(managed?.domain)?.toLowerCase();
+  const managedPath = `${base}/managed`;
+  const managed = await readDomains<CfManagedDomain>(ctx, managedPath);
   // The r2.dev domain always exists; it is an entry point unless disabled. A
   // flag that is not a boolean is unknown, not off (review R4-02).
-  const managedEnabled = bool(managed?.enabled);
-  if (managedHost && managedEnabled !== false) {
-    const id = g.node("r2_public_domain", managedHost, managedHost, {
+  const enabled = bool(managed?.result?.enabled);
+  if (managed && enabled !== false) {
+    const host = str(managed.result?.domain)?.toLowerCase();
+    if (!host) {
+      throw new CfApiError(
+        0,
+        managedPath,
+        [],
+        `expected a domain or enabled false on ${managedPath}`,
+      );
+    }
+    const id = g.node("r2_public_domain", host, host, {
       bucket,
       kind: "r2_dev",
-      enabled: managedEnabled,
+      enabled,
       zone_id: null,
     });
     g.edge("ROUTES_TO", id, bucketId);
   }
-  const custom = await unlessGone(ctx.api.get<CfCustomDomains>(`${base}/custom`));
-  for (const domain of custom?.domains ?? []) {
+  const customPath = `${base}/custom`;
+  const custom = await readDomains<CfCustomDomains>(ctx, customPath);
+  const domains = custom ? custom.result?.domains : [];
+  if (!Array.isArray(domains)) {
+    throw new CfApiError(0, customPath, [], `expected a domains array on ${customPath}`);
+  }
+  for (const domain of domains) {
     const host = str(domain.domain)?.toLowerCase();
     if (!host) continue;
     const id = g.node("r2_public_domain", host, host, {

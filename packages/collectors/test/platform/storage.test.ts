@@ -8,6 +8,7 @@ import {
   hyperdriveExample,
   kvExample,
   managedDisabled,
+  managedEnabled,
   storeExample,
 } from "./fixtures/storage.ts";
 import {
@@ -21,6 +22,7 @@ import {
   expectProps,
   node,
   nodeIds,
+  type Routes,
   run,
   without,
 } from "./helpers.ts";
@@ -38,6 +40,12 @@ const paged = (items: object[]) => (q: CfQuery) => {
     total_count: items.length,
   });
 };
+
+/** One r2_domains chunk for a bucket, with some routes replaced. */
+const bucketDomains = (bucket: string, replaced: Routes) =>
+  storageCollector.collect(context({ ...routes, ...replaced }).ctx, [
+    { kind: "r2_domains", bucket },
+  ]);
 
 describe("storage collector", () => {
   it("plans one chunk per product and R2 buckets in chunks of 25", async () => {
@@ -184,12 +192,68 @@ describe("storage collector", () => {
       });
       expect(edgeIds(output)).toContain(`ROUTES_TO:r2_public_domain:${host}->r2_bucket:logs`);
     }
-    // Disabled stays out, and a response without a domain names no entry point.
-    for (const result of [managedDisabled, { enabled: true }, null]) {
+    // Disabled stays out, with or without a domain.
+    for (const result of [
+      managedDisabled,
+      { bucketId: managedDisabled.bucketId, enabled: false },
+    ]) {
       const { output } = await run(storageCollector, { ...routes, [managed]: envelope(result) });
       expect(nodeIds(output, "r2_public_domain")).not.toContain(`r2_public_domain:${host}`);
       expect(edgeIds(output).filter((e) => e.endsWith("->r2_bucket:logs"))).toEqual([]);
     }
+  });
+
+  it("R6-06: fails the chunk when the r2.dev response names no domain and is not disabled", async () => {
+    // The review's scan 2: {enabled: true} without `domain` read as no entry
+    // point, so storage stayed complete and CF-021 resolved its finding.
+    const managed = `${base}/r2/buckets/logs/domains/managed`;
+    const { bucketId } = managedDisabled;
+    for (const result of [
+      { bucketId, enabled: true },
+      { bucketId },
+      { bucketId, enabled: "false" },
+      { bucketId, domain: "", enabled: true },
+      { bucketId, domain: 42, enabled: true },
+      {},
+      [],
+      null,
+    ]) {
+      const read = bucketDomains("logs", { [managed]: envelope(result) });
+      await expect(read, JSON.stringify(result)).rejects.toThrow(
+        `expected a domain or enabled false on ${managed}`,
+      );
+      await expect(read).rejects.not.toBeInstanceOf(NoPermissionError);
+    }
+    // Controls: a disabled domain is no entry point, and an enabled one is emitted.
+    for (const result of [{ bucketId, enabled: false }, managedDisabled]) {
+      expect(nodeIds(await bucketDomains("logs", { [managed]: envelope(result) }))).toEqual([]);
+    }
+    const enabled = { ...managedDisabled, enabled: true };
+    expect(nodeIds(await bucketDomains("logs", { [managed]: envelope(enabled) }))).toEqual([
+      `r2_public_domain:${managedDisabled.domain}`,
+    ]);
+  });
+
+  it("R6-06: fails the chunk when the custom domains response has no domains array", async () => {
+    // The review's other variant: {} without `domains` read as an empty list.
+    const custom = `${base}/r2/buckets/example-bucket/domains/custom`;
+    for (const result of [
+      {},
+      { domains: null },
+      { domains: {} },
+      { domains: "prefix.example-domain.two.com" },
+      [],
+      null,
+    ]) {
+      const read = bucketDomains("example-bucket", { [custom]: envelope(result) });
+      await expect(read, JSON.stringify(result)).rejects.toThrow(
+        `expected a domains array on ${custom}`,
+      );
+      await expect(read).rejects.not.toBeInstanceOf(NoPermissionError);
+    }
+    // Control: an empty list is no custom domain; the r2.dev domain stays.
+    const out = await bucketDomains("example-bucket", { [custom]: envelope({ domains: [] }) });
+    expect(nodeIds(out)).toEqual([`r2_public_domain:${managedEnabled.domain}`]);
   });
 
   it("follows pagination of every listing", async () => {
