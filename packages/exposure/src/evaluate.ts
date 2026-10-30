@@ -310,14 +310,17 @@ function couldApply(raw: unknown, entry: Entry, refs: Map<string, string>): bool
 
 function overrideVerdict(app: App, overrides: Override[], label: PathSet): Verdict {
   const applicable = overrides.filter((o) => containsPath(hull(o.path), label));
+  const verdict = app.verdict();
   if (applicable.some((o) => o.makesPublic && o.path.kind !== "opaque")) {
+    // Access skips these paths, but a token the app gives without a login on
+    // its other paths is valid here too (review R4-01).
     return {
       decision: "public",
       reasonId: app.node.id,
       reason: "a destination override makes this path public",
+      token: verdict.token,
     };
   }
-  const verdict = app.verdict();
   if (applicable.length === 0 || verdict.decision === "public") return verdict;
   return {
     decision: "unknown",

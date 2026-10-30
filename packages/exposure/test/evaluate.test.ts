@@ -663,6 +663,31 @@ const cases: Case[] = [
     ],
   },
   {
+    name: "R4-01: a public override path keeps the token its app gives without a login on a tunnel hostname that requires one",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("web.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("ops.example.com", "", "http://localhost:8080", required);
+      g.app(
+        "web",
+        [host("web.example.com", "", [publicPath("/health")])],
+        [g.policy("office", "bypass", [OFFICE]), g.policy("sa", "non_identity", [ANY_V4])],
+      );
+      g.app(
+        "ops",
+        [host("ops.example.com", "", [publicPath("/health")])],
+        [g.policy("staff", "allow", [EMAIL]), g.policy("svc", "non_identity", [EVERYONE])],
+      );
+    },
+    expect: [
+      // Access skips /health, but a token the app gives on its other paths passes cloudflared.
+      [TH("ops.example.com"), "/", "unknown", 0, POLICY("svc")],
+      [TH("ops.example.com"), "/health", "unknown", 0, POLICY("svc")],
+      [TH("web.example.com"), "/", "public", 2, POLICY("sa")],
+      [TH("web.example.com"), "/health", "public", 2, POLICY("sa")],
+    ],
+  },
+  {
     name: "R3-02: a catch-all origin behind a path-restricted hostname is public where the hostname rule requires a token",
     build: (g) => {
       g.tunnelHostname("app.example.com", "^/admin", "http://localhost:9000", {
