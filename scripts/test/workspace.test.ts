@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -183,6 +185,194 @@ describe("recordWorkspace (L-2)", () => {
   });
 });
 
+/** A tsconfig.json as the repository's apps and packages have it, comment and trailing comma included. */
+const EXTENDS_BASE = `{
+  // As in the repository.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": [] },
+}
+`;
+
+/** compilerOptions that map @virga/rules to another module, as the review's build wrote them. */
+const mapping = (to: string) =>
+  JSON.stringify({
+    extends: "../../tsconfig.base.json",
+    compilerOptions: { baseUrl: ".", paths: { "@virga/rules": [to] } },
+  });
+
+const MAPPING_REASON =
+  "Wrangler's bundler (esbuild) resolves imports through paths and baseUrl before node_modules, and TypeScript through rootDirs too, so a mapping could make apps/core bundle another module in place of a workspace package, past the checks of the workspace links and the generated rules. Virga sets none of them; remove it";
+
+const CHANGED_REASON =
+  "esbuild takes paths and baseUrl from tsconfig.json and jsconfig.json and the files they extend, and exports, main, imports and browser from package.json, so a change there can make Wrangler bundle another module than the one the deploy checked. Unless you changed them yourself, find what wrote them, starting with the build scripts, and deploy from a fresh clone (operator guide, Troubleshooting)";
+
+describe("recordWorkspace and module resolution (R10-04)", () => {
+  let root = "";
+  const core = (...parts: string[]) => join(root, "apps", "core", ...parts);
+  const packages = (...parts: string[]) => join(root, "packages", ...parts);
+  /** The repository's layout: a base config that every app and package extends. */
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "virga-resolution-")));
+    put(join(root, "package.json"), '{ "name": "virga", "private": true }');
+    put(join(root, "tsconfig.base.json"), '{ "compilerOptions": { "strict": true } }');
+    for (const name of ["graph", "rules"]) {
+      workspacePackage(root, name);
+      put(packages(name, "tsconfig.json"), EXTENDS_BASE);
+    }
+    put(
+      packages("rules", "package.json"),
+      JSON.stringify({ name: "@virga/rules", exports: { ".": "./src/index.ts" } }),
+    );
+    put(core("package.json"), '{ "name": "@virga/core" }');
+    put(core("tsconfig.json"), EXTENDS_BASE);
+    put(core("test", "tsconfig.json"), '{ "extends": "../tsconfig.json" }');
+    put(core("wrangler.jsonc"), `{ "name": "virga-core" }`);
+    put(core("src", "index.ts"), "export default {};\n");
+    for (const name of ["rules", "graph"]) pnpmLink(core(), name, packages(name));
+    pnpmLink(packages("rules"), "graph", packages("graph"));
+    put(join(root, "outside", "rules", "index.ts"), 'export const RULES = "planted";\n');
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const problem = () => {
+    try {
+      recordWorkspace(root, "core");
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkspaceError);
+      return (error as Error).message;
+    }
+  };
+  /** The recorded files inside the checkout, by relative path. */
+  const recorded = (record: ReturnType<typeof recordWorkspace>) =>
+    [...record.resolution.keys()]
+      .map((path) => relative(root, path))
+      .filter((path) => !path.startsWith(".."))
+      .sort();
+
+  it("R10-04: records the tsconfig chain and the package.json files esbuild reads for an app", () => {
+    const record = recordWorkspace(root, "core");
+    expect(recorded(record)).toEqual([
+      "apps/core/package.json",
+      "apps/core/test/tsconfig.json",
+      "apps/core/tsconfig.json",
+      "package.json",
+      "packages/graph/package.json",
+      "packages/graph/tsconfig.json",
+      "packages/rules/package.json",
+      "packages/rules/tsconfig.json",
+      "tsconfig.base.json",
+    ]);
+    const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+    for (const path of [core("tsconfig.json"), join(root, "tsconfig.base.json")]) {
+      expect(record.resolution.get(path), path).toBe(sha256(path));
+    }
+    expect(workspaceChanges(record)).toBeNull();
+  });
+
+  it("R10-04: refuses paths for @virga/rules that a build wrote into apps/core/tsconfig.json or tsconfig.base.json", () => {
+    const before = recordWorkspace(root, "core");
+    writeFileSync(core("tsconfig.json"), mapping("../../outside/rules/index.ts"));
+    const app = `apps/core/tsconfig.json sets compilerOptions.paths and compilerOptions.baseUrl: ${MAPPING_REASON}`;
+    expect(workspaceChanges(before)).toBe(app);
+    expect(problem()).toBe(app);
+    expect(() => checkAppDir(root, "core")).toThrow(app);
+    writeFileSync(core("tsconfig.json"), EXTENDS_BASE);
+    expect(workspaceChanges(before)).toBeNull();
+
+    writeFileSync(
+      join(root, "tsconfig.base.json"),
+      JSON.stringify({
+        compilerOptions: { paths: { "@virga/rules": ["./outside/rules/index.ts"] } },
+      }),
+    );
+    expect(workspaceChanges(before)).toBe(
+      `tsconfig.base.json, which apps/core/tsconfig.json extends, sets compilerOptions.paths: ${MAPPING_REASON}`,
+    );
+  });
+
+  it("R10-04: refuses paths, baseUrl and rootDirs wherever esbuild or TypeScript would read them", () => {
+    // A workspace package's own config.
+    writeFileSync(
+      packages("rules", "tsconfig.json"),
+      '{ "compilerOptions": { "rootDirs": ["src"] } }',
+    );
+    expect(problem()).toBe(
+      `packages/rules/tsconfig.json sets compilerOptions.rootDirs: ${MAPPING_REASON}`,
+    );
+    writeFileSync(packages("rules", "tsconfig.json"), EXTENDS_BASE);
+    // A config nearer to the sources, which esbuild takes in place of the app's.
+    for (const name of ["tsconfig.json", "jsconfig.json", "TSConfig.json"]) {
+      put(core("src", name), '{ "compilerOptions": { "baseUrl": "." } }');
+      expect(problem(), name).toBe(
+        `apps/core/src/${name} sets compilerOptions.baseUrl: ${MAPPING_REASON}`,
+      );
+      rmSync(core("src", name));
+    }
+    // A config the app's extends through a second file.
+    writeFileSync(core("tsconfig.json"), '{ "extends": ["../../tsconfig.base.json", "./more"] }');
+    put(core("more.json"), '{ "extends": "./paths.json" }');
+    put(core("paths.json"), mapping("../../outside/rules/index.ts"));
+    expect(problem()).toBe(
+      `apps/core/paths.json, which apps/core/more.json extends, sets compilerOptions.paths and compilerOptions.baseUrl: ${MAPPING_REASON}`,
+    );
+    // Without the app's own config, esbuild takes the nearest one above it.
+    rmSync(core("tsconfig.json"));
+    rmSync(core("test"), { recursive: true });
+    put(
+      join(root, "apps", "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { paths: { "@virga/rules": ["../outside/rules"] } } }),
+    );
+    expect(problem()).toBe(`apps/tsconfig.json sets compilerOptions.paths: ${MAPPING_REASON}`);
+  });
+
+  it("R10-04: refuses an extends esbuild would take from node_modules, one that leads nowhere, and a config that is not JSON with comments", () => {
+    writeFileSync(core("tsconfig.json"), '{ "extends": "@tsconfig/strictest/tsconfig.json" }');
+    expect(problem()).toBe(
+      'apps/core/tsconfig.json extends "@tsconfig/strictest/tsconfig.json", a package: esbuild and TypeScript would look for it in node_modules, where the deploy does not check it. Extend a file by its path, starting with ./ or ../, as Virga\'s tsconfig files extend ../../tsconfig.base.json',
+    );
+    writeFileSync(core("tsconfig.json"), '{ "extends": "../../missing" }');
+    expect(problem()).toBe(
+      'apps/core/tsconfig.json extends "../../missing", which is not a file (missing, also with .json). Fix or remove the extends',
+    );
+    writeFileSync(core("tsconfig.json"), '{ "extends": 1 }');
+    expect(problem()).toBe(
+      "apps/core/tsconfig.json: extends is neither a path nor a list of paths. Fix it",
+    );
+    writeFileSync(core("tsconfig.json"), '{ "compilerOptions": { "paths": {}, "paths": {} } }');
+    expect(problem()).toMatch(
+      /^apps\/core\/tsconfig\.json cannot be read as JSON with comments: duplicate key "paths" at line 1, column \d+\. Wrangler's bundler \(esbuild\) reads it to resolve imports, so the deploy checks it too\. Fix it$/,
+    );
+    // Without .json, as esbuild and TypeScript take it; a file created at the name itself would replace it.
+    writeFileSync(core("tsconfig.json"), '{ "extends": "../../tsconfig.base" }');
+    const record = recordWorkspace(root, "core");
+    expect(record.resolution.get(join(root, "tsconfig.base"))).toBe("absent");
+    put(join(root, "tsconfig.base"), "{}");
+    expect(workspaceChanges(record)).toBe(
+      `the files that tell Wrangler's bundler how to resolve the modules of apps/core changed after the deploy recorded them before the builds: tsconfig.base (added). ${CHANGED_REASON}`,
+    );
+  });
+
+  it("R10-04: names a tsconfig or package.json that was changed, added or removed after the record", () => {
+    const before = recordWorkspace(root, "core");
+    // The review's second case: exports that point the bundle at another file.
+    writeFileSync(
+      packages("rules", "package.json"),
+      JSON.stringify({ name: "@virga/rules", exports: { ".": "./src/planted.ts" } }),
+    );
+    expect(workspaceChanges(before)).toBe(
+      `the files that tell Wrangler's bundler how to resolve the modules of apps/core changed after the deploy recorded them before the builds: packages/rules/package.json (changed). ${CHANGED_REASON}`,
+    );
+    // A config added next to the sources, one removed, and a browser map in a package.json above.
+    put(core("src", "jsconfig.json"), "{}");
+    rmSync(packages("graph", "tsconfig.json"));
+    put(join(root, "apps", "package.json"), '{ "browser": { "./x.ts": "./y.ts" } }');
+    expect(workspaceChanges(before)).toBe(
+      `the files that tell Wrangler's bundler how to resolve the modules of apps/core changed after the deploy recorded them before the builds: apps/core/src/jsconfig.json (added), apps/package.json (added), packages/graph/tsconfig.json (removed), packages/rules/package.json (changed). ${CHANGED_REASON}`,
+    );
+  });
+});
+
 describe("the workspace links of the repository (L-2)", () => {
   it("L-2: the real tree passes, and core bundles packages/rules", () => {
     for (const app of ["broker", "core", "web"]) {
@@ -203,5 +393,39 @@ describe("the workspace links of the repository (L-2)", () => {
     expect([...recordWorkspace(REPO_ROOT, "broker").links.keys()]).toEqual([
       join(REPO_ROOT, "apps", "broker", "node_modules", "@virga", "cf-api"),
     ]);
+  });
+
+  it("R10-04: the real tree passes, and each app's record holds its tsconfig chain and the package.json files esbuild reads", () => {
+    /** The recorded files inside the checkout, by relative path. */
+    const recorded = (app: string) =>
+      new Set(
+        [...recordWorkspace(REPO_ROOT, app).resolution.keys()]
+          .map((path) => relative(REPO_ROOT, path))
+          .filter((path) => !path.startsWith("..")),
+      );
+    const chain = (app: string) => [
+      "package.json",
+      "tsconfig.base.json",
+      `apps/${app}/package.json`,
+      `apps/${app}/tsconfig.json`,
+      `apps/${app}/test/tsconfig.json`,
+    ];
+    const bundled = (name: string) => [
+      `packages/${name}/package.json`,
+      `packages/${name}/tsconfig.json`,
+    ];
+    const core = recorded("core");
+    for (const path of [
+      ...chain("core"),
+      ...["cf-api", "collectors", "exposure", "graph", "rules", "vulns"].flatMap(bundled),
+    ]) {
+      expect(core.has(path), path).toBe(true);
+    }
+    expect([...recorded("broker")].sort()).toEqual(
+      [...chain("broker"), ...bundled("cf-api")].sort(),
+    );
+    expect([...recorded("web")].sort()).toEqual(
+      [...chain("web"), "apps/web/spa/tsconfig.json"].sort(),
+    );
   });
 });

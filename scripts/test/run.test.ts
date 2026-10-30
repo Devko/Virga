@@ -816,4 +816,40 @@ describe("processRunner and what the builds can change (R6-01)", () => {
     );
     expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
   });
+
+  it("R10-04: refuses to run Wrangler once a tsconfig or package.json that decides how its app's imports resolve has changed", async () => {
+    const pkg = join(root, "packages", "rules", "package.json");
+    const exports = (to: string) => JSON.stringify({ name: "@virga/rules", exports: { ".": to } });
+    put(pkg, exports("./src/index.ts"));
+    put(join(root, "packages", "rules", "src", "index.ts"), "export {};\n");
+    put(join(root, "tsconfig.base.json"), "{}");
+    put(join(app, "tsconfig.json"), '{ "extends": "../../tsconfig.base.json" }');
+    workspaceLink(root, app, "rules");
+    const workspaces = new Map([[app, recordWorkspace(root, "web")]]);
+    const wranglers = recordWranglers([app]);
+    const runResolved = () =>
+      processRunner({ credentials: "token", secrets: () => [], wranglers, workspaces })({
+        bin: "wrangler",
+        cwd: app,
+        config,
+        configSha256: sha256(CONFIG_TEXT),
+        args: ["deploy"],
+        capture: true,
+      });
+    await runResolved();
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+    const changed = (paths: string) =>
+      `the files that tell Wrangler's bundler how to resolve the modules of apps/web changed after the deploy recorded them before the builds: ${paths}. esbuild takes paths and baseUrl`;
+    writeFileSync(pkg, exports("./src/planted.ts"));
+    await expect(runResolved()).rejects.toThrow(changed("packages/rules/package.json (changed)"));
+    writeFileSync(pkg, exports("./src/index.ts"));
+    put(join(app, "src", "tsconfig.json"), "{}");
+    await expect(runResolved()).rejects.toThrow(changed("apps/web/src/tsconfig.json (added)"));
+    rmSync(join(app, "src", "tsconfig.json"));
+    writeFileSync(join(root, "tsconfig.base.json"), '{ "compilerOptions": { "baseUrl": "." } }');
+    await expect(runResolved()).rejects.toThrow(
+      "tsconfig.base.json, which apps/web/tsconfig.json extends, sets compilerOptions.baseUrl",
+    );
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+  });
 });

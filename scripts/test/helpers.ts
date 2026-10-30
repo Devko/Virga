@@ -25,17 +25,18 @@ export function workspaceLink(root: string, from: string, name: string) {
 
 /**
  * What scripts/deploy.ts needs of a checkout under `root`, without apps:
- * the script and its lib, a package.json, and the rule compiler with the
- * committed rules and generated modules (R8-05). The compiler's workspace
- * packages are copies, linked as pnpm links them (L-2); `yaml` is the
+ * the script and its lib, a package.json, the base tsconfig, and the rule
+ * compiler with the committed rules and generated modules (R8-05). The
+ * compiler's workspace packages are copies with their package.json and
+ * tsconfig.json (R10-04), linked as pnpm links them (L-2); `yaml` is the
  * repository's.
  */
 export function deployCheckout(root: string) {
-  for (const path of ["scripts/deploy.ts", "scripts/lib", "rules"]) {
+  for (const path of ["scripts/deploy.ts", "scripts/lib", "rules", "tsconfig.base.json"]) {
     cpSync(join(REPO_ROOT, path), join(root, path), { recursive: true });
   }
   for (const [name, links] of Object.entries(COMPILER_PACKAGES)) {
-    for (const file of ["src", "package.json"]) {
+    for (const file of ["src", "package.json", "tsconfig.json"]) {
       cpSync(join(REPO_ROOT, "packages", name, file), join(root, "packages", name, file), {
         recursive: true,
       });

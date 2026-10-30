@@ -209,7 +209,7 @@ describe("deploy.ts", () => {
  * or the generated rules from the broker's call, as a process left running by
  * a build could.
  */
-const LOGGING_BIN = String.raw`const { appendFileSync, existsSync, rmSync, symlinkSync } = require("node:fs");
+const LOGGING_BIN = String.raw`const { appendFileSync, existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } = require("node:fs");
 const { basename, join, resolve } = require("node:path");
 const root = resolve(__dirname, "../../../../../..");
 const app = basename(process.cwd());
@@ -228,6 +228,10 @@ if (app === "broker" && existsSync(join(root, "retarget-later"))) {
   const link = join(root, "apps", "core", "node_modules", "@virga", "rules");
   rmSync(link);
   symlinkSync(join(root, "packages", "graph"), link);
+}
+if (app === "broker" && existsSync(join(root, "exports-later"))) {
+  const pkg = join(root, "packages", "rules", "package.json");
+  writeFileSync(pkg, readFileSync(pkg, "utf8").replace('"./src/index.ts"', '"./src/planted.ts"'));
 }
 `;
 
@@ -262,8 +266,9 @@ describe("deploy.ts and the builds (R6-01)", () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), "virga-deploy-build-")));
     deployCheckout(root);
     for (const name of ["broker", "core", "web"]) {
-      put(join(app(name), "wrangler.jsonc"), committed(name, "wrangler.jsonc"));
-      put(join(app(name), "src", "index.ts"), committed(name, join("src", "index.ts")));
+      for (const file of ["wrangler.jsonc", "tsconfig.json", join("src", "index.ts")]) {
+        put(join(app(name), file), committed(name, file));
+      }
     }
     put(join(app("web"), "package.json"), '{ "scripts": { "build": "node build.mjs" } }');
     put(join(app("web"), "build.mjs"), BUILD);
@@ -509,6 +514,79 @@ symlinkSync("../../../../planted/rules", "../core/node_modules/@virga/rules");
       "error: apps/core/node_modules/@virga/rules is missing; virga-core bundles the generated rules through it. Run pnpm install first",
     );
     expect(calls()).toBe("");
+  });
+
+  /** A build that writes `text` to `file`, relative to the repository root. */
+  const writes = (file: string, text: string) =>
+    build(`import { writeFileSync as write } from "node:fs";
+write(${JSON.stringify(`../../${file}`)}, ${JSON.stringify(text)});
+`);
+  const planted = 'export const RULES = "planted";\n';
+
+  it("R10-04: a build that maps @virga/rules with tsconfig paths stops the deploy before any Wrangler call", () => {
+    put(join(root, "planted", "rules.ts"), planted);
+    const cases = [
+      [
+        "apps/core/tsconfig.json",
+        { baseUrl: ".", paths: { "@virga/rules": ["../../planted/rules.ts"] } },
+        "error: apps/core/tsconfig.json sets compilerOptions.paths and compilerOptions.baseUrl: Wrangler's bundler (esbuild) resolves imports through paths and baseUrl before node_modules",
+      ],
+      [
+        "tsconfig.base.json",
+        { paths: { "@virga/rules": ["./planted/rules.ts"] } },
+        // Every app's config extends it; broker's is checked first.
+        "error: tsconfig.base.json, which apps/broker/tsconfig.json extends, sets compilerOptions.paths: Wrangler's bundler (esbuild)",
+      ],
+    ] as const;
+    for (const [file, compilerOptions, refusal] of cases) {
+      const committedText = readFileSync(join(root, file), "utf8");
+      const extendsBase =
+        file === "tsconfig.base.json" ? {} : { extends: "../../tsconfig.base.json" };
+      writes(file, JSON.stringify({ ...extendsBase, compilerOptions }));
+      for (const args of [[], ["--dry-run"]]) {
+        const result = deploy(args, REAL);
+        expect(result.stdout, file).toContain("Building virga-web");
+        expect(result.status, file).toBe(1);
+        expect(result.stderr, file).toContain(refusal);
+        expect(calls(), file).toBe("");
+        expect(result.stdout + result.stderr).not.toContain(TOKEN);
+        writeFileSync(join(root, file), committedText);
+      }
+    }
+  });
+
+  it("R10-04: a build that points exports of packages/rules/package.json elsewhere stops the deploy before any Wrangler call", () => {
+    const pkg = join(root, "packages", "rules", "package.json");
+    const committedText = readFileSync(pkg, "utf8");
+    put(join(root, "packages", "rules", "src", "planted.ts"), planted);
+    writes(
+      "packages/rules/package.json",
+      committedText.replace('"./src/index.ts"', '"./src/planted.ts"'),
+    );
+    for (const args of [[], ["--dry-run"]]) {
+      const result = deploy(args, REAL);
+      expect(result.stdout).toContain("Building virga-web");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "error: the files that tell Wrangler's bundler how to resolve the modules of apps/core changed after the deploy recorded them before the builds: packages/rules/package.json (changed).",
+      );
+      expect(calls()).toBe("");
+      writeFileSync(pkg, committedText);
+    }
+  });
+
+  it("R10-04: refuses a package.json changed after the checks, before the Wrangler call that bundles through it", () => {
+    writeFileSync(join(root, "exports-later"), "");
+    const result = deploy(["--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: the files that tell Wrangler's bundler how to resolve the modules of apps/core changed after the deploy recorded them before the builds: packages/rules/package.json (changed).",
+    );
+    expect(
+      calls()
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(["broker", ""]);
   });
 
   const UNSAFE = `{ "bindings": [{ "name": "API", "type": "service", "service": "virga-broker", "entrypoint": "ApiCaller" }] }`;
