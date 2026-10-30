@@ -48,8 +48,10 @@ const VARIABLE = new Set(["$", "@", "#", ":"]);
  *
  * It skips '...', "..." and `...` (a doubled quote escapes), [...] (ends at
  * the first ]), -- comments to a newline and block comments. Anything after
- * the first `;` other than SQLite's whitespace and comments is a tail. Where
- * its reading could differ from SQLite's, it refuses:
+ * the first `;` other than SQLite's whitespace and comments is a tail.
+ * Durable Object SQL itself refuses a comment after the last `;` ("did not
+ * contain a statement"), which fails closed (H-4). Where its reading could
+ * differ from SQLite's, it refuses:
  * - `$`, `@`, `#` and `:` outside quotes and comments. SQLite reads
  *   `$name(...)` up to the next whitespace or `)`, quotes included. The
  *   compiler turns every `:name` into `?`, so a compiled rule holds none.

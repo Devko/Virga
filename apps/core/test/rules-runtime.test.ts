@@ -444,6 +444,24 @@ describe("Durable Object SQL facts behind decision 0006", () => {
     });
   });
 
+  it("H-4: runs whitespace after the last `;`, but refuses a comment there, which fails a rule closed", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const { sql } = durable.storage;
+      expect(sql.exec("SELECT 1 AS one; \t\n").toArray()).toEqual([{ one: 1 }]);
+      for (const query of ["SELECT 1 AS one; -- c", "SELECT 1 AS one; /* c */", "SELECT 1;;"]) {
+        expect(() => sql.exec(query), query).toThrow(/did not contain a statement/);
+      }
+      // The run-time check lets the comment through; workerd refuses the query.
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const before = state(db);
+      expect(() => db.queryReadOnly(`${NO_HIT}; -- c`)).toThrow(/did not contain a statement/);
+      const [run] = evaluateRules(db, [rule(`${NO_HIT}; -- c`)], "s1", 2000);
+      expect(run).toMatchObject({ status: "error", opened: 0, resolved: 0 });
+      expect(state(db)).toEqual(before);
+    });
+  });
+
   it("refuses query_only, and keeps a changed setting through a rollback", async () => {
     await runInDurableObject(freshGraph(), (_graph: AccountGraph, durable) => {
       const { sql } = durable.storage;
