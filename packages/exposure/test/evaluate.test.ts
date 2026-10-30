@@ -620,6 +620,49 @@ const cases: Case[] = [
     expect: [tunnelRow("ssh", "access", 1, TH("ssh.example.com"))],
   },
   {
+    name: "R4-01: of Access applications tied on a destination, the one whose token exposes most decides a tunnel hostname that requires a token",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", required);
+      g.tunnelHostname("db.example.com", "", "tcp://localhost:5432", required);
+      g.tunnelHostname("app.example.org", "", "http://localhost:8080", required);
+      // Same destination: a1 may issue the token, a2 does.
+      g.app(
+        "a1",
+        [host("ssh.example.com")],
+        [g.policy("a1-office", "bypass", [OFFICE]), g.policy("a1-svc", "non_identity", [EVERYONE])],
+      );
+      g.app(
+        "a2",
+        [host("ssh.example.com")],
+        [g.policy("a2-office", "bypass", [OFFICE]), g.policy("a2-svc", "non_identity", [ANY_V4])],
+      );
+      // Same destination: b1 gives no token, b2 may.
+      bypassApp(g, "b1", [host("db.example.com")]);
+      g.app(
+        "b2",
+        [host("db.example.com")],
+        [g.policy("b2-office", "bypass", [OFFICE]), g.policy("b2-svc", "non_identity", [EVERYONE])],
+      );
+      // On /admin, host precedence selects `exact` and path precedence `wild`.
+      bypassApp(g, "exact", [host("app.example.org")]);
+      g.app(
+        "wild",
+        [host("*.example.org", "/admin")],
+        [
+          g.policy("wild-office", "bypass", [OFFICE]),
+          g.policy("wild-svc", "non_identity", [ANY_V4]),
+        ],
+      );
+    },
+    expect: [
+      [TH("app.example.org"), "/", "access", 1, TH("app.example.org")],
+      [TH("app.example.org"), "/admin", "public", 2, POLICY("wild-svc")],
+      [TH("db.example.com"), "/", "unknown", 0, POLICY("b2-svc")],
+      [TH("ssh.example.com"), "/", "public", 2, POLICY("a2-svc")],
+    ],
+  },
+  {
     name: "R3-02: a catch-all origin behind a path-restricted hostname is public where the hostname rule requires a token",
     build: (g) => {
       g.tunnelHostname("app.example.com", "^/admin", "http://localhost:9000", {

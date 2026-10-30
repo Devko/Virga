@@ -329,11 +329,14 @@ function overrideVerdict(app: App, overrides: Override[], label: PathSet): Verdi
 }
 
 /**
- * The verdict that speaks for candidates whose decisions agree. One that
- * comes with an Access token does, so an origin check cannot hide it.
+ * The verdict that speaks for candidates whose decisions agree. Which of them
+ * applies is not known, so the one whose Access token exposes most speaks,
+ * and an origin that checks the token cannot hide it (review R4-01).
  */
 const agreed = (verdicts: Verdict[]): Verdict | undefined =>
-  verdicts.find((v) => v.token) ?? verdicts[0];
+  verdicts.find((v) => v.token?.decision === "public") ??
+  verdicts.find((v) => v.token) ??
+  verdicts[0];
 
 function ranked<T>(items: T[], primary: (t: T) => number, secondary: (t: T) => number): T[] {
   const sorted = [...items].sort((a, b) => primary(b) - primary(a) || secondary(b) - secondary(a));
