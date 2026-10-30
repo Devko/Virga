@@ -26,8 +26,82 @@ export interface SqlRunner {
   transaction<T>(fn: () => T): T;
 }
 
-/** A read-only query changed the database or the connection; nothing of it was kept. */
+/**
+ * A read-only query was refused before it ran, or changed the database or
+ * the connection; nothing of it was kept.
+ */
 export class ReadOnlyError extends Error {}
+
+/** SQLite's whitespace: its tokenizer skips nothing else, not even a vertical tab. */
+const BLANK = new Set([" ", "\t", "\n", "\f", "\r"]);
+
+/** Signs that start a named variable in SQLite. */
+const VARIABLE = new Set(["$", "@", "#", ":"]);
+
+/**
+ * Refuses, with {@link ReadOnlyError}, a query that SQLite could read as more
+ * than one statement. Durable Object SQL runs every statement of a query, so
+ * a read is checked before anything runs, independently of the rule
+ * compiler (R6-02, round 9).
+ *
+ * It skips '...', "..." and `...` (a doubled quote escapes), [...] (ends at
+ * the first ]), -- comments to a newline and block comments. Anything after
+ * the first `;` other than SQLite's whitespace and comments is a tail. Where
+ * its reading could differ from SQLite's, it refuses:
+ * - `$`, `@`, `#` and `:` outside quotes and comments. SQLite reads
+ *   `$name(...)` up to the next whitespace or `)`, quotes included. The
+ *   compiler turns every `:name` into `?`, so a compiled rule holds none.
+ * - A NUL anywhere, where SQLite stops reading.
+ * - An unterminated quote, identifier or comment.
+ */
+export function assertOneStatement(sql: string): void {
+  const refuse = (what: string): never => {
+    throw new ReadOnlyError(`a read-only query holds ${what}; it was not run`);
+  };
+  if (sql.includes("\0")) refuse("a NUL");
+  let ended = false;
+  let i = 0;
+  while (i < sql.length) {
+    const c = sql[i] as string;
+    let end = -1;
+    if (c === "-" && sql[i + 1] === "-") {
+      const newline = sql.indexOf("\n", i + 2);
+      end = newline === -1 ? sql.length : newline;
+    } else if (c === "/" && sql[i + 1] === "*") {
+      const close = sql.indexOf("*/", i + 2);
+      if (close === -1) refuse("an unterminated comment");
+      end = close + 2;
+    } else if (ended && !BLANK.has(c)) {
+      refuse("text after its first statement");
+    } else if (c === "'" || c === '"' || c === "`") {
+      end = quoteEnd(sql, i, c);
+      if (end === -1) refuse(`an unterminated ${c} quote`);
+    } else if (c === "[") {
+      const close = sql.indexOf("]", i + 1);
+      if (close === -1) refuse("an unterminated [ identifier");
+      end = close + 1;
+    } else if (VARIABLE.has(c)) {
+      refuse(`a named variable (${c})`);
+    } else {
+      if (c === ";") ended = true;
+      end = i + 1;
+    }
+    i = end;
+  }
+}
+
+/** The index after the quote that closes the one at `start`, or -1. */
+function quoteEnd(sql: string, start: number, quote: string): number {
+  let i = start + 1;
+  while (i < sql.length) {
+    if (sql[i] === quote) {
+      if (sql[i + 1] !== quote) return i + 1;
+      i++;
+    }
+    i++;
+  }
+  return -1;
+}
 
 /** A statement's rows, and the rows its last statement wrote where the runtime counts them. */
 export interface Executed {
@@ -128,13 +202,16 @@ export function fromDurableObjectStorage(storage: DurableObjectStorageLike): Sql
     query: <T extends Row>(sql: string, ...params: SqlValue[]) =>
       storage.sql.exec(sql, ...params).toArray() as T[],
     // Durable Object SQL runs every statement of `sql` and returns the cursor
-    // of the last one, whose rowsWritten counts only that statement.
-    queryReadOnly: <T extends Row>(sql: string, ...params: SqlValue[]) =>
-      guardRead(db, () => {
+    // of the last one, whose rowsWritten counts only that statement. So a
+    // tail is refused before anything runs, and the guard checks the rest.
+    queryReadOnly: <T extends Row>(sql: string, ...params: SqlValue[]) => {
+      assertOneStatement(sql);
+      return guardRead(db, () => {
         const cursor = storage.sql.exec(sql, ...params);
         const rows = cursor.toArray() as Row[];
         return { rows, rowsWritten: cursor.rowsWritten };
-      }) as T[],
+      }) as T[];
+    },
     run: (sql, ...params) => {
       storage.sql.exec(sql, ...params);
     },

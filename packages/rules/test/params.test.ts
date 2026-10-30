@@ -1,5 +1,7 @@
+import { assertOneStatement } from "@virga/graph";
 import { describe, expect, it } from "vitest";
 import { compileParams } from "../src/params.ts";
+import { RULES } from "../src/rules.gen.ts";
 
 describe("compileParams", () => {
   it("replaces named parameters in order", () => {
@@ -59,5 +61,11 @@ describe("compileParams", () => {
     it("rejects an unterminated bracket identifier", () => {
       expect(() => compileParams("SELECT 1 AS [x")).toThrow(/unterminated \[/);
     });
+  });
+});
+
+describe("R8 hardening: committed rules pass the run-time one-statement check", () => {
+  it.each(RULES.map((r) => [r.id, r.sql] as const))("%s", (_, sql) => {
+    expect(() => assertOneStatement(sql)).not.toThrow();
   });
 });

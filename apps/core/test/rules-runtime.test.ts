@@ -4,12 +4,16 @@ import {
   applyBatch,
   beginScan,
   fromDurableObjectStorage,
+  guardRead,
   prepareBatch,
+  ReadOnlyError,
+  type Row,
   recordCoverage,
+  replaceExposure,
   type SqlRunner,
   sweep,
 } from "@virga/graph";
-import { type CompiledRule, evaluateRules } from "@virga/rules";
+import { type CompiledRule, evaluateRules, RULES } from "@virga/rules";
 import { describe, expect, it } from "vitest";
 import type { AccountGraph } from "../src/account-graph.ts";
 import { DEFAULT_EVALUATORS } from "../src/graph/evaluators.ts";
@@ -38,9 +42,13 @@ const rule = (sql: string): CompiledRule => ({
   paramOrder: [],
 });
 
-/** Scan s1 with Worker a and complete `workers` coverage, and the finding of Worker a open. */
+/**
+ * Scan s1 with Worker a and complete `workers` coverage, the finding of
+ * Worker a open, and one exposure row.
+ */
 async function seed(db: SqlRunner): Promise<void> {
   beginScan(db, { id: "s1", kind: "full", at: 1000 });
+  replaceExposure(db, [{ entryId: "route:r1", decision: "public", confidence: 2 }], 1000);
   const batch = await prepareBatch(
     {
       scanId: "s1",
@@ -56,53 +64,83 @@ async function seed(db: SqlRunner): Promise<void> {
   expect(evaluateRules(db, [rule(HIT_A)], "s1", 1000)[0]).toMatchObject({ opened: 1 });
 }
 
+/** Connection settings a statement can change, read with statements a view cannot shadow. */
+const SETTING_NAMES = [
+  "ignore_check_constraints",
+  "recursive_triggers",
+  "reverse_unordered_selects",
+  "legacy_alter_table",
+  "defer_foreign_keys",
+];
+const settings = (db: SqlRunner) => ({
+  ...Object.fromEntries(SETTING_NAMES.map((name) => [name, db.query(`PRAGMA ${name}`)[0]?.[name]])),
+  case_sensitive_like: db.query("SELECT NOT ('a' LIKE 'A') AS v")[0]?.v,
+});
+
 /** What a rule run must leave as it was. */
 const state = (db: SqlRunner) => ({
   meta: db.query("SELECT key, value FROM meta ORDER BY key"),
-  schema: db.query("SELECT type, name FROM sqlite_schema ORDER BY type, name"),
+  schema: db.query("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
   findings: db.query("SELECT fingerprint, status, last_seen, resolved_at FROM findings"),
   links: db.query("SELECT fingerprint, node_id, role FROM finding_nodes ORDER BY node_id"),
-  settings: db.query("SELECT ignore_check_constraints AS icc FROM pragma_ignore_check_constraints"),
+  exposure: db.query("SELECT entry_id, decision FROM exposure"),
+  settings: settings(db),
 });
+
+/**
+ * The Durable Object adapter's read without its tail check, as if both the
+ * compiler and that check were bypassed: only the guard stands.
+ */
+const guardOnly = (db: SqlRunner, storage: DurableObjectStorage, sql: string) =>
+  guardRead(db, () => {
+    const cursor = storage.sql.exec(sql);
+    return { rows: cursor.toArray() as Row[], rowsWritten: cursor.rowsWritten };
+  });
 
 const freshGraph = () => env.ACCOUNT_GRAPH.get(env.ACCOUNT_GRAPH.newUniqueId());
 
+/** The rules of R6-02 that hide a statement, each also caught by the guard alone. */
+const TWO_STATEMENTS: [string, string][] = [
+  [
+    "the review's UPDATE after the SELECT",
+    `${HIT_A} FROM (SELECT 1) AS [z--]; UPDATE meta SET value = 'forged' WHERE key = 'current_scan'`,
+  ],
+  [
+    "an UPDATE before the SELECT, which rowsWritten does not count",
+    `UPDATE meta SET value = 'forged' WHERE key = 'current_scan'; ${HIT_A}`,
+  ],
+  ["a DELETE of every finding", `DELETE FROM findings; ${NO_HIT}`],
+  ["a new table", `CREATE TABLE planted (x); ${HIT_A}`],
+  [
+    "a trigger",
+    `CREATE TRIGGER planted AFTER UPDATE ON findings BEGIN DELETE FROM finding_nodes; END; ${HIT_A}`,
+  ],
+  ["a connection setting", `PRAGMA ignore_check_constraints = 1; ${HIT_A}`],
+  [
+    "an UPDATE before a statement that fails",
+    `UPDATE meta SET value = 'forged' WHERE key = 'current_scan'; SELECT * FROM no_such_table`,
+  ],
+];
+
 describe("rule runs on Durable Object SQL (R6-02)", () => {
-  it.each([
-    [
-      "the review's UPDATE after the SELECT",
-      `${HIT_A} FROM (SELECT 1) AS [z--]; UPDATE meta SET value = 'forged' WHERE key = 'current_scan'`,
-    ],
-    [
-      "an UPDATE before the SELECT, which rowsWritten does not count",
-      `UPDATE meta SET value = 'forged' WHERE key = 'current_scan'; ${HIT_A}`,
-    ],
-    ["a DELETE of every finding", `DELETE FROM findings; ${NO_HIT}`],
-    ["a new table", `CREATE TABLE planted (x); ${HIT_A}`],
-    [
-      "a trigger",
-      `CREATE TRIGGER planted AFTER UPDATE ON findings BEGIN DELETE FROM finding_nodes; END; ${HIT_A}`,
-    ],
-    ["a connection setting", `PRAGMA ignore_check_constraints = 1; ${HIT_A}`],
-    [
-      "an UPDATE before a statement that fails",
-      `UPDATE meta SET value = 'forged' WHERE key = 'current_scan'; SELECT * FROM no_such_table`,
-    ],
-  ])("R6-02: a two-statement rule with %s ends error and changes nothing", async (_, sql) => {
-    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
-      const db = fromDurableObjectStorage(durable.storage);
-      await seed(db);
-      const before = state(db);
-      const [run] = evaluateRules(db, [rule(sql)], "s1", 2000);
-      expect(run).toMatchObject({ status: "error", hits: 0, opened: 0, resolved: 0 });
-      expect(state(db)).toEqual(before);
-      // Control: a rule that only reads still changes findings.
-      expect(evaluateRules(db, [rule(NO_HIT)], "s1", 3000)[0]).toMatchObject({
-        status: "evaluated",
-        resolved: 1,
+  it.each(TWO_STATEMENTS)(
+    "R6-02: a two-statement rule with %s ends error and changes nothing",
+    async (_, sql) => {
+      await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+        const db = fromDurableObjectStorage(durable.storage);
+        await seed(db);
+        const before = state(db);
+        const [run] = evaluateRules(db, [rule(sql)], "s1", 2000);
+        expect(run).toMatchObject({ status: "error", hits: 0, opened: 0, resolved: 0 });
+        expect(state(db)).toEqual(before);
+        // Control: a rule that only reads still changes findings.
+        expect(evaluateRules(db, [rule(NO_HIT)], "s1", 3000)[0]).toMatchObject({
+          status: "evaluated",
+          resolved: 1,
+        });
       });
-    });
-  });
+    },
+  );
 
   it("R6-02: the scan's rules step counts a writing rule as an error and keeps current_scan", async () => {
     await runInDurableObject(freshGraph(), async (graph: AccountGraph, durable) => {
@@ -122,8 +160,74 @@ describe("rule runs on Durable Object SQL (R6-02)", () => {
       });
       expect(state(db)).toEqual(before);
       expect(db.query("SELECT status, error FROM rule_runs WHERE rule_id = 'CF-900'")).toEqual([
-        { status: "error", error: expect.stringMatching(/^a read-only query changed rows/) },
+        {
+          status: "error",
+          error: expect.stringMatching(/^a read-only query holds text after its first statement/),
+        },
       ]);
+    });
+  });
+
+  it.each(TWO_STATEMENTS)(
+    "R6-02: the guard alone refuses a rule with %s and changes nothing",
+    async (_, sql) => {
+      await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+        const db = fromDurableObjectStorage(durable.storage);
+        await seed(db);
+        const before = state(db);
+        expect(() => guardOnly(db, durable.storage, sql)).toThrow(
+          sql.includes("no_such_table") ? /no such table/ : ReadOnlyError,
+        );
+        expect(state(db)).toEqual(before);
+      });
+    },
+  );
+});
+
+describe("a run-time read is one statement (R8 hardening, R6-02)", () => {
+  it("R8 hardening: drop and re-create: a tail that drops exposure and creates it again ends error and keeps exposure and the finding", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const create = db.query<{ sql: string }>(
+        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'exposure'",
+      )[0]?.sql;
+      const before = state(db);
+      expect(before.exposure).toHaveLength(1);
+      // The last statement reads, so the cursor's rowsWritten is 0.
+      const sql = `${HIT_A}; DROP TABLE exposure; ${create}; ${NO_HIT}`;
+      const [run] = evaluateRules(db, [rule(sql)], "s1", 2000);
+      expect(run).toMatchObject({ status: "error", hits: 0, opened: 0, resolved: 0 });
+      expect(run?.error).toMatch(/text after its first statement/);
+      expect(state(db)).toEqual(before);
+    });
+  });
+
+  it("R8 hardening: a $name(...) variable, which SQLite reads past a quote, is refused before it runs", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      const before = state(db);
+      const sql = `SELECT $a(') ; DROP TABLE exposure; ${NO_HIT} --' AS v`;
+      expect(() => db.queryReadOnly(sql, 1)).toThrow(ReadOnlyError);
+      expect(() => db.queryReadOnly(sql, 1)).toThrow(/variable \(\$\)/);
+      const [run] = evaluateRules(db, [rule(sql)], "s1", 2000);
+      expect(run).toMatchObject({ status: "error", opened: 0, resolved: 0 });
+      expect(state(db)).toEqual(before);
+    });
+  });
+
+  it("R8 hardening: every committed rule still runs", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      beginScan(db, { id: "s1", kind: "full", at: 1000 });
+      for (const input of new Set(RULES.flatMap((r) => r.requires))) {
+        recordCoverage(db, { scanId: "s1", resourceClass: input, status: "complete" });
+      }
+      const runs = evaluateRules(db, RULES, "s1", 2000);
+      expect(runs.map((r) => [r.ruleId, r.status, r.error])).toEqual(
+        RULES.map((r) => [r.id, "evaluated", undefined]),
+      );
     });
   });
 });

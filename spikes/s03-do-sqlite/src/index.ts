@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   applyBatch,
+  assertOneStatement,
   beginScan,
   guardRead,
   migrate,
@@ -35,14 +36,16 @@ function countingRunner(storage: DurableObjectStorage, counter: Counted): SqlRun
   };
   const runner: SqlRunner = {
     query: (sql, ...params) => exec(sql, params) as never,
-    queryReadOnly: (sql, ...params) =>
-      guardRead(runner, () => {
+    queryReadOnly: (sql, ...params) => {
+      assertOneStatement(sql);
+      return guardRead(runner, () => {
         const cursor = storage.sql.exec(sql, ...params);
         const rows = cursor.toArray() as Row[];
         counter.rowsRead += cursor.rowsRead;
         counter.rowsWritten += cursor.rowsWritten;
         return { rows, rowsWritten: cursor.rowsWritten };
-      }) as never,
+      }) as never;
+    },
     run: (sql, ...params) => {
       exec(sql, params);
     },

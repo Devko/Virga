@@ -1,5 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
-import { guardRead, ReadOnlyError, type Row, type SqlRunner, type SqlValue } from "./sql.ts";
+import {
+  assertOneStatement,
+  guardRead,
+  ReadOnlyError,
+  type Row,
+  type SqlRunner,
+  type SqlValue,
+} from "./sql.ts";
 
 export interface NodeSqlRunner extends SqlRunner {
   /** Output column names of a statement, without running it. */
@@ -34,16 +41,20 @@ export function openNodeDatabase(path = ":memory:"): NodeSqlRunner {
   const runner: NodeSqlRunner = {
     query: <T extends Row>(sql: string, ...params: SqlValue[]) =>
       db.prepare(sql).all(...(params as never[])) as T[],
-    // Node SQLite would skip a tail that Durable Object SQL runs (R6-02). A
-    // flag pragma acts when it is prepared, so `sql` is prepared, by `tail`
-    // too, only inside the guard.
-    queryReadOnly: <T extends Row>(sql: string, ...params: SqlValue[]) =>
-      guardRead(runner, () => {
+    // Node SQLite would skip a tail that Durable Object SQL runs (R6-02). The
+    // same check as there comes first, so the fixture runs catch a rule it
+    // refuses; SQLite's own statement boundary is the second. A flag pragma
+    // acts when it is prepared, so `sql` is prepared, by `tail` too, only
+    // inside the guard.
+    queryReadOnly: <T extends Row>(sql: string, ...params: SqlValue[]) => {
+      assertOneStatement(sql);
+      return guardRead(runner, () => {
         if (tail(sql) !== "") {
           throw new ReadOnlyError("a read-only query holds more than one statement");
         }
         return { rows: db.prepare(sql).all(...(params as never[])) as Row[], rowsWritten: 0 };
-      }) as T[],
+      }) as T[];
+    },
     run: (sql, ...params) => {
       db.prepare(sql).run(...(params as never[]));
     },

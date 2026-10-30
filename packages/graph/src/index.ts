@@ -2,6 +2,7 @@ export { canonicalJson, sha256 } from "./hash.ts";
 export { migrate, schemaVersion } from "./migrate.ts";
 export { MIGRATIONS, type Migration, SCHEMA_VERSION } from "./schema.ts";
 export {
+  assertOneStatement,
   type DurableObjectStorageLike,
   type Executed,
   fromDurableObjectStorage,

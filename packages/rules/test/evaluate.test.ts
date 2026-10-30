@@ -804,23 +804,35 @@ describe("evaluateRules: a rule run only reads (R6-02)", () => {
     expect(evaluateRules(db, [RULE], "s1", 1000)[0]).toMatchObject({ opened: 1 });
   }
 
+  const CHANGED = /^a read-only query changed (rows|the schema)/;
   it.each([
-    ["an UPDATE", `UPDATE meta SET value = 'forged' WHERE key = 'current_scan' RETURNING ${HIT_A}`],
-    ["an INSERT", `INSERT INTO meta (key, value) VALUES ('planted', 'x') RETURNING ${HIT_A}`],
-    ["a DELETE", `DELETE FROM findings RETURNING ${HIT_A}`],
-    ["a schema change", "CREATE TABLE planted (x)"],
+    [
+      "an UPDATE",
+      `UPDATE meta SET value = 'forged' WHERE key = 'current_scan' RETURNING ${HIT_A}`,
+      CHANGED,
+    ],
+    [
+      "an INSERT",
+      `INSERT INTO meta (key, value) VALUES ('planted', 'x') RETURNING ${HIT_A}`,
+      CHANGED,
+    ],
+    ["a DELETE", `DELETE FROM findings RETURNING ${HIT_A}`, CHANGED],
+    ["a schema change", "CREATE TABLE planted (x)", CHANGED],
+    // The `;` in a trigger body ends the first statement for the run-time
+    // check, which refuses the rest before anything runs (R8 hardening).
     [
       "a trigger",
       "CREATE TRIGGER planted AFTER UPDATE ON findings BEGIN DELETE FROM finding_nodes; END",
+      /^a read-only query holds text after its first statement/,
     ],
   ])(
     "R6-02: ends a run that writes with %s as error, rolled back, changing no finding",
-    async (_, sql) => {
+    async (_, sql, message) => {
       await openA();
       const before = { meta: meta(), tables: tables(), finding: finding() };
       const [run] = evaluateRules(db, [ruleWith("CF-900", sql)], "s1", 2000);
       expect(run).toMatchObject({ status: "error", hits: 0, opened: 0, resolved: 0 });
-      expect(run?.error).toMatch(/^a read-only query changed (rows|the schema)/);
+      expect(run?.error).toMatch(message);
       expect({ meta: meta(), tables: tables(), finding: finding() }).toEqual(before);
     },
   );
@@ -844,7 +856,7 @@ describe("evaluateRules: a rule run only reads (R6-02)", () => {
     const sql = `SELECT ${HIT_A} FROM (SELECT 1) AS [z--]; UPDATE meta SET value = 'forged' WHERE key = 'current_scan'`;
     const [run] = evaluateRules(db, [ruleWith("CF-900", sql)], "s1", 2000);
     expect(run?.status).toBe("error");
-    expect(run?.error).toMatch(/more than one statement/);
+    expect(run?.error).toMatch(/text after its first statement/);
     expect(finding()).toMatchObject({ status: "open", last_seen: 1000 });
   });
 });
