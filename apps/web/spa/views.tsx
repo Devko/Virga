@@ -138,7 +138,13 @@ export function SummaryView({ summary }: { summary: ScanSummaryView }) {
           {graph.coverage.map((c) => (
             <tr key={c.resourceClass}>
               <td>{c.resourceClass}</td>
-              <td className={`coverage coverage-${c.status}`}>{c.status.replace("_", " ")}</td>
+              <td className={`coverage coverage-${c.status}`}>
+                {c.status.replace("_", " ")}
+                {/* Every chunk was written, but one left resources out (decision 0005). */}
+                {c.status === "partial" && c.chunksDone === c.chunksTotal && (
+                  <div className="muted">resources left out</div>
+                )}
+              </td>
               <td>
                 {c.chunksDone}/{c.chunksTotal}
               </td>
