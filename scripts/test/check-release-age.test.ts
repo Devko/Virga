@@ -5,8 +5,11 @@ import {
   type CheckOptions,
   checkReleaseAge,
   EXCEPTIONS,
+  LockfileError,
   main,
+  PackageJsonError,
   parseLockfile,
+  parsePackageManager,
 } from "../check-release-age.ts";
 import { REPO_ROOT } from "./helpers.ts";
 
@@ -14,7 +17,9 @@ const NOW = new Date("2026-10-30T12:00:00Z");
 const DAY = 86_400_000;
 const ago = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
 
+/** A lockfile in the layout pnpm writes, with one snapshot per packages entry. */
 function lockfile(entries: string[]): string {
+  const keys = entries.map((entry) => entry.slice(2, entry.indexOf(":\n")));
   return [
     "lockfileVersion: '9.0'",
     "",
@@ -23,24 +28,121 @@ function lockfile(entries: string[]): string {
     "",
     "importers:",
     "",
-    "  .:",
-    "    devDependencies:",
-    "      typescript:",
-    "        specifier: 6.0.3",
-    "        version: 6.0.3",
+    "  .: {}",
     "",
     "packages:",
     "",
     ...entries.flatMap((entry) => [entry, ""]),
     "snapshots:",
     "",
-    "  typescript@6.0.3: {}",
-    "",
+    ...keys.flatMap((key) => [`  ${key}: {}`, ""]),
   ].join("\n");
 }
 
+const TYPES_NODE_INTEGRITY =
+  "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==";
+const UNDICI_TYPES_INTEGRITY =
+  "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==";
+
+/**
+ * The review's lockfile (R6-03), as pnpm 10.28.0 writes it: @types/node
+ * 26.6.6, published 2026-10-28, and its dependency. Line 17 is the packages
+ * key of @types/node.
+ */
+const REVIEW_LOCKFILE = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@types/node':
+        specifier: 26.6.6
+        version: 26.6.6
+
+packages:
+
+  '@types/node@26.6.6':
+    resolution: {integrity: ${TYPES_NODE_INTEGRITY}}
+
+  undici-types@8.9.0:
+    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}
+
+snapshots:
+
+  '@types/node@26.6.6':
+    dependencies:
+      undici-types: 8.9.0
+
+  undici-types@8.9.0: {}
+`;
+
+/** The review's three layouts: valid YAML that pnpm installs from, with the same entries. */
+function reviewLayout(layout: "flow" | "comment" | "indent"): string {
+  const [head = "", rest = ""] = REVIEW_LOCKFILE.split("packages:\n");
+  const [packages = "", snapshots = ""] = rest.split("snapshots:\n");
+  let changed = packages;
+  if (layout === "flow") {
+    changed = packages.replace(
+      `  '@types/node@26.6.6':\n    resolution: {integrity: ${TYPES_NODE_INTEGRITY}}`,
+      `  '@types/node@26.6.6': {resolution: {integrity: ${TYPES_NODE_INTEGRITY}}}`,
+    );
+  } else if (layout === "comment") {
+    changed = packages.replace("  '@types/node@26.6.6':\n", "  '@types/node@26.6.6': # types\n");
+  } else {
+    changed = packages.replaceAll(/^(?= +\S)/gm, " ");
+  }
+  expect(changed).not.toBe(packages);
+  return `${head}packages:\n${changed}snapshots:\n${snapshots}`;
+}
+
+/** The registry as the review saw it, publishing the review lockfile's integrity. */
+const REVIEW_REGISTRY: Registry = {
+  "@types/node": () =>
+    Response.json(
+      registryDocument(
+        "@types/node",
+        { "26.6.6": "2026-10-28T18:36:00.000Z" },
+        { "26.6.6": { integrity: TYPES_NODE_INTEGRITY } },
+      ),
+    ),
+  "undici-types": () =>
+    Response.json(
+      registryDocument(
+        "undici-types",
+        { "8.9.0": "2026-06-01T00:00:00.000Z" },
+        { "8.9.0": { integrity: UNDICI_TYPES_INTEGRITY } },
+      ),
+    ),
+};
+
 const registryEntry = (key: string) =>
   `  ${key}:\n    resolution: {integrity: sha512-AAAA}\n    engines: {node: '>=14.17'}`;
+
+/**
+ * A registry document as the npm registry serves it: publish times and each
+ * version's dist, with the integrity registryEntry locks unless `dists` says otherwise.
+ */
+function registryDocument(
+  name: string,
+  times: Record<string, string>,
+  dists: Record<string, unknown> = {},
+) {
+  const versions = Object.fromEntries(
+    Object.keys(times).map((version) => [
+      version,
+      {
+        name,
+        version,
+        dist: dists[version] ?? { integrity: "sha512-AAAA" },
+      },
+    ]),
+  );
+  return { name, time: { created: ago(1000), modified: ago(1), ...times }, versions };
+}
 
 /** Registry documents by package name; a function builds the response itself. */
 type Registry = Record<string, Record<string, string> | (() => Response | Promise<Response>)>;
@@ -54,7 +156,7 @@ function mockFetch(registry: Registry) {
     const doc = registry[name];
     if (doc === undefined) return new Response('{"error":"Not found"}', { status: 404 });
     if (typeof doc === "function") return doc();
-    return Response.json({ name, time: { created: ago(1000), modified: ago(1), ...doc } });
+    return Response.json(registryDocument(name, doc));
   }) as typeof globalThis.fetch;
   return { fetch, urls };
 }
@@ -78,8 +180,20 @@ describe("parseLockfile", () => {
       "  '@jsr/std__fs@1.0.0':\n    resolution: {integrity: sha512-AAAA, tarball: https://npm.jsr.io/~/11/@jsr/std__fs/1.0.0.tgz}",
     ]);
     expect(parseLockfile(text)).toEqual([
-      { key: "@types/node@22.20.5", name: "@types/node", version: "22.20.5", registry: true },
-      { key: "typescript@6.0.3", name: "typescript", version: "6.0.3", registry: true },
+      {
+        key: "@types/node@22.20.5",
+        name: "@types/node",
+        version: "22.20.5",
+        registry: true,
+        integrity: "sha512-AAAA",
+      },
+      {
+        key: "typescript@6.0.3",
+        name: "typescript",
+        version: "6.0.3",
+        registry: true,
+        integrity: "sha512-AAAA",
+      },
       {
         key: "tar-dep@https://example.com/tar-dep-1.0.0.tgz",
         name: "tar-dep",
@@ -132,6 +246,344 @@ describe("parseLockfile", () => {
     expect(packages.length).toBeGreaterThan(100);
     expect(packages.filter((p) => !p.registry)).toEqual([]);
     expect(packages.map((p) => p.key)).toContain("typescript@6.0.3");
+  });
+});
+
+describe("R6-03: the lockfile is read strictly", () => {
+  const refuses = (text: string, message: RegExp) => {
+    expect(() => parseLockfile(text)).toThrow(LockfileError);
+    expect(() => parseLockfile(text)).toThrow(message);
+  };
+  /** The review's lockfile with `replace` applied once; the replaced text must be there. */
+  const edited = (from: string, to: string) => {
+    expect(REVIEW_LOCKFILE).toContain(from);
+    return REVIEW_LOCKFILE.replace(from, to);
+  };
+
+  it("R6-03: reads the layout pnpm writes and fails the young version", async () => {
+    expect(parseLockfile(REVIEW_LOCKFILE).map((p) => p.key)).toEqual([
+      "@types/node@26.6.6",
+      "undici-types@8.9.0",
+    ]);
+    const { fetch } = mockFetch(REVIEW_REGISTRY);
+    const result = await checkReleaseAge(REVIEW_LOCKFILE, options(fetch));
+    expect(result.failures).toMatchObject([{ package: "@types/node@26.6.6", reason: "too_young" }]);
+  });
+
+  it("R6-03: refuses an entry written on one flow-style line", () => {
+    refuses(reviewLayout("flow"), /^pnpm-lock\.yaml line 17: .*one line/);
+  });
+
+  it("R6-03: refuses a comment after a key", () => {
+    refuses(reviewLayout("comment"), /^pnpm-lock\.yaml line 17: a comment/);
+  });
+
+  it("R6-03: refuses a packages section indented by 3 spaces", () => {
+    refuses(reviewLayout("indent"), /^pnpm-lock\.yaml line 17: .*indent 2.*indent 3/);
+  });
+
+  it("R6-03: main exits 1 for each of the review's layouts", async () => {
+    for (const layout of ["flow", "comment", "indent"] as const) {
+      const err: string[] = [];
+      const { fetch } = mockFetch(REVIEW_REGISTRY);
+      const code = await main({
+        lockfile: reviewLayout(layout),
+        packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
+        fetch,
+        now: NOW,
+        exceptions: [],
+        log: () => {},
+        error: (line) => err.push(line),
+      });
+      expect(code).toBe(1);
+      expect(err).toEqual([expect.stringMatching(/^error: pnpm-lock\.yaml line 17: /)]);
+    }
+  });
+
+  it("R6-03: refuses comment lines, which would end a section for a line reader", () => {
+    const entry = "\n  undici-types@8.9.0:\n";
+    refuses(edited(entry, `\n# note\n${entry.slice(1)}`), /line 20: .*top-level key/);
+    refuses(edited(entry, `\n  # note\n${entry.slice(1)}`), /line 20: a comment/);
+    refuses(
+      edited(
+        "    resolution: {integrity: sha512-K",
+        "    # note\n    resolution: {integrity: sha512-K",
+      ),
+      /line 21: a comment/,
+    );
+    refuses(
+      edited(`${UNDICI_TYPES_INTEGRITY}}`, `${UNDICI_TYPES_INTEGRITY}} # note`),
+      /line 21: a comment/,
+    );
+  });
+
+  it("R6-03: refuses top-level keys it would read differently from YAML", () => {
+    refuses(edited("\npackages:\n", "\n'packages':\n"), /line 15: .*top-level key/);
+    refuses(edited("\npackages:\n", "\npackages :\n"), /line 15: .*top-level key/);
+    refuses(edited("\npackages:\n", "\npackages: # all\n"), /line 15: a comment/);
+    refuses(
+      edited("\nsnapshots:\n", "\npackages:\n\nsnapshots:\n"),
+      /line 23: packages appears twice/,
+    );
+    refuses(`---\n${REVIEW_LOCKFILE}`, /line 1: .*start with lockfileVersion/);
+    refuses(edited("\npackages:\n", "\n---\npackages:\n"), /line 15: .*top-level key/);
+    refuses(edited("\npackages:\n", "\npackages: {}\n"), /line 15: packages on one line/);
+    refuses(`settings: {}\n${REVIEW_LOCKFILE}`, /line 1: .*start with lockfileVersion/);
+    refuses(`  ${REVIEW_LOCKFILE}`, /line 1: .*start with lockfileVersion/);
+    refuses(
+      edited("\npackages:\n\n", "\npackages:\n<<<<<<< HEAD\n"),
+      /line 16: expected a top-level key/,
+    );
+  });
+
+  it("R6-03: refuses values that continue on the next line", () => {
+    const continued = (value: string) =>
+      edited(
+        `  undici-types@8.9.0:\n    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n`,
+        `  undici-types@8.9.0:\n    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n    deprecated: ${value}\n  young@1.0.0:\n    resolution: {integrity: sha512-AAAA}\n    x'\n`,
+      );
+    refuses(continued("'starts"), /line 22: a quoted value that continues/);
+    refuses(continued('"starts'), /line 22: a quoted value that continues/);
+    refuses(continued("{a: b,"), /line 22: a flow collection that continues/);
+    refuses(continued("[a,"), /line 22: a flow collection that continues/);
+  });
+
+  it("R6-03: refuses a value that continues on the next line in a section it does not read", () => {
+    // YAML would read packages: as part of the settings value, and pnpm would
+    // then take the resolution of the snapshot itself.
+    const text = edited("  excludeLinksFromLockfile: false\n", "  excludeLinksFromLockfile: 'x\n")
+      .replace(
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n`,
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n    engines:\n      y'\n`,
+      )
+      .replace(
+        "  undici-types@8.9.0: {}\n",
+        "  undici-types@8.9.0:\n    resolution: {integrity: sha512-AAAA, tarball: https://evil.example/u.tgz}\n",
+      );
+    refuses(text, /line 5: a quoted value that continues/);
+  });
+
+  it("R6-03: refuses anchors, aliases, tags and merge keys", () => {
+    const resolution = `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`;
+    refuses(edited(resolution, `    resolution: &r {integrity: sha512-AAAA}`), /line 21: .*anchor/);
+    refuses(edited(resolution, "    resolution: *r"), /line 21: .*anchor/);
+    refuses(
+      edited(resolution, `    resolution: !!map {integrity: sha512-AAAA}`),
+      /line 21: .*anchor/,
+    );
+    refuses(
+      edited(resolution, `${resolution}\n    <<: {deprecated: x}`),
+      /line 22: expected a field/,
+    );
+    refuses(edited("\n  undici-types@8.9.0:\n", "\n  <<:\n"), /line 20: .*key/);
+    refuses(
+      edited("\n  undici-types@8.9.0:\n", "\n  ? undici-types@8.9.0\n"),
+      /line 20: .*explicit key/,
+    );
+  });
+
+  it("R6-03: refuses an entry that is not a block mapping under its key", () => {
+    refuses(
+      edited("  undici-types@8.9.0:\n    resolution", "  undici-types@8.9.0:\n     resolution"),
+      /line 21: .*indent 5/,
+    );
+    refuses(
+      edited("  undici-types@8.9.0:\n    resolution", "  undici-types@8.9.0:\n      resolution"),
+      /line 21: .*indent 6/,
+    );
+    refuses(
+      edited(
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`,
+        "    resolution:\n      integrity: sha512-AAAA",
+      ),
+      /line 21: the resolution of undici-types@8\.9\.0 is not a one-line flow map/,
+    );
+    refuses(
+      edited(
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`,
+        "    resolution: {integrity: sha512-AAAA}\n    resolution: {integrity: sha512-BBBB}",
+      ),
+      /line 22: undici-types@8\.9\.0 has resolution twice/,
+    );
+    refuses(
+      edited(
+        "\n  undici-types@8.9.0:\n    resolution",
+        "\n  undici-types@8.9.0: {}\n    resolution",
+      ),
+      /line 20: .*no resolution|line 21/,
+    );
+  });
+
+  it("R6-03: breaks lines at a lone CR, as YAML does", async () => {
+    const text = edited(
+      "  undici-types@8.9.0:\n",
+      "  young@1.0.0:\r    resolution: {integrity: sha512-AAAA}\n\n  undici-types@8.9.0:\n",
+    ).replace("  undici-types@8.9.0: {}\n", "  undici-types@8.9.0: {}\n\n  young@1.0.0: {}\n");
+    expect(parseLockfile(text).map((p) => p.key)).toContain("young@1.0.0");
+  });
+
+  it("R6-03: reads block scalars, sequences and quoted values as pnpm writes them", () => {
+    const text = edited(
+      `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n`,
+      [
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}, tarball: 'https://registry.npmjs.org/undici-types/-/undici-types-8.9.0.tgz'}`,
+        "    engines: {node: '>=14.17', npm: ^9 || >=10}",
+        "    cpu: [x64, arm64]",
+        "    deprecated: |-",
+        "      Don't use this; see #12:",
+        "        '  {unbalanced [",
+        "",
+        "      undici-types@9.0.0: still the message",
+        "    hasBin: true",
+        "",
+      ].join("\n"),
+    ).replace(
+      "    dependencies:\n      undici-types: 8.9.0\n",
+      "    dependencies:\n      undici-types: 8.9.0\n    transitivePeerDependencies:\n      - supports-color\n      - '@types/react'\n",
+    );
+    expect(parseLockfile(text)).toEqual([
+      expect.objectContaining({ key: "@types/node@26.6.6", registry: true }),
+      expect.objectContaining({ key: "undici-types@8.9.0", registry: true }),
+    ]);
+  });
+
+  it("R6-03: reads a resolution as YAML does, not split on ', '", () => {
+    const text = edited(
+      `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`,
+      `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY},tarball: https://evil.example/undici-types-8.9.0.tgz}`,
+    );
+    expect(parseLockfile(text)).toMatchObject([
+      { key: "@types/node@26.6.6", registry: true },
+      { key: "undici-types@8.9.0", registry: false },
+    ]);
+  });
+
+  it("R6-03: refuses a snapshot without an entry in packages", () => {
+    // pnpm merges each snapshot with its packages entry; without one it would
+    // take the snapshot's own fields, a resolution among them.
+    const text = edited(
+      "  undici-types@8.9.0: {}\n",
+      "  undici-types@8.9.0: {}\n\n  young@1.0.0(react@19.0.0):\n    resolution: {tarball: https://evil.example/young.tgz}\n",
+    );
+    refuses(text, /line 31: snapshot young@1\.0\.0\(react@19\.0\.0\) has no entry in packages/);
+  });
+
+  it("R6-03: matches snapshots with peer and patch suffixes to their packages entry", () => {
+    const text = edited(
+      "  undici-types@8.9.0: {}\n",
+      "  undici-types@8.9.0(patch_hash=abc123)(react@19.0.0(scheduler@0.25.0)): {}\n",
+    );
+    expect(parseLockfile(text)).toHaveLength(2);
+  });
+
+  it("R6-03: refuses an importer version without an entry in packages", () => {
+    refuses(
+      edited("        version: 26.6.6\n", "        version: 26.6.7\n"),
+      /line 13: .*@types\/node@26\.6\.7, which has no entry in packages/,
+    );
+    refuses(
+      edited("        specifier: 26.6.6\n        version: 26.6.6\n", "        specifier: 26.6.6\n"),
+      /line 11: dependency @types\/node of importer \. has no version/,
+    );
+    refuses(
+      edited(
+        "    dependencies:\n      '@types/node':\n        specifier: 26.6.6\n        version: 26.6.6\n",
+        "    dependencies: {'@types/node': {specifier: 26.6.6, version: 26.6.7}}\n",
+      ),
+      /line 10: .*dependencies of importer \. as a block/,
+    );
+  });
+
+  it("R6-03: resolves importer versions as pnpm does: links, aliases and peer suffixes", () => {
+    const text = edited(
+      "        version: 26.6.6\n",
+      [
+        "        version: 26.6.6(undici-types@8.9.0)",
+        "      types-alias:",
+        "        specifier: npm:undici-types@8.9.0",
+        "        version: undici-types@8.9.0",
+        "      '@virga/graph':",
+        "        specifier: workspace:*",
+        "        version: link:../../packages/graph",
+        "",
+      ].join("\n"),
+    );
+    expect(parseLockfile(text)).toHaveLength(2);
+  });
+});
+
+describe("R6-03: the locked integrity is the one the registry publishes", () => {
+  it("R6-03: a locked integrity that is not the registry's fails, even with an exception", async () => {
+    const text = lockfile([registryEntry("a@1.0.0")]);
+    const { fetch } = mockFetch({
+      a: () =>
+        Response.json(
+          registryDocument("a", { "1.0.0": ago(30) }, { "1.0.0": { integrity: "sha512-BBBB" } }),
+        ),
+    });
+    const result = await checkReleaseAge(
+      text,
+      options(fetch, { exceptions: [{ package: "a@1.0.0", reason: "not for this" }] }),
+    );
+    expect(result.failures).toEqual([
+      {
+        package: "a@1.0.0",
+        reason: "mismatch",
+        detail:
+          "the lockfile's integrity is not the sha512 digest the registry publishes for this version, so the bytes installed would not be the version checked",
+      },
+    ]);
+    expect(result.excepted).toEqual([]);
+    expect(result.unusedExceptions).toEqual([]);
+  });
+
+  it("R6-03: a version field that makes pnpm fetch a younger version fails", async () => {
+    // pnpm 10.28.0 takes the version for the tarball URL from a version field
+    // of the entry (nameVerFromPkgSnapshot), not from the key.
+    const young = `sha512-${"C".repeat(86)}==`;
+    const text = lockfile([
+      `  typescript@6.0.3:\n    resolution: {integrity: ${young}}\n    version: 6.1.0`,
+    ]);
+    const { fetch } = mockFetch({
+      typescript: () =>
+        Response.json(
+          registryDocument(
+            "typescript",
+            { "6.0.3": ago(40), "6.1.0": ago(1) },
+            { "6.1.0": { integrity: young } },
+          ),
+        ),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    expect(result.failures).toMatchObject([{ package: "typescript@6.0.3", reason: "mismatch" }]);
+  });
+
+  it("R6-03: a version without a digest to compare is not verified", async () => {
+    const text = lockfile([registryEntry("a@1.0.0"), registryEntry("b@1.0.0")]);
+    const shasum = "0102030405060708090a0b0c0d0e0f1011121314";
+    const { fetch } = mockFetch({
+      a: () => Response.json(registryDocument("a", { "1.0.0": ago(30) }, { "1.0.0": { shasum } })),
+      b: () => Response.json({ name: "b", time: { "1.0.0": ago(30) }, versions: {} }),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    const detail = "the registry publishes no sha512 digest for this version to compare";
+    expect(result.failures).toEqual([
+      { package: "a@1.0.0", reason: "unverified", detail },
+      { package: "b@1.0.0", reason: "unverified", detail },
+    ]);
+  });
+
+  it("R6-03: compares a sha1 integrity with the registry's shasum", async () => {
+    const text = lockfile([
+      "  old@1.0.0:\n    resolution: {integrity: sha1-AQIDBAUGBwgJCgsMDQ4PEBESExQ=}",
+    ]);
+    const shasum = "0102030405060708090A0B0C0D0E0F1011121314";
+    const { fetch } = mockFetch({
+      old: () =>
+        Response.json(registryDocument("old", { "1.0.0": ago(3000) }, { "1.0.0": { shasum } })),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    expect(result.failures).toEqual([]);
   });
 });
 
@@ -280,7 +732,7 @@ describe("checkReleaseAge", () => {
         calls += 1;
         if (calls === 1) return new Response("busy", { status: 503 });
         if (calls === 2) throw new TypeError("fetch failed");
-        return Response.json({ time: { "1.0.0": ago(30) } });
+        return Response.json(registryDocument("a", { "1.0.0": ago(30) }));
       },
     });
     const result = await checkReleaseAge(text, options(fetch, { attempts: 3 }));
@@ -325,11 +777,230 @@ describe("checkReleaseAge", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       inFlight -= 1;
       const name = String(input).split("/").pop();
-      return Response.json({ name, time: { "1.0.0": ago(30) } });
+      return Response.json(registryDocument(String(name), { "1.0.0": ago(30) }));
     }) as typeof globalThis.fetch;
     const result = await checkReleaseAge(text, options(fetch, { concurrency: 3 }));
     expect(result).toMatchObject({ checked: 12, failures: [] });
     expect(peak).toBe(3);
+  });
+});
+
+/** A package.json with the given fields. */
+const manifest = (fields: Record<string, unknown>) =>
+  JSON.stringify({ name: "virga", private: true, ...fields }, null, 2);
+
+const PNPM_INTEGRITY =
+  "sha512-Bd9x0UIfITmeBT/eVnzqNNRG+gLHZXFEG/wceVbpjjYwiJgtlARl/TRIDU2QoGaLwSNi+KqIAApk6D0LDke+SA==";
+/** The corepack form of PNPM_INTEGRITY: `pnpm@10.28.0+sha512.<hex>`. */
+const PNPM_SHA512 = Buffer.from(PNPM_INTEGRITY.slice("sha512-".length), "base64").toString("hex");
+
+/** pnpm as the registry lists it: 10.28.0 from January, 10.34.9 from five days before NOW. */
+const PNPM_REGISTRY: Registry = {
+  pnpm: () =>
+    Response.json(
+      registryDocument(
+        "pnpm",
+        { "10.28.0": "2026-01-09T23:05:04.751Z", "10.34.9": "2026-10-25T17:54:00.000Z" },
+        { "10.28.0": { integrity: PNPM_INTEGRITY } },
+      ),
+    ),
+};
+
+describe("R6-04: the pnpm version package.json pins", () => {
+  const refuses = (text: string, message: RegExp) => {
+    expect(() => parsePackageManager(text)).toThrow(PackageJsonError);
+    expect(() => parsePackageManager(text)).toThrow(message);
+  };
+  const check = (packageJson: string, extra: Partial<CheckOptions> = {}) => {
+    const { fetch } = mockFetch(PNPM_REGISTRY);
+    return checkReleaseAge(lockfile([]), options(fetch, { packageJson, ...extra }));
+  };
+
+  it("R6-04: reads the exact version in packageManager, with or without a sha512 hash", () => {
+    expect(parsePackageManager(manifest({ packageManager: "pnpm@10.28.0" }))).toEqual([
+      { field: "packageManager", version: "10.28.0" },
+    ]);
+    expect(
+      parsePackageManager(manifest({ packageManager: `pnpm@10.28.0+sha512.${PNPM_SHA512}` })),
+    ).toEqual([{ field: "packageManager", version: "10.28.0", sha512: PNPM_SHA512 }]);
+  });
+
+  it("R6-04: reads devEngines.packageManager as one entry or a list", () => {
+    const one = manifest({
+      packageManager: "pnpm@10.28.0",
+      devEngines: { packageManager: { name: "pnpm", version: "10.34.9", onFail: "download" } },
+    });
+    expect(parsePackageManager(one)).toEqual([
+      { field: "packageManager", version: "10.28.0" },
+      { field: "devEngines.packageManager", version: "10.34.9" },
+    ]);
+    const list = manifest({
+      packageManager: "pnpm@10.28.0",
+      devEngines: {
+        runtime: { name: "node" },
+        packageManager: [{ name: "pnpm", version: "10.28.0" }],
+      },
+    });
+    expect(parsePackageManager(list)).toEqual([
+      { field: "packageManager", version: "10.28.0" },
+      { field: "devEngines.packageManager", version: "10.28.0" },
+    ]);
+  });
+
+  it("R6-04: refuses a packageManager without an exact pnpm version, and says why", () => {
+    refuses(manifest({}), /names no packageManager; CI \(pnpm\/action-setup\) and corepack/);
+    refuses(manifest({ packageManager: 10 }), /names no packageManager/);
+    refuses(manifest({ packageManager: "yarn@4.5.0" }), /"yarn@4\.5\.0", not pnpm/);
+    for (const version of ["^10.28.0", "10", "latest", "10.28.x", "https://example.com/pnpm.tgz"]) {
+      refuses(
+        manifest({ packageManager: `pnpm@${version}` }),
+        /packageManager names pnpm ".*", not an exact version, so the check cannot date the pnpm that runs/,
+      );
+    }
+    refuses("{", /package\.json is not valid JSON/);
+    refuses("[]", /package\.json is not a JSON object/);
+  });
+
+  it("R6-04: refuses a hash it cannot compare with the registry, and says why", () => {
+    for (const hash of [
+      "sha256.6b9dfa2f0b8bd45d7d0f5d18a2a59c95a1b6e3d1a2a8a9a87e6e0e1e9a0d7e3a",
+      "sha224.abc",
+      `sha512.${PNPM_SHA512.slice(2)}`,
+      `sha512.${PNPM_SHA512}zz`,
+    ]) {
+      refuses(
+        manifest({ packageManager: `pnpm@10.28.0+${hash}` }),
+        /pins pnpm 10\.28\.0 with the hash ".*", which the check cannot compare: the registry publishes a sha512 digest for each version/,
+      );
+    }
+  });
+
+  it("R6-04: refuses devEngines.packageManager without an exact pnpm version", () => {
+    const withEngines = (packageManager: unknown) =>
+      manifest({ packageManager: "pnpm@10.28.0", devEngines: { packageManager } });
+    refuses(
+      withEngines({ name: "pnpm", version: "^10.0.0" }),
+      /devEngines\.packageManager names pnpm "\^10\.0\.0", not an exact version/,
+    );
+    refuses(withEngines({ name: "pnpm" }), /devEngines\.packageManager gives no pnpm version/);
+    refuses(
+      withEngines({ name: "yarn", version: "4.5.0" }),
+      /devEngines\.packageManager has an entry that does not name pnpm/,
+    );
+    refuses(
+      withEngines([
+        { name: "pnpm", version: "10.28.0" },
+        { name: "npm", version: "11.0.0" },
+      ]),
+      /does not name pnpm/,
+    );
+    refuses(withEngines("pnpm@10.28.0"), /does not name pnpm/);
+    refuses(
+      manifest({ packageManager: "pnpm@10.28.0", devEngines: [] }),
+      /devEngines is not an object/,
+    );
+  });
+
+  it("R6-04: fails a pnpm in packageManager published 5 days ago", async () => {
+    // The review's scenario: pnpm@10.34.9, published 2026-10-25T17:54Z.
+    const result = await check(manifest({ packageManager: "pnpm@10.34.9" }));
+    expect(result.failures).toEqual([
+      {
+        package: "pnpm@10.34.9",
+        reason: "too_young",
+        detail: "packageManager in package.json: published 2026-10-25T17:54:00.000Z, 4.8 days ago",
+      },
+    ]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("R6-04: fails a young pnpm in devEngines.packageManager", async () => {
+    const result = await check(
+      manifest({
+        packageManager: "pnpm@10.28.0",
+        devEngines: { packageManager: { name: "pnpm", version: "10.34.9" } },
+      }),
+    );
+    expect(result.failures).toMatchObject([
+      {
+        package: "pnpm@10.34.9",
+        reason: "too_young",
+        detail: expect.stringMatching(/^devEngines\.packageManager in package\.json: published/),
+      },
+    ]);
+    expect(result.checked).toBe(2);
+  });
+
+  it("R6-04: passes an old pnpm and a sha512 hash that is the registry's", async () => {
+    const plain = await check(manifest({ packageManager: "pnpm@10.28.0" }));
+    expect(plain).toMatchObject({ checked: 1, failures: [] });
+    const hashed = await check(manifest({ packageManager: `pnpm@10.28.0+sha512.${PNPM_SHA512}` }));
+    expect(hashed).toMatchObject({ checked: 1, failures: [] });
+  });
+
+  it("R6-04: fails a sha512 hash that is not the registry's", async () => {
+    const other = `${PNPM_SHA512.slice(0, -2)}00`;
+    const result = await check(manifest({ packageManager: `pnpm@10.28.0+sha512.${other}` }));
+    expect(result.failures).toMatchObject([
+      {
+        package: "pnpm@10.28.0",
+        reason: "mismatch",
+        detail: expect.stringMatching(
+          /^packageManager in package\.json: the hash in packageManager is not the sha512 digest the registry publishes/,
+        ),
+      },
+    ]);
+  });
+
+  it("R6-04: the exception list applies to the pnpm version", async () => {
+    const result = await check(manifest({ packageManager: "pnpm@10.34.9" }), {
+      exceptions: [{ package: "pnpm@10.34.9", reason: "security fix" }],
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.excepted).toMatchObject([{ package: "pnpm@10.34.9" }]);
+  });
+
+  it("R6-04: main exits 1 for a young pnpm and for a packageManager it cannot check", async () => {
+    const run = async (packageJson: string) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const { fetch } = mockFetch(PNPM_REGISTRY);
+      const code = await main({
+        lockfile: lockfile([]),
+        packageJson,
+        fetch,
+        now: NOW,
+        exceptions: [],
+        log: (line) => out.push(line),
+        error: (line) => err.push(line),
+      });
+      return { code, out, err };
+    };
+    const young = await run(manifest({ packageManager: "pnpm@10.34.9" }));
+    expect(young.code).toBe(1);
+    expect(young.err[0]).toBe(
+      "too young: pnpm@10.34.9 (packageManager in package.json: published 2026-10-25T17:54:00.000Z, 4.8 days ago)",
+    );
+    const range = await run(manifest({ packageManager: "pnpm@^10.28.0" }));
+    expect(range.code).toBe(1);
+    expect(range.err).toEqual([
+      expect.stringMatching(/^error: package\.json packageManager names pnpm/),
+    ]);
+    const ok = await run(manifest({ packageManager: "pnpm@10.28.0" }));
+    expect(ok).toEqual({
+      code: 0,
+      out: [
+        "ok: all 0 locked package versions and pnpm 10.28.0 (packageManager) were published at least 14 days before 2026-10-30T12:00:00.000Z",
+      ],
+      err: [],
+    });
+  });
+
+  it("R6-04: the repository pins an exact pnpm in packageManager", () => {
+    const pins = parsePackageManager(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+    expect(pins).toEqual([
+      { field: "packageManager", version: expect.stringMatching(/^\d+\.\d+\.\d+$/) },
+    ]);
   });
 });
 
@@ -346,10 +1017,10 @@ describe("CI workflow", () => {
   const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
 
   /** The text of each job under `jobs:`, by job name. */
-  function jobs(): Map<string, string> {
+  function jobs(text: string): Map<string, string> {
     const result = new Map<string, string>();
     let name: string | undefined;
-    for (const line of workflow.slice(workflow.indexOf("\njobs:\n")).split("\n").slice(2)) {
+    for (const line of text.slice(text.indexOf("\njobs:\n")).split("\n").slice(2)) {
       const header = /^ {2}([\w-]+):$/.exec(line);
       if (header?.[1] !== undefined) {
         name = header[1];
@@ -361,17 +1032,89 @@ describe("CI workflow", () => {
     return result;
   }
 
-  it("R4-07: runs the check in its own job, before every job that installs", () => {
-    const all = jobs();
-    const check = all.get("release-age") ?? "";
+  /** The jobs a job needs, from `needs: a` or `needs: [a, b]`. */
+  function needs(job: string): string[] {
+    const [, one, list] = /^ {4}needs: (?:([\w-]+)|\[([^\]]*)\])$/m.exec(job) ?? [];
+    if (one !== undefined) return [one];
+    return list === undefined ? [] : list.split(",").map((name) => name.trim());
+  }
+
+  /**
+   * A job that installs packages or runs a package manager: pnpm/action-setup
+   * (which installs pnpm itself), a setup-node package cache, or any pnpm, npm,
+   * npx, yarn or corepack command.
+   */
+  const INSTALLS = /uses: pnpm\/action-setup@|^\s+cache:|\b(?:pnpm|pnpx|npm|npx|yarn|corepack)\b/m;
+
+  /** Jobs other than release-age that install without waiting for it. */
+  const ungated = (text: string) =>
+    [...jobs(text)]
+      .filter(([name, job]) => name !== "release-age" && INSTALLS.test(job))
+      .filter(([, job]) => !needs(job).includes("release-age"))
+      .map(([name]) => name);
+
+  it("R4-07: runs the check in its own job, which installs nothing and runs no package code", () => {
+    const check = jobs(workflow).get("release-age") ?? "";
     expect(check).toContain("- run: node scripts/check-release-age.ts\n");
-    expect(check).not.toContain("pnpm install");
-    const installing = [...all].filter(([, text]) => text.includes("pnpm install"));
+    expect(check).not.toMatch(INSTALLS);
+    expect(needs(check)).toEqual([]);
+  });
+
+  it("R4-07, R6-04: every job that installs packages needs the release-age job", () => {
+    const installing = [...jobs(workflow)].filter(([, job]) => INSTALLS.test(job));
     expect(installing.map(([name]) => name)).toEqual(["check", "deploy-dry-run"]);
-    for (const [, text] of installing) {
-      expect(text).toContain("    needs: release-age\n");
-      expect(text).not.toContain("check-release-age");
-    }
+    expect(ungated(workflow)).toEqual([]);
+  });
+
+  it("R4-07, R6-04: finds a job that installs before the check, whatever it runs", () => {
+    const sha = "0".repeat(40);
+    const synthetic = [
+      "name: CI",
+      "",
+      "jobs:",
+      "  release-age:",
+      "    steps:",
+      "      - run: node scripts/check-release-age.ts",
+      "  setup-only:",
+      "    steps:",
+      `      - uses: pnpm/action-setup@${sha}`,
+      "  lint:",
+      "    needs: build",
+      "    steps:",
+      "      - run: pnpm lint",
+      "  cached:",
+      "    steps:",
+      `      - uses: actions/setup-node@${sha}`,
+      "        with:",
+      "          cache: npm",
+      "  npm-ci:",
+      "    steps:",
+      "      - run: npm ci",
+      "  gated:",
+      "    needs: [build, release-age]",
+      "    steps:",
+      "      - run: npm ci && npx tsc",
+      "  plain:",
+      "    steps:",
+      "      - run: node --version",
+      "",
+    ].join("\n");
+    expect(ungated(synthetic)).toEqual(["setup-only", "lint", "cached", "npm-ci"]);
+  });
+
+  it("R6-04: pnpm/action-setup takes the pnpm version from packageManager, which the check dates", () => {
+    // A version input would bypass package.json, and with it the check.
+    const steps = [...workflow.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)];
+    expect(steps.length).toBeGreaterThan(0);
+    for (const [, inputs] of steps) expect(inputs).not.toMatch(/\bversion:/);
+  });
+
+  it("R4-07: the check imports nothing from node_modules, since CI runs it before any install", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "check-release-age.ts"), "utf8");
+    const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((match) => match[1]);
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) expect(specifier).toMatch(/^node:/);
+    expect(source).not.toMatch(/\bimport\(|\brequire\(/);
   });
 
   it("pins every action by commit SHA and grants read-only permissions", () => {
@@ -387,9 +1130,10 @@ describe("main", () => {
   const run = async (registry: Registry, entries: string[]) => {
     const out: string[] = [];
     const err: string[] = [];
-    const { fetch } = mockFetch(registry);
+    const { fetch } = mockFetch({ ...PNPM_REGISTRY, ...registry });
     const code = await main({
       lockfile: lockfile(entries),
+      packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
       fetch,
       now: NOW,
       exceptions: [],
@@ -408,7 +1152,7 @@ describe("main", () => {
     expect(code).toBe(1);
     expect(err).toEqual([
       "too young: a@1.0.0 (published 2026-10-27T12:00:00.000Z, 3.0 days ago)",
-      "error: 1 of 2 locked package versions fail the 14-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts",
+      "error: 1 of 3 package versions fail the 14-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts",
     ]);
   });
 
@@ -417,7 +1161,7 @@ describe("main", () => {
     expect(code).toBe(0);
     expect(err).toEqual([]);
     expect(out).toEqual([
-      "ok: all 1 locked package versions were published at least 14 days before 2026-10-30T12:00:00.000Z",
+      "ok: all 1 locked package versions and pnpm 10.28.0 (packageManager) were published at least 14 days before 2026-10-30T12:00:00.000Z",
     ]);
   });
 });

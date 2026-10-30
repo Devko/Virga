@@ -1,11 +1,15 @@
 // Usage: node scripts/check-release-age.ts
 //
-// Checks that every package version in pnpm-lock.yaml was published to the
-// npm registry at least 14 days ago (R4-07). minimumReleaseAge in
-// pnpm-workspace.yaml applies only when pnpm resolves a version; an install
-// from the lockfile, as in CI, takes whatever the lockfile holds. A version the
-// check cannot date (not from the registry, no publish time, registry error)
-// fails too. Needs network access to registry.npmjs.org and nothing else.
+// Checks that every package version in pnpm-lock.yaml (R4-07), and the pnpm
+// version package.json pins in packageManager and devEngines.packageManager
+// (R6-04), was published to the npm registry at least 14 days ago.
+// minimumReleaseAge in pnpm-workspace.yaml applies only when pnpm resolves a
+// version; an install from the lockfile, as in CI, takes whatever the lockfile
+// holds, and pnpm/action-setup and corepack run whatever packageManager names.
+// A version the check cannot date (not from the registry, no publish time,
+// registry error) fails too, and so does a locked integrity that is not the
+// registry's digest for the version dated (R6-03). Needs network access to
+// registry.npmjs.org and nothing else; CI runs it before anything is installed.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
@@ -36,11 +40,14 @@ export interface LockedPackage {
   version: string;
   /** Resolved from the npm registry by integrity, so the registry knows its publish time. */
   registry: boolean;
+  /** For a registry package: the lockfile's integrity, compared with the registry's digest. */
+  integrity?: string;
 }
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PACKAGE_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+const INTEGRITY = /^sha(?:1|256|384|512)-[A-Za-z0-9+/]+={0,2}$/;
 
 function unquote(value: string): string {
   if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
@@ -52,79 +59,536 @@ function unquote(value: string): string {
   return value;
 }
 
-/** A one-line YAML flow map as pnpm writes it: `{integrity: sha512-…, tarball: https://…}`. */
-function flowMap(text: string): Map<string, string> {
-  const fields = new Map<string, string>();
-  for (const part of text.slice(1, -1).split(", ")) {
-    const colon = part.indexOf(": ");
-    if (colon > 0) fields.set(part.slice(0, colon).trim(), unquote(part.slice(colon + 2).trim()));
+// The lockfile is YAML, and CI runs this check before anything is installed,
+// so no YAML library is at hand. The reader accepts the subset pnpm writes and
+// refuses everything else (R6-03): a line it skipped could hold an entry that
+// pnpm installs.
+
+interface Line {
+  /** 1-based, for messages. */
+  number: number;
+  indent: number;
+  /** The line without its indentation. */
+  text: string;
+}
+
+const preview = (text: string) => JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}…` : text);
+
+const lockfileError = (line: number, problem: string) =>
+  new LockfileError(`pnpm-lock.yaml line ${line}: ${problem}`);
+
+function scalar(value: string, line: number): string {
+  try {
+    return unquote(value);
+  } catch {
+    throw lockfileError(line, `a quoted value the check cannot read: ${preview(value)}`);
+  }
+}
+
+/** Where the quoted scalar that starts at `start` ends, or -1 if it continues on the next line. */
+function quoteEnd(text: string, start: number): number {
+  const quote = text[start];
+  for (let i = start + 1; i < text.length; i++) {
+    if (quote === '"' && text[i] === "\\") i++;
+    else if (text[i] === quote) {
+      if (quote === "'" && text[i + 1] === "'") i++;
+      else return i;
+    }
+  }
+  return -1;
+}
+
+/** Characters that start an anchor, alias, tag, directive, reserved token or explicit key. */
+const INDICATORS = "&*!%@`?";
+
+/**
+ * Checks a line, without its indentation, against the YAML pnpm writes:
+ * `key: value`, `key:` or `- item`, with every value ending on its line. A
+ * block scalar (`key: |-`) is the exception; its text follows on lines indented
+ * deeper than the header.
+ */
+function lineShape(text: string): "line" | "block" | { problem: string } {
+  let i = 0;
+  while (text.startsWith("- ", i)) i += 2;
+  if (text.slice(i) === "-") return "line";
+  const closers: string[] = [];
+  let tokenStart = true;
+  while (i < text.length) {
+    const c = text[i] as string;
+    if (c === " ") {
+      if (text[i + 1] === "#") return { problem: "a comment" };
+      i++;
+      continue;
+    }
+    if (c === "\t") return { problem: "a tab" };
+    if (tokenStart) {
+      tokenStart = false;
+      if (c === "#") return { problem: "a comment" };
+      if (c === "'" || c === '"') {
+        const end = quoteEnd(text, i);
+        if (end < 0) return { problem: "a quoted value that continues on the next line" };
+        i = end + 1;
+        continue;
+      }
+      if (c === "{" || c === "[") {
+        closers.push(c === "{" ? "}" : "]");
+        tokenStart = true;
+        i++;
+        continue;
+      }
+      if (c === "|" || c === ">") {
+        const header = text.slice(i);
+        if (closers.length === 0 && /^[|>](?:[1-9]?[-+]?|[-+][1-9])$/.test(header)) return "block";
+        return { problem: `a block scalar header pnpm does not write: ${preview(header)}` };
+      }
+      if (INDICATORS.includes(c)) {
+        return { problem: `"${c}", which starts an anchor, alias, tag, directive or explicit key` };
+      }
+    }
+    if (closers.length > 0) {
+      if (c === ",") {
+        tokenStart = true;
+        i++;
+        continue;
+      }
+      if (c === "}" || c === "]") {
+        if (closers.pop() !== c) return { problem: "mismatched brackets" };
+        i++;
+        continue;
+      }
+      if (c === "{" || c === "[") return { problem: "a bracket inside a flow value" };
+    }
+    const next = text[i + 1];
+    if (
+      c === ":" &&
+      (next === undefined || next === " " || (closers.length > 0 && ",[]{}".includes(next)))
+    ) {
+      tokenStart = true;
+    }
+    i++;
+  }
+  if (closers.length > 0) return { problem: "a flow collection that continues on the next line" };
+  return "line";
+}
+
+/** A plain key as pnpm writes one: no spaces, and no YAML indicator or `<<` (merge key) first. */
+const PLAIN_KEY = /^[^\s'"#&*!|>%@`{}[\],?:<-]\S*$/;
+
+function keyText(body: string): string | undefined {
+  if (/^'(?:[^']|'')*'$/.test(body)) return body.slice(1, -1).replaceAll("''", "'");
+  if (/^"(?:[^"\\]|\\.)*"$/.test(body)) {
+    try {
+      return JSON.parse(body) as string;
+    } catch {
+      return undefined;
+    }
+  }
+  return PLAIN_KEY.test(body) ? body : undefined;
+}
+
+/** A key line, `key:` or `key: {}` (an empty entry), without its indentation. */
+function keyOf(line: Line): { key: string; empty: boolean } {
+  const shape = lineShape(line.text);
+  if (typeof shape === "object") throw lockfileError(line.number, shape.problem);
+  const empty = line.text.endsWith(": {}");
+  const body = empty
+    ? line.text.slice(0, -4)
+    : line.text.endsWith(":")
+      ? line.text.slice(0, -1)
+      : undefined;
+  if (body === undefined) {
+    throw lockfileError(
+      line.number,
+      "a key and its value on one line; pnpm writes the fields on the lines below the key",
+    );
+  }
+  const key = keyText(body);
+  if (key === undefined) {
+    throw lockfileError(line.number, `a key pnpm does not write: ${preview(body)}`);
+  }
+  return { key, empty };
+}
+
+interface Entry {
+  key: string;
+  number: number;
+  /** Written as `key: {}`. */
+  empty: boolean;
+  /** Its lines, all at indent 4 or more. */
+  lines: Line[];
+}
+
+/**
+ * The entries of a top-level section: keys at indent 2, their values nested 2
+ * spaces at a time. The lines have passed lineShape; block scalar text is left out.
+ */
+function readEntries(section: string, lines: readonly Line[]): Entry[] {
+  const entries: Entry[] = [];
+  const keys = new Set<string>();
+  let entry: Entry | undefined;
+  let previous = 0;
+  for (const line of lines) {
+    if (line.indent === 2) {
+      const { key, empty } = keyOf(line);
+      if (keys.has(key)) throw lockfileError(line.number, `${section} has ${key} twice`);
+      keys.add(key);
+      entry = { key, number: line.number, empty, lines: [] };
+      entries.push(entry);
+      previous = 2;
+      continue;
+    }
+    if (
+      entry === undefined ||
+      entry.empty ||
+      line.indent < 4 ||
+      line.indent % 2 === 1 ||
+      line.indent > previous + 2
+    ) {
+      throw lockfileError(
+        line.number,
+        `expected a key at indent 2 or a value nested 2 spaces deeper than the line above it under ${section}:, as pnpm writes them; found indent ${line.indent}`,
+      );
+    }
+    entry.lines.push(line);
+    previous = line.indent;
+  }
+  return entries;
+}
+
+const FIELD = /^([A-Za-z][A-Za-z0-9]*):(?: (.+))?$/;
+
+/** An entry's own fields, its lines at indent 4, by name. */
+function fieldsOf(entry: Entry): Map<string, { value: string | undefined; number: number }> {
+  const fields = new Map<string, { value: string | undefined; number: number }>();
+  for (const line of entry.lines) {
+    if (line.indent !== 4) continue;
+    const field = FIELD.exec(line.text);
+    if (field?.[1] === undefined) {
+      throw lockfileError(line.number, `expected a field such as "resolution:" in ${entry.key}`);
+    }
+    if (fields.has(field[1]))
+      throw lockfileError(line.number, `${entry.key} has ${field[1]} twice`);
+    fields.set(field[1], { value: field[2], number: line.number });
   }
   return fields;
 }
 
-function lockedPackage(key: string, resolution: string): LockedPackage {
+/** A one-line flow map of scalars, as pnpm writes a resolution: `{integrity: …, tarball: …}`. */
+function flowMap(text: string, line: number): Map<string, string> | undefined {
+  if (!text.startsWith("{") || !text.endsWith("}")) return undefined;
+  const body = text.slice(1, -1);
+  const field =
+    /\s*([A-Za-z][A-Za-z0-9]*): ('(?:[^']|'')*'|"(?:[^"\\]|\\.)*"|[^\s,{}[\]'"#&*!|>%@`?][^,{}[\]]*?)\s*(?:,|$)/y;
+  const fields = new Map<string, string>();
+  while (field.lastIndex < body.length) {
+    const match = field.exec(body);
+    const [, key, value] = match ?? [];
+    if (key === undefined || value === undefined || fields.has(key)) return undefined;
+    if (!/^['"]/.test(value) && /:(?: |$)/.test(value)) return undefined;
+    fields.set(key, scalar(value, line));
+  }
+  return fields;
+}
+
+function lockedPackage(key: string, resolution: Map<string, string>): LockedPackage {
   const at = key.indexOf("@", 1);
   const name = at > 0 ? key.slice(0, at) : key;
   const version = at > 0 ? key.slice(at + 1) : "";
-  const fields = flowMap(resolution);
-  const tarball = fields.get("tarball");
+  const integrity = resolution.get("integrity");
+  const tarball = resolution.get("tarball");
   // Anything else (git, a local directory, another registry such as JSR) has
   // no npm publish time, so the check cannot date it.
   const registry =
     PACKAGE_NAME.test(name) &&
     SEMVER.test(version) &&
-    fields.has("integrity") &&
-    [...fields.keys()].every((field) => field === "integrity" || field === "tarball") &&
+    integrity !== undefined &&
+    INTEGRITY.test(integrity) &&
+    [...resolution.keys()].every((field) => field === "integrity" || field === "tarball") &&
     (tarball === undefined ||
       tarball === `${REGISTRY}/${name}/-/${name.slice(name.indexOf("/") + 1)}-${version}.tgz`);
-  return { key, name, version, registry };
+  return registry ? { key, name, version, registry, integrity } : { key, name, version, registry };
 }
+
+/** pnpm's removeSuffix: a dependency path without its peer and patch suffix (its packages key). */
+function packageId(depPath: string): string {
+  if (!depPath.endsWith(")")) return depPath;
+  let open = 1;
+  for (let i = depPath.length - 2; i >= 0; i--) {
+    if (depPath[i] === "(") open--;
+    else if (depPath[i] === ")") open++;
+    else if (open === 0) return depPath.slice(0, i + 1);
+  }
+  return depPath;
+}
+
+/** pnpm's refToRelative: the dependency path an importer version names; undefined for a link. */
+function dependencyPath(version: string, name: string): string | undefined {
+  if (version.startsWith("link:")) return undefined;
+  if (version.startsWith("@")) return version;
+  const at = version.indexOf("@");
+  if (at === -1) return `${name}@${version}`;
+  const colon = version.indexOf(":");
+  const bracket = version.indexOf("(");
+  if ((colon === -1 || at < colon) && (bracket === -1 || at < bracket)) return version;
+  return `${name}@${version}`;
+}
+
+const DEPENDENCY_GROUPS = new Set(["dependencies", "devDependencies", "optionalDependencies"]);
+
+interface ImporterDependency {
+  importer: string;
+  name: string;
+  version: string;
+  /** The line of its version. */
+  number: number;
+}
+
+function importerDependencies(importers: readonly Entry[]): ImporterDependency[] {
+  const dependencies: ImporterDependency[] = [];
+  for (const importer of importers) {
+    fieldsOf(importer);
+    let group = false;
+    let name: string | undefined;
+    let nameLine = 0;
+    let version: { value: string; number: number } | undefined;
+    const close = () => {
+      if (name === undefined) return;
+      if (version === undefined) {
+        throw lockfileError(
+          nameLine,
+          `dependency ${name} of importer ${importer.key} has no version`,
+        );
+      }
+      dependencies.push({
+        importer: importer.key,
+        name,
+        version: version.value,
+        number: version.number,
+      });
+      name = undefined;
+      version = undefined;
+    };
+    for (const line of importer.lines) {
+      if (line.indent === 4) {
+        close();
+        const [, field = "", value] = FIELD.exec(line.text) ?? [];
+        group = DEPENDENCY_GROUPS.has(field);
+        if (group && value !== undefined) {
+          throw lockfileError(
+            line.number,
+            `write the ${field} of importer ${importer.key} as a block, as pnpm does`,
+          );
+        }
+        continue;
+      }
+      if (!group) continue;
+      if (line.indent === 6) {
+        close();
+        name = keyOf(line).key;
+        nameLine = line.number;
+        continue;
+      }
+      const field = line.indent === 8 && name !== undefined ? FIELD.exec(line.text) : null;
+      if (field?.[1] === "version" && field[2] !== undefined && version === undefined) {
+        version = { value: scalar(field[2], line.number), number: line.number };
+        continue;
+      }
+      if (field?.[1] === "specifier" && field[2] !== undefined) continue;
+      throw lockfileError(
+        line.number,
+        `expected the specifier and version of a dependency of importer ${importer.key}`,
+      );
+    }
+    close();
+  }
+  return dependencies;
+}
+
+const TOP_LEVEL_KEY = /^([A-Za-z][A-Za-z0-9]*):(?: (.+))?$/;
+const SECTIONS = new Set(["importers", "packages", "snapshots"]);
 
 /**
  * The entries of the packages section of a pnpm lockfile (format 9). Reads
  * only the layout pnpm writes and refuses anything else rather than skip
- * entries.
+ * entries (R6-03). Every snapshot and every importer dependency must lead to a
+ * packages entry, since pnpm installs from those.
  */
 export function parseLockfile(text: string): LockedPackage[] {
-  const lines = text.split(/\r?\n/);
-  const declared = lines.find((line) => line.startsWith("lockfileVersion:"));
-  const format = declared === undefined ? undefined : unquote(declared.slice(16).trim());
+  // YAML breaks lines at a lone CR too; pnpm drops a byte order mark.
+  const lines = text.replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
+  const sections = new Map<string, Line[]>();
+  const seen = new Set<string>();
+  let format: string | undefined;
+  let section: Line[] | undefined;
+  let blockScalar: number | undefined;
+  for (const [index, content] of lines.entries()) {
+    const number = index + 1;
+    if (/^[ \t]*$/.test(content)) continue;
+    const indent = content.length - content.replace(/^ +/, "").length;
+    // Block scalar text is free-form and ends at a line no deeper than its header.
+    if (blockScalar !== undefined && indent > blockScalar) continue;
+    blockScalar = undefined;
+    if (seen.size === 0 && (indent > 0 || !content.startsWith("lockfileVersion:"))) {
+      throw lockfileError(number, "the lockfile must start with lockfileVersion");
+    }
+    const top = indent === 0 ? TOP_LEVEL_KEY.exec(content) : undefined;
+    if (top === null) {
+      throw lockfileError(
+        number,
+        `expected a top-level key such as "packages:"; found ${preview(content)}`,
+      );
+    }
+    // Every line in every section: a value continued on the next line could
+    // hide from YAML a line this reader takes as an entry, or the reverse.
+    const shape = lineShape(content.slice(indent));
+    if (typeof shape === "object") throw lockfileError(number, shape.problem);
+    if (shape === "block") blockScalar = indent;
+    if (top?.[1] === undefined) {
+      section?.push({ number, indent, text: content.slice(indent) });
+      continue;
+    }
+    const [, key, value] = top;
+    if (seen.has(key)) throw lockfileError(number, `${key} appears twice`);
+    seen.add(key);
+    if (key === "lockfileVersion") format = value === undefined ? undefined : scalar(value, number);
+    section = SECTIONS.has(key) ? [] : undefined;
+    if (section !== undefined) {
+      if (value !== undefined) {
+        throw lockfileError(
+          number,
+          `${key} on one line; pnpm writes its entries on the lines below`,
+        );
+      }
+      sections.set(key, section);
+    }
+  }
   if (format === undefined || !/^9\.\d+$/.test(format)) {
     throw new LockfileError(`unsupported lockfileVersion ${format ?? "(missing)"}; expected 9.x`);
   }
 
   const packages: LockedPackage[] = [];
-  let inPackages = false;
-  let current: { key: string; resolution?: string } | undefined;
-  const finish = () => {
-    if (current === undefined) return;
-    if (current.resolution === undefined) {
-      throw new LockfileError(`lockfile entry ${current.key} has no resolution`);
+  for (const entry of readEntries("packages", sections.get("packages") ?? [])) {
+    const resolution = fieldsOf(entry).get("resolution");
+    if (resolution === undefined) {
+      throw lockfileError(entry.number, `lockfile entry ${entry.key} has no resolution`);
     }
-    packages.push(lockedPackage(current.key, current.resolution));
-    current = undefined;
-  };
-  for (const line of lines) {
-    if (/^\S/.test(line)) {
-      finish();
-      inPackages = line.trimEnd() === "packages:";
-      continue;
+    const fields =
+      resolution.value === undefined ? undefined : flowMap(resolution.value, resolution.number);
+    if (fields === undefined) {
+      throw lockfileError(
+        resolution.number,
+        `the resolution of ${entry.key} is not a one-line flow map the check can read`,
+      );
     }
-    if (!inPackages) continue;
-    const key = /^ {2}(\S.*):(?: \{\})?$/.exec(line);
-    if (key?.[1] !== undefined) {
-      finish();
-      current = { key: unquote(key[1]) };
-      continue;
-    }
-    const resolution = /^ {4}resolution: (\{.*\})$/.exec(line);
-    if (resolution?.[1] !== undefined && current !== undefined) current.resolution = resolution[1];
+    packages.push(lockedPackage(entry.key, fields));
   }
-  finish();
+
+  // pnpm installs what the snapshots and importers name, and merges each
+  // snapshot with the packages entry of its id; without one, it would take the
+  // snapshot's own fields.
+  const ids = new Set(packages.map((locked) => locked.key));
+  for (const entry of readEntries("snapshots", sections.get("snapshots") ?? [])) {
+    fieldsOf(entry);
+    if (!ids.has(packageId(entry.key))) {
+      throw lockfileError(
+        entry.number,
+        `snapshot ${entry.key} has no entry in packages, so the check cannot date it`,
+      );
+    }
+  }
+  const importers = readEntries("importers", sections.get("importers") ?? []);
+  for (const dependency of importerDependencies(importers)) {
+    const path = dependencyPath(dependency.version, dependency.name);
+    if (path !== undefined && !ids.has(packageId(path))) {
+      throw lockfileError(
+        dependency.number,
+        `dependency ${dependency.name} of importer ${dependency.importer} resolves to ${path}, which has no entry in packages`,
+      );
+    }
+  }
   return packages;
 }
 
+export class PackageJsonError extends Error {}
+
+export interface PackageManagerPin {
+  /** Where package.json names the version. */
+  field: "packageManager" | "devEngines.packageManager";
+  version: string;
+  /** The hex digest of a corepack hash (`pnpm@10.28.0+sha512.<hex>`), compared with the registry's. */
+  sha512?: string;
+}
+
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** An exact pnpm version, with the corepack hash after `+` if there is one. */
+function pnpmPin(field: PackageManagerPin["field"], value: string): PackageManagerPin {
+  const plus = value.indexOf("+");
+  const version = plus < 0 ? value : value.slice(0, plus);
+  if (!EXACT_VERSION.test(version)) {
+    throw new PackageJsonError(
+      `package.json ${field} names pnpm ${preview(version)}, not an exact version, so the check cannot date the pnpm that runs; pin an exact version such as 10.28.0`,
+    );
+  }
+  if (plus < 0) return { field, version };
+  const hash = value.slice(plus + 1);
+  const sha512 = /^sha512\.([0-9a-f]{128})$/i.exec(hash)?.[1];
+  if (sha512 === undefined) {
+    throw new PackageJsonError(
+      `package.json ${field} pins pnpm ${version} with the hash ${preview(hash)}, which the check cannot compare: the registry publishes a sha512 digest for each version, so only a 128-digit sha512 hash can be checked; drop the hash or use the one "corepack use pnpm@${version}" writes`,
+    );
+  }
+  return { field, version, sha512: sha512.toLowerCase() };
+}
+
+/**
+ * The pnpm versions package.json pins (R6-04): packageManager, which
+ * pnpm/action-setup in CI and corepack follow and which therefore must name
+ * an exact pnpm version, and devEngines.packageManager if present.
+ */
+export function parsePackageManager(text: string): PackageManagerPin[] {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new PackageJsonError("package.json is not valid JSON");
+  }
+  if (!isRecord(manifest)) throw new PackageJsonError("package.json is not a JSON object");
+  const { packageManager, devEngines } = manifest;
+  if (typeof packageManager !== "string") {
+    throw new PackageJsonError(
+      'package.json names no packageManager; CI (pnpm/action-setup) and corepack take the pnpm version from it, so pin an exact one such as "pnpm@10.28.0"',
+    );
+  }
+  if (!packageManager.startsWith("pnpm@")) {
+    throw new PackageJsonError(
+      `package.json packageManager names ${preview(packageManager)}, not pnpm; the check dates only pnpm, which this project uses`,
+    );
+  }
+  const pins = [pnpmPin("packageManager", packageManager.slice("pnpm@".length))];
+  if (devEngines === undefined) return pins;
+  if (!isRecord(devEngines)) throw new PackageJsonError("package.json devEngines is not an object");
+  const declared = devEngines.packageManager;
+  if (declared === undefined) return pins;
+  for (const entry of Array.isArray(declared) ? declared : [declared]) {
+    if (!isRecord(entry) || entry.name !== "pnpm") {
+      throw new PackageJsonError(
+        `package.json devEngines.packageManager has an entry that does not name pnpm: ${preview(JSON.stringify(entry) ?? "")}; the check dates only pnpm, which this project uses`,
+      );
+    }
+    if (typeof entry.version !== "string") {
+      throw new PackageJsonError(
+        "package.json devEngines.packageManager gives no pnpm version; give an exact one such as 10.28.0",
+      );
+    }
+    pins.push(pnpmPin("devEngines.packageManager", entry.version));
+  }
+  return pins;
+}
+
 export interface CheckOptions {
+  /** package.json's text, whose pnpm versions are dated too; main always passes it. */
+  packageJson?: string;
   fetch?: typeof fetch;
   now?: Date;
   minAgeDays?: number;
@@ -140,21 +604,26 @@ export interface CheckOptions {
 
 export interface Failure {
   package: string;
-  reason: "too_young" | "not_registry" | "unverified";
+  /** `mismatch`: the integrity is not the registry's; no exception accepts it. */
+  reason: "too_young" | "not_registry" | "unverified" | "mismatch";
   detail: string;
 }
 
 export interface CheckResult {
-  /** Every locked package version, from the registry or not. */
+  /** Every locked package version, from the registry or not, and every pnpm version pinned. */
   checked: number;
+  /** The pnpm versions package.json pins, among those checked. */
+  packageManager: PackageManagerPin[];
   failures: Failure[];
   /** Failures the exception list accepts. */
   excepted: { package: string; detail: string }[];
-  /** Exceptions that match no failure: the version is gone or old enough. */
+  /** Exceptions that match no problem: the version is gone or old enough. */
   unusedExceptions: string[];
 }
 
-type PublishTimes = { times: Record<string, unknown> } | { error: string };
+type RegistryDocument =
+  | { times: Record<string, unknown>; dists: Map<string, unknown> }
+  | { error: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -168,13 +637,15 @@ function requestError(error: unknown): string {
   return `registry request failed: ${message.slice(0, 200)}${typeof cause === "string" ? ` (${cause})` : ""}`;
 }
 
-async function fetchPublishTimes(
+/** Publish times, and the `dist` of each version in `versions`, from the full registry document. */
+async function fetchDocument(
   name: string,
+  versions: ReadonlySet<string>,
   fetchImpl: typeof fetch,
   timeoutMs: number,
   attempts: number,
   retryDelayMs: number,
-): Promise<PublishTimes> {
+): Promise<RegistryDocument> {
   // Only the full document has `time`; the abbreviated install document does not.
   const url = `${REGISTRY}/${name.replace("/", "%2F")}`;
   let error = "registry request failed";
@@ -207,11 +678,72 @@ async function fetchPublishTimes(
       error = requestError(cause);
       continue;
     }
-    const times = isRecord(body) ? body.time : undefined;
-    if (!isRecord(times)) return { error: "the registry document has no publish times" };
-    return { times };
+    if (!isRecord(body) || !isRecord(body.time)) {
+      return { error: "the registry document has no publish times" };
+    }
+    const manifests = isRecord(body.versions) ? body.versions : {};
+    const dists = new Map<string, unknown>();
+    for (const version of versions) {
+      const manifest = Object.hasOwn(manifests, version) ? manifests[version] : undefined;
+      if (isRecord(manifest)) dists.set(version, manifest.dist);
+    }
+    return { times: body.time, dists };
   }
   return { error };
+}
+
+interface Digest {
+  algorithm: string;
+  hex: string;
+}
+
+/** A subresource integrity hash as pnpm records it: `sha512-<base64>`. */
+function sriDigest(value: string): Digest | undefined {
+  const [, algorithm, base64] =
+    /^(sha1|sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(value) ?? [];
+  if (algorithm === undefined || base64 === undefined) return undefined;
+  return { algorithm, hex: Buffer.from(base64, "base64").toString("hex") };
+}
+
+/** The digests the registry publishes for a version: dist.integrity and the sha1 dist.shasum. */
+function publishedDigests(dist: unknown): Digest[] {
+  if (!isRecord(dist)) return [];
+  const digests: Digest[] = [];
+  if (typeof dist.integrity === "string") {
+    for (const part of dist.integrity.split(/\s+/)) {
+      const digest = sriDigest(part);
+      if (digest) digests.push(digest);
+    }
+  }
+  if (typeof dist.shasum === "string" && /^[0-9a-f]{40}$/i.test(dist.shasum)) {
+    digests.push({ algorithm: "sha1", hex: dist.shasum.toLowerCase() });
+  }
+  return digests;
+}
+
+/**
+ * Whether `digest` names the bytes the registry publishes for the version
+ * checked. pnpm installs whatever matches the lockfile's integrity, from
+ * whichever registry or tarball URL it ends up using (.npmrc, a version field
+ * in the entry), so only this ties the installed bytes to the publish time.
+ */
+function digestProblem(
+  digest: Digest,
+  dist: unknown,
+  what: string,
+): Omit<Failure, "package"> | undefined {
+  const published = publishedDigests(dist).filter((d) => d.algorithm === digest.algorithm);
+  if (published.length === 0) {
+    return {
+      reason: "unverified",
+      detail: `the registry publishes no ${digest.algorithm} digest for this version to compare`,
+    };
+  }
+  if (published.some((d) => d.hex === digest.hex)) return undefined;
+  return {
+    reason: "mismatch",
+    detail: `${what} is not the ${digest.algorithm} digest the registry publishes for this version, so the bytes installed would not be the version checked`,
+  };
 }
 
 async function forEachLimited<T>(
@@ -245,6 +777,23 @@ function ageProblem(
   return { reason: "too_young", detail: `published ${time.toISOString()}, ${when}` };
 }
 
+/** Why a registry version fails: no publish time, a digest that is not the registry's, or its age. */
+function versionProblem(
+  document: RegistryDocument | undefined,
+  version: string,
+  digest: Digest | undefined,
+  what: string,
+  now: number,
+  minAgeMs: number,
+): Omit<Failure, "package"> | undefined {
+  if (document === undefined || "error" in document) {
+    return { reason: "unverified", detail: document?.error ?? "registry request failed" };
+  }
+  const age = ageProblem(document.times[version], now, minAgeMs);
+  if (age?.reason === "unverified" || digest === undefined) return age;
+  return digestProblem(digest, document.dists.get(version), what) ?? age;
+}
+
 const byPackage = (a: { package: string }, b: { package: string }) =>
   a.package < b.package ? -1 : a.package > b.package ? 1 : 0;
 
@@ -262,12 +811,17 @@ export async function checkReleaseAge(
   const retryDelayMs = options.retryDelayMs ?? 1_000;
 
   const packages = parseLockfile(lockfile);
-  const names = [...new Set(packages.filter((p) => p.registry).map((p) => p.name))];
-  const documents = new Map<string, PublishTimes>();
-  await forEachLimited(names, concurrency, async (name) => {
+  const pins = options.packageJson === undefined ? [] : parsePackageManager(options.packageJson);
+  const wanted = new Map<string, Set<string>>();
+  const want = (name: string, version: string) =>
+    wanted.set(name, (wanted.get(name) ?? new Set<string>()).add(version));
+  for (const locked of packages) if (locked.registry) want(locked.name, locked.version);
+  for (const pin of pins) want("pnpm", pin.version);
+  const documents = new Map<string, RegistryDocument>();
+  await forEachLimited([...wanted], concurrency, async ([name, versions]) => {
     documents.set(
       name,
-      await fetchPublishTimes(name, fetchImpl, timeoutMs, attempts, retryDelayMs),
+      await fetchDocument(name, versions, fetchImpl, timeoutMs, attempts, retryDelayMs),
     );
   });
 
@@ -281,32 +835,62 @@ export async function checkReleaseAge(
       });
       continue;
     }
-    const document = documents.get(locked.name) ?? { error: "registry request failed" };
-    if ("error" in document) {
-      problems.push({ package: locked.key, reason: "unverified", detail: document.error });
-      continue;
-    }
-    const problem = ageProblem(document.times[locked.version], now, minAgeMs);
+    const digest = sriDigest(locked.integrity ?? "");
+    const problem =
+      digest === undefined
+        ? { reason: "unverified" as const, detail: "the lockfile's integrity cannot be read" }
+        : versionProblem(
+            documents.get(locked.name),
+            locked.version,
+            digest,
+            "the lockfile's integrity",
+            now,
+            minAgeMs,
+          );
     if (problem) problems.push({ package: locked.key, ...problem });
+  }
+  for (const pin of pins) {
+    // Without a hash, corepack and pnpm/action-setup fetch the version from
+    // the registry, so its publish time is what counts.
+    const digest = pin.sha512 === undefined ? undefined : { algorithm: "sha512", hex: pin.sha512 };
+    const what = `the hash in ${pin.field}`;
+    const problem = versionProblem(documents.get("pnpm"), pin.version, digest, what, now, minAgeMs);
+    if (problem) {
+      problems.push({
+        package: `pnpm@${pin.version}`,
+        reason: problem.reason,
+        detail: `${pin.field} in package.json: ${problem.detail}`,
+      });
+    }
   }
 
   const accepted = new Set(exceptions.map((exception) => exception.package));
-  const failures = problems.filter((problem) => !accepted.has(problem.package)).sort(byPackage);
+  const isExcepted = (problem: Failure) =>
+    problem.reason !== "mismatch" && accepted.has(problem.package);
+  const failures = problems.filter((problem) => !isExcepted(problem)).sort(byPackage);
   const excepted = problems
-    .filter((problem) => accepted.has(problem.package))
+    .filter(isExcepted)
     .map((problem) => ({ package: problem.package, detail: problem.detail }))
     .sort(byPackage);
-  const used = new Set(excepted.map((entry) => entry.package));
+  const used = new Set(problems.map((problem) => problem.package));
   const unusedExceptions = exceptions
     .map((exception) => exception.package)
     .filter((key) => !used.has(key))
     .sort();
-  return { checked: packages.length, failures, excepted, unusedExceptions };
+  return {
+    checked: packages.length + pins.length,
+    packageManager: pins,
+    failures,
+    excepted,
+    unusedExceptions,
+  };
 }
 
 export interface MainOptions extends CheckOptions {
   /** The lockfile's text; by default pnpm-lock.yaml at the repository root. */
   lockfile?: string;
+  /** By default package.json at the repository root. */
+  packageJson?: string;
   log?: (line: string) => void;
   error?: (line: string) => void;
 }
@@ -315,6 +899,7 @@ const LABELS: Record<Failure["reason"], string> = {
   too_young: "too young",
   not_registry: "not checked",
   unverified: "not verified",
+  mismatch: "integrity mismatch",
 };
 
 export async function main(options: MainOptions = {}): Promise<number> {
@@ -324,12 +909,14 @@ export async function main(options: MainOptions = {}): Promise<number> {
   const minAgeDays = options.minAgeDays ?? MIN_AGE_DAYS;
   const lockfile =
     options.lockfile ?? readFileSync(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
+  const packageJson =
+    options.packageJson ?? readFileSync(new URL("../package.json", import.meta.url), "utf8");
 
   let result: CheckResult;
   try {
-    result = await checkReleaseAge(lockfile, { ...options, now, minAgeDays });
+    result = await checkReleaseAge(lockfile, { ...options, packageJson, now, minAgeDays });
   } catch (cause) {
-    if (!(cause instanceof LockfileError)) throw cause;
+    if (!(cause instanceof LockfileError || cause instanceof PackageJsonError)) throw cause;
     error(`error: ${cause.message}`);
     return 1;
   }
@@ -342,12 +929,20 @@ export async function main(options: MainOptions = {}): Promise<number> {
   }
   if (result.failures.length > 0) {
     error(
-      `error: ${result.failures.length} of ${result.checked} locked package versions fail the ${minAgeDays}-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts`,
+      `error: ${result.failures.length} of ${result.checked} package versions fail the ${minAgeDays}-day release age check; re-resolve them or add a commented exception in scripts/check-release-age.ts`,
     );
     return 1;
   }
+  const pinned = new Map<string, string[]>();
+  for (const pin of result.packageManager) {
+    pinned.set(pin.version, [...(pinned.get(pin.version) ?? []), pin.field]);
+  }
+  const locked = result.checked - result.packageManager.length;
+  const pnpm = [...pinned].map(
+    ([version, fields]) => ` and pnpm ${version} (${fields.join(", ")})`,
+  );
   log(
-    `ok: all ${result.checked} locked package versions were published at least ${minAgeDays} days before ${now.toISOString()}`,
+    `ok: all ${locked} locked package versions${pnpm.join("")} were published at least ${minAgeDays} days before ${now.toISOString()}`,
   );
   return 0;
 }
