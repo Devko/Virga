@@ -2237,6 +2237,94 @@ describe("CI workflow", () => {
     expect(gateProblems(aliased)).toEqual([at(10)]);
   });
 
+  /**
+   * actions/setup-node steps that do not take the Node.js version from .nvmrc
+   * (TM-32): each must give node-version-file: .nvmrc and no node-version,
+   * which setup-node prefers. A step's lines run from its "- " at indent 6 to
+   * the next line indented less than 8.
+   */
+  function nodeProblems(text: string): string[] {
+    const lines = text.split(/\r\n|\r|\n/);
+    const problems: string[] = [];
+    for (const [index, line] of lines.entries()) {
+      if (!line.includes("actions/setup-node@")) continue;
+      let start = index;
+      while (start > 0 && !/^ {6}- /.test(lines[start] ?? "")) start--;
+      let end = index + 1;
+      while (end < lines.length && /^(?: {8}|\s*$)/.test(lines[end] ?? "")) end++;
+      const step = lines.slice(start, end).join("\n");
+      if (
+        !/^ {6}- uses: actions\/setup-node@|^ {8}uses: actions\/setup-node@/.test(line) ||
+        !/^ {10}node-version-file: \.nvmrc$/m.test(step) ||
+        /^ {10}node-version:/m.test(step)
+      ) {
+        problems.push(
+          `line ${index + 1}: actions/setup-node does not take the version from .nvmrc`,
+        );
+      }
+    }
+    return problems;
+  }
+
+  it("TM-32: .nvmrc pins an exact Node.js version of at least 22.18, and every setup-node reads it", () => {
+    const pinned = readFileSync(join(REPO_ROOT, ".nvmrc"), "utf8");
+    const [, major = "", minor = ""] = /^(\d+)\.(\d+)\.\d+\n$/.exec(pinned) ?? [];
+    expect(pinned).toMatch(/^\d+\.\d+\.\d+\n$/);
+    expect(Number(major) > 22 || (Number(major) === 22 && Number(minor) >= 18)).toBe(true);
+    const steps = readdirSync(WORKFLOWS).flatMap((file) =>
+      nodeProblems(readFileSync(join(WORKFLOWS, file), "utf8")).map((p) => `${file} ${p}`),
+    );
+    expect(steps).toEqual([]);
+    expect(workflow.match(/uses: actions\/setup-node@/g)).toHaveLength(3);
+  });
+
+  it("TM-32: flags a setup-node step that does not read .nvmrc", () => {
+    const sha = "0".repeat(40);
+    const node = (step: string[]) =>
+      nodeProblems(
+        ["jobs:", "  check:", "    steps:", ...step, "      - run: node -v", ""].join("\n"),
+      );
+    const NOT = "line 4: actions/setup-node does not take the version from .nvmrc";
+    expect(node([`      - uses: actions/setup-node@${sha}`])).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version: 22",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          node-version: 23",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with: {node-version-file: .nvmrc}",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        "      - name: Node",
+        `        uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+      ]),
+    ).toEqual([]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          cache: pnpm",
+      ]),
+    ).toEqual([]);
+  });
+
   it("R8-05: deploy-dry-run needs release-age and check, so one green status covers rules:check", () => {
     const deploy = jobs(workflow).get("deploy-dry-run") ?? "";
     expect(deploy).toContain("- run: node scripts/deploy.ts --dry-run\n");
