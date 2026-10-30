@@ -40,6 +40,14 @@ import type {
   ScanGraph,
 } from "./scan/types.ts";
 
+/** A scan's status, and the scan that is current in the graph. */
+const scanRow = (db: SqlRunner, scanId: string) =>
+  db.query<{ status: ScanEnd | "running"; current: string | null }>(
+    `SELECT status, (SELECT value FROM meta WHERE key = 'current_scan') AS current
+     FROM scans WHERE id = ?`,
+    scanId,
+  )[0];
+
 /**
  * Scan-scoped writes come only from the running scan that is current in the
  * graph (R2-07). A scan marked failed as stale, or one a newer scan took
@@ -51,13 +59,6 @@ function assertCurrent(db: SqlRunner, scanId: string): void {
   const row = scanRow(db, scanId);
   if (row?.status !== "running" || row.current !== scanId) throw new StaleScanError(scanId);
 }
-
-const scanRow = (db: SqlRunner, scanId: string) =>
-  db.query<{ status: ScanEnd | "running"; current: string | null }>(
-    `SELECT status, (SELECT value FROM meta WHERE key = 'current_scan') AS current
-     FROM scans WHERE id = ?`,
-    scanId,
-  )[0];
 
 /**
  * The security graph of one scanned account. One instance per account, named
