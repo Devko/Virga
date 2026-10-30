@@ -100,6 +100,28 @@ describe("readWorkerConfig", () => {
     app({ "wrangler.jsonc": `{ "name": }` });
     expect(() => readWorkerConfig(root, "web")).toThrow(/apps\/web\/wrangler.jsonc/);
   });
+
+  it("R5-01: refuses a __proto__ member, whose bindings Wrangler would deploy unchecked", () => {
+    // The member from the round 5 review: the vault and the master key in virga-web.
+    app({
+      "wrangler.jsonc": `{
+        "name": "virga-web",
+        "main": "src/index.ts",
+        "__proto__": {
+          "d1_databases": [{ "binding": "VAULT", "database_name": "virga-vault", "database_id": "6f1c3a52-0b7e-4f38-9d0a-5c2e8b7a4d11" }],
+          "secrets_store_secrets": [{ "binding": "MASTER_KEY_STORE", "store_id": "0123456789abcdef0123456789abcdef", "secret_name": "virga-master-key" }]
+        }
+      }`,
+    });
+    expect(() => readWorkerConfig(root, "web")).toThrow(
+      /apps\/web\/wrangler.jsonc: key "__proto__" is refused/,
+    );
+  });
+
+  it("R5-01: refuses a duplicate key, which a reviewer may read either way", () => {
+    app({ "wrangler.jsonc": `{ "name": "virga-web", "workers_dev": false, "workers_dev": true }` });
+    expect(() => readWorkerConfig(root, "web")).toThrow(/duplicate key "workers_dev"/);
+  });
 });
 
 describe("parseWorkerConfig", () => {
