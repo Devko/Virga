@@ -10,7 +10,7 @@ The web Worker (D-06): the SPA, a JSON API under `/api` and an MCP server at `/m
 | --- | --- |
 | `ACCESS_TEAM_DOMAIN` | `https://<team-name>.cloudflareaccess.com` |
 | `ACCESS_AUD` | The Application Audience (AUD) tag of the Access application |
-| `ADMIN_EMAILS` | Comma-separated emails that may onboard accounts and start scans |
+| `ADMIN_EMAILS` | Comma-separated emails that may onboard and remove accounts and start scans |
 | `REQUIRE_ACCESS_CONTEXT` | `"false"` (see below) |
 
 Until `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` hold real values, every request answers 403.
@@ -50,12 +50,15 @@ The identity comes from the token: `email` for users, `common_name` (the client 
 | `GET /api/accounts/{id}/neighborhood?node=&depth=&limit=` | Graph around a node; `depth` 1 or 2, `limit` 1 to 500 (default 100) |
 | `POST /api/accounts` | Admin: onboarding, body `{ accountId, token, profile, name?, cadenceHours? }` |
 | `POST /api/accounts/{id}/scan` | Admin: start a scan now |
+| `DELETE /api/accounts/{id}` | Admin: remove the account (offboarding), body `{ confirm: "<id>" }` |
 
 An account that is not in the index answers 404; a failed RPC answers 502 `upstream_error` without detail. Responses are JSON with `Cache-Control: no-store`.
 
 Onboarding calls `TokenIntake.store` first and `Admin.addAccount` only when the broker stored the token. The response rebuilds the broker's result field by field and replaces any occurrence of the submitted token with `[redacted]`. The token is not logged, not echoed and not kept: errors are logged by name only.
 
-POST requests need `Content-Type: application/json`, an `Origin` equal to the Worker's own origin, and no `Sec-Fetch-Site` other than `same-origin`. Bodies are capped at 16 KB.
+Removal (offboarding) needs the body `{ "confirm": "<account ID>" }`, so a request that names no account removes nothing (400 `confirmation_required`). It calls `TokenIntake.remove` first, which deletes the stored token and clears the account's rate budget, so a scan that still runs gets no more API access. Then it calls `Admin.removeAccount`, which deletes the index rows and the account's graph. The answer reports both: `{ token: { removed }, account: { removed } }`, where `removed` is false when there was nothing left to delete. When the broker fails, core is not called: 502 `token_not_removed`. When core fails, the answer is 502 `account_not_removed` with the token result. Both calls are idempotent, so the same request finishes a partial removal. Virga never writes to a scanned account, so the account owner still revokes the token there.
+
+POST and DELETE requests need `Content-Type: application/json`, an `Origin` equal to the Worker's own origin, and no `Sec-Fetch-Site` other than `same-origin`. Bodies are capped at 16 KB.
 
 Every response carries `Content-Security-Policy` (`default-src 'none'`, scripts, styles, images and fonts from `'self'`, `frame-ancestors 'none'`, `base-uri 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, COOP and CORP `same-origin`, and HSTS.
 
@@ -82,7 +85,6 @@ React and Vite under `spa/`, built to `dist/client`: accounts, account summary w
 
 - No per-account access control: every identity that passes Access sees every account. Admin is a flat email list.
 - `ctx.access` is not available to a Worker with static assets (above).
-- `GraphReader.listAccounts` is a requested change to core; until it exists, `GET /api/accounts` and `list_accounts` fail with 502.
 - Worker-level Access does not support WebSockets; the MCP handler uses HTTP only.
 - The RPC types in `src/rpc.ts` mirror core and the broker by hand, because service bindings to other Workers are typed only as `Service`.
 

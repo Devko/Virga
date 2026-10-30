@@ -167,9 +167,9 @@ export interface IntakeResult {
   retryable: boolean;
 }
 
-/** Every method answers null for an account that is not in the index. */
+/** Every method but `listAccounts` answers null for an account that is not in the index. */
 export interface GraphReaderRpc {
-  /** Requested from core (contract change): every account in the index. */
+  /** Every account in the index, by name, then ID; at most 1,000. */
   listAccounts(): Promise<AccountRow[]>;
   getScanSummary(accountId: string): Promise<ScanSummaryView | null>;
   listFindings(accountId: string, filters?: FindingFilters): Promise<FindingPage | null>;
@@ -181,13 +181,22 @@ export interface GraphReaderRpc {
   ): Promise<Neighborhood | null>;
 }
 
+/** `removed`: Admin, the account was in the index; TokenIntake, a token was stored. */
+export interface RemoveResult {
+  removed: boolean;
+}
+
 export interface AdminRpc {
   addAccount(input: NewAccount): Promise<AccountRow>;
   triggerScan(accountId: string): Promise<TriggerResult>;
+  /** Deletes the index rows, then the account's graph. Idempotent. */
+  removeAccount(accountId: string): Promise<RemoveResult>;
 }
 
 export interface TokenIntakeRpc {
   store(accountId: string, token: string, profile: Profile): Promise<IntakeResult>;
+  /** Deletes the stored token, then clears the account's rate budget. Idempotent. */
+  remove(accountId: string): Promise<RemoveResult>;
 }
 
 /** Cloudflare account IDs, as core and the broker accept them. */

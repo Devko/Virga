@@ -11,12 +11,14 @@ import type {
 } from "../src/rpc.ts";
 import {
   ACCOUNT,
+  ACCOUNT_REMOVAL_FAILS,
   accounts,
   detail,
   findings,
   hugeNeighborhood,
   neighborhood,
   summary,
+  TOKEN_REMOVAL_FAILS,
 } from "./fixtures.ts";
 
 /**
@@ -86,6 +88,12 @@ export class StubAdmin extends WorkerEntrypoint<Env> implements AdminRpc {
       return { started: false as const, reason: "unknown_account" as const, id: null };
     return { started: true as const, id: `scan-${accountId}-202610290715-manual` };
   }
+
+  async removeAccount(accountId: string) {
+    record("removeAccount", [accountId]);
+    if (accountId === ACCOUNT_REMOVAL_FAILS) throw new Error("index unavailable");
+    return { removed: known(accountId) };
+  }
 }
 
 /** Tokens starting with `reject` fail the write check with a message that quotes the token. */
@@ -106,5 +114,11 @@ export class StubTokenIntake extends WorkerEntrypoint<Env> implements TokenIntak
       removed: false,
       retryable: false,
     };
+  }
+
+  async remove(accountId: string) {
+    record("remove", [accountId]);
+    if (accountId === TOKEN_REMOVAL_FAILS) throw new Error(`vault unavailable for ${accountId}`);
+    return { removed: known(accountId) || accountId === ACCOUNT_REMOVAL_FAILS };
   }
 }
