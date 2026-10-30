@@ -395,6 +395,93 @@ describe("TM-04: one recheck per account at a time", () => {
   });
 });
 
+/** The token rolled: a new secret under the same token ID. Synthetic, like TEST_TOKEN. */
+const ROLLED_TOKEN = TEST_TOKEN.replace("LEAKCANARY", "ROLLCANARY");
+
+/** Stores `token` for the account under the same token ID, as `TokenIntake.store` does. */
+async function storeAgain(id: string, token: string, now: number, expiresOn: string) {
+  await putToken(env.VAULT, await loadMasterKey(env), {
+    accountId: id,
+    tokenId: TOKEN_ID,
+    profile: "inventory",
+    token,
+    expiresOn,
+    now,
+  });
+}
+
+describe("R10 hardening: broker same token ID", () => {
+  it("R10 hardening: broker same token ID: a store during a failing recheck keeps the new token", async () => {
+    const id = await stored(RECHECK_AFTER_MS);
+    let storedAt = 0;
+    const { calls } = cloudflare(
+      id,
+      { policies: [policy([...INVENTORY_GROUPS, "DNS Write"], accountResource(id))] },
+      {
+        // The token is rolled and stored again while the old secret's check runs.
+        [verify(id)]: async () => {
+          storedAt = Date.now();
+          await storeAgain(id, ROLLED_TOKEN, storedAt, inDays(30));
+          return json(200, ok(verifyResult()));
+        },
+      },
+    );
+    const response = await api.get(id, queues(id));
+    expect(response.status).toBe(401);
+    expect(response.body.errors[0]?.code).toBe(RECHECK_FAILED_CODE);
+    expect(sent(calls)).toEqual([verify(id), details(id)]);
+    // The old secret failed; the new token stays with its own check time.
+    expect(await getEntry(env.VAULT, id)).toMatchObject({
+      checkedAt: storedAt,
+      recheckUntil: null,
+    });
+
+    // The next call uses the new token, which its store checked.
+    expect((await api.get(id, queues(id))).status).toBe(200);
+    expect(sent(calls).slice(2)).toEqual([`GET ${queues(id)}`]);
+    expect(calls[2]?.authorization).toBe(`Bearer ${ROLLED_TOKEN}`);
+  });
+
+  it("R10 hardening: broker same token ID: a store during a passing recheck leaves the new token due for its own check", async () => {
+    const id = await stored(RECHECK_AFTER_MS);
+    const expiry = inDays(10);
+    let storedAt = 0;
+    const { calls } = cloudflare(
+      id,
+      {},
+      {
+        // The token is rolled and stored again while the old secret's check runs,
+        // with a check time that makes it due.
+        [verify(id)]: async () => {
+          if (storedAt === 0) {
+            storedAt = Date.now() - RECHECK_AFTER_MS;
+            await storeAgain(id, ROLLED_TOKEN, storedAt, expiry);
+          }
+          return json(200, ok(verifyResult()));
+        },
+      },
+    );
+    // The old secret passed its check, so this call is served with it.
+    expect((await api.get(id, queues(id))).status).toBe(200);
+    expect(sent(calls)).toEqual([verify(id), details(id), `GET ${queues(id)}`]);
+    expect(calls.map((c) => c.authorization)).toEqual(Array(3).fill(`Bearer ${TEST_TOKEN}`));
+    // Its pass is not recorded on the new token: check time and expiry are the new token's.
+    expect(await getEntry(env.VAULT, id)).toMatchObject({
+      checkedAt: storedAt,
+      expiresOn: expiry,
+      recheckUntil: null,
+    });
+
+    // The next call checks the new token before it uses it.
+    expect((await api.get(id, queues(id))).status).toBe(200);
+    expect(sent(calls).slice(3)).toEqual([verify(id), details(id), `GET ${queues(id)}`]);
+    expect(calls.slice(3).map((c) => c.authorization)).toEqual(
+      Array(3).fill(`Bearer ${ROLLED_TOKEN}`),
+    );
+    expect((await getEntry(env.VAULT, id))?.checkedAt).toBeGreaterThan(storedAt);
+  });
+});
+
 describe("TM-04: the recheck goes through the allowlist and the rate budget", () => {
   it("TM-04: the recheck's calls are allowlisted reads and count against the rate budget", async () => {
     const id = await stored(RECHECK_AFTER_MS);

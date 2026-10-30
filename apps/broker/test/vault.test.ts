@@ -164,7 +164,7 @@ describe("vault in D1", () => {
   it("TM-04: does not claim a token that was checked again or replaced", async () => {
     await store(ACCOUNT_ID);
     const seen = await entryOf(ACCOUNT_ID);
-    await markChecked(env.VAULT, ACCOUNT_ID, TOKEN_ID, "2026-12-15T00:00:00Z", 3_000);
+    await markChecked(env.VAULT, ACCOUNT_ID, seen, "2026-12-15T00:00:00Z", 3_000);
     expect(await claimRecheck(env.VAULT, seen, 4_000, 9_000)).toBe(false);
     const checked = await entryOf(ACCOUNT_ID);
     expect(checked).toMatchObject({ checkedAt: 3_000, expiresOn: "2026-12-15T00:00:00Z" });
@@ -172,7 +172,7 @@ describe("vault in D1", () => {
     expect(await claimRecheck(env.VAULT, replaced, 4_000, 9_000)).toBe(false);
     expect(await claimRecheck(env.VAULT, checked, 4_000, 9_000)).toBe(true);
     // A passed check clears the claim, and so does storing a token.
-    await markChecked(env.VAULT, ACCOUNT_ID, TOKEN_ID, null, 6_000);
+    await markChecked(env.VAULT, ACCOUNT_ID, checked, null, 6_000);
     expect((await entryOf(ACCOUNT_ID)).recheckUntil).toBeNull();
     expect(await claimRecheck(env.VAULT, await entryOf(ACCOUNT_ID), 7_000, 9_000)).toBe(true);
     await store(ACCOUNT_ID);
@@ -181,13 +181,45 @@ describe("vault in D1", () => {
 
   it("TM-04: leaves a replaced token alone when given the old token ID", async () => {
     await store(ACCOUNT_ID);
-    const other = "0".repeat(32);
-    await markChecked(env.VAULT, ACCOUNT_ID, other, null, 5_000);
+    const seen = await entryOf(ACCOUNT_ID);
+    const other = { ...seen, tokenId: "0".repeat(32) };
+    expect(await markChecked(env.VAULT, ACCOUNT_ID, other, null, 5_000)).toBe(false);
     expect((await entryOf(ACCOUNT_ID)).checkedAt).toBe(1_000);
     expect(await deleteToken(env.VAULT, ACCOUNT_ID, other)).toBe(false);
     expect(await getEntry(env.VAULT, ACCOUNT_ID)).not.toBeNull();
-    expect(await deleteToken(env.VAULT, ACCOUNT_ID, TOKEN_ID)).toBe(true);
+    expect(await deleteToken(env.VAULT, ACCOUNT_ID, seen)).toBe(true);
     expect(await getEntry(env.VAULT, ACCOUNT_ID)).toBeNull();
+  });
+
+  it("R10 hardening: broker same token ID: a token stored again is not claimed, marked or deleted for the old one", async () => {
+    await store(ACCOUNT_ID);
+    const seen = await entryOf(ACCOUNT_ID);
+    // Stored again under the same token ID, here even with the same check time.
+    await store(ACCOUNT_ID);
+    const again = await entryOf(ACCOUNT_ID);
+    expect(again).toMatchObject({ tokenId: seen.tokenId, checkedAt: seen.checkedAt });
+    expect(again.ciphertext).not.toEqual(seen.ciphertext);
+    expect(await claimRecheck(env.VAULT, seen, 2_000, 5_000)).toBe(false);
+    expect(await markChecked(env.VAULT, ACCOUNT_ID, seen, null, 3_000)).toBe(false);
+    expect(await deleteToken(env.VAULT, ACCOUNT_ID, seen)).toBe(false);
+    expect(await entryOf(ACCOUNT_ID)).toEqual(again);
+    // The token that is stored is matched.
+    expect(await claimRecheck(env.VAULT, again, 2_000, 5_000)).toBe(true);
+    expect(await markChecked(env.VAULT, ACCOUNT_ID, again, null, 3_000)).toBe(true);
+    expect(await entryOf(ACCOUNT_ID)).toMatchObject({ checkedAt: 3_000, recheckUntil: null });
+    expect(await deleteToken(env.VAULT, ACCOUNT_ID, again)).toBe(true);
+  });
+
+  it("R10 hardening: broker same token ID: a master key rotation keeps the match", async () => {
+    await store(ACCOUNT_ID);
+    const seen = await entryOf(ACCOUNT_ID);
+    const v1 = await importMasterKey(TEST_MASTER_KEY, 1);
+    const v2 = await importMasterKey(NEXT_MASTER_KEY, 2);
+    expect(await rotateMasterKey(env.VAULT, v1, v2)).toEqual({ rotated: 1 });
+    // A recheck that read the row before the rotation still acts on its token.
+    expect(await claimRecheck(env.VAULT, seen, 2_000, 5_000)).toBe(true);
+    expect(await markChecked(env.VAULT, ACCOUNT_ID, seen, null, 3_000)).toBe(true);
+    expect(await deleteToken(env.VAULT, ACCOUNT_ID, seen)).toBe(true);
   });
 
   it("rotates the master key for every row", async () => {

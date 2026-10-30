@@ -37,6 +37,23 @@ const ALLOWED = [
 const around = (c: number) => `a${String.fromCodePoint(c)}b@example.com`;
 const hex = (c: number) => `U+${c.toString(16).toUpperCase().padStart(4, "0")}`;
 
+// Strings that are not well-formed Unicode (R10 hardening): a lone high or low
+// surrogate at the start, in the middle, at the end and alone, and pairs in the
+// wrong order. D1 stored one as U+FFFD in miniflare.
+const LONE = [
+  ...[0xd800, 0xdbff, 0xdc00, 0xdfff].flatMap((c) => {
+    const s = String.fromCharCode(c);
+    return [`${s}ab@example.com`, `a${s}b@example.com`, `ab@example.com${s}`, s];
+  }),
+  "a\udc00\ud800b@example.com",
+  "a\ud800\ud800b@example.com",
+  "a\ude00\ud83d@example.com",
+];
+// Surrogate pairs in the same places are characters (U+1F600, U+10000, U+10FFFF).
+const PAIRED = ["\u{1f600}ab@example.com", "a\u{10000}b@example.com", "ab@example.com\u{10ffff}"];
+// String.prototype.isWellFormed (ES2024): the runtime has it, the es2023 lib does not declare it.
+const wellFormed = (s: string) => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
+
 /** Whether core's audit trail stores `identity`. */
 function coreStores(identity: string): boolean {
   try {
@@ -73,6 +90,8 @@ describe("identity rule (R9-04)", () => {
       "e367826f93b8d71185e03fe518aff3b4.access",
       `${"a".repeat(MAX_IDENTITY - 12)}@example.com`,
       `${"a".repeat(MAX_IDENTITY - 11)}@example.com`,
+      ...LONE,
+      ...PAIRED,
     ];
     for (const value of cases) {
       expect(isIdentity(value), JSON.stringify(value)).toBe(coreStores(value));
@@ -80,6 +99,19 @@ describe("identity rule (R9-04)", () => {
     expect(MAX_IDENTITY).toBe(320);
     for (const c of REFUSED) expect(isIdentity(around(c)), hex(c)).toBe(false);
     for (const c of ALLOWED) expect(isIdentity(around(c)), hex(c)).toBe(true);
+  });
+
+  it("R10 hardening: identity well-formed: refuses lone surrogates in each position, as core does", () => {
+    for (const value of LONE) {
+      expect(wellFormed(value), JSON.stringify(value)).toBe(false);
+      expect(isIdentity(value), JSON.stringify(value)).toBe(false);
+      expect(coreStores(value), JSON.stringify(value)).toBe(false);
+    }
+    for (const value of PAIRED) {
+      expect(wellFormed(value), JSON.stringify(value)).toBe(true);
+      expect(isIdentity(value), JSON.stringify(value)).toBe(true);
+      expect(coreStores(value), JSON.stringify(value)).toBe(true);
+    }
   });
 
   it("refuses an email core cannot store with 403, records nothing and logs only a reason", async () => {
@@ -96,6 +128,9 @@ describe("identity rule (R9-04)", () => {
       "a\u202eb@example.com",
       "a\u2066b@example.com",
       "a\ufeffb@example.com",
+      // Lone surrogates (R10 hardening), escaped in the token's JSON.
+      "a\ud800b@example.com",
+      "a\udfffb@example.com",
       // 321 characters, and 332 once lowercased (U+0130 becomes two code units).
       `${"a".repeat(309)}@example.com`,
       `${"\u0130".repeat(160)}@example.com`,

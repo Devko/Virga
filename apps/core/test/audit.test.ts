@@ -91,6 +91,11 @@ describe("tool audit trail", () => {
       [{ identity: "eve@example.com\nadmin@example.com" }, /identity/],
       [{ identity: `eve${RLO}@example.com` }, /identity/],
       [{ identity: "eve @example.com" }, /identity/],
+      // R10 hardening: identity well-formed. Lone surrogates, which D1 stored as U+FFFD.
+      [{ identity: "eve\ud800@example.com" }, /identity/],
+      [{ identity: "eve\udc00@example.com" }, /identity/],
+      [{ identity: "\udbffeve@example.com" }, /identity/],
+      [{ identity: "eve@example.com\udfff" }, /identity/],
       [{ identityType: "user" as "email" }, /identity type/],
       [{ channel: "web" as "ui" }, /channel/],
       [{ action: "" }, /action/],
@@ -115,6 +120,10 @@ describe("tool audit trail", () => {
     expect(longest).toHaveLength(320);
     await admin.recordToolCall(entry({ identity: longest }));
     expect(await count("identity = ?", longest)).toBe(1);
+    // A surrogate pair is a character, and reads back as written.
+    const paired = "eve\u{1f600}@example.com";
+    await admin.recordToolCall(entry({ identity: paired }));
+    expect(await count("identity = ?", paired)).toBe(1);
   });
 
   it("checks the bounds in the table too", async () => {
