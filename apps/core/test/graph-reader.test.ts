@@ -247,6 +247,9 @@ describe("GraphReader", () => {
       },
       exposure: { public: 1, unknown: 1 },
       rules: { evaluated: 1 },
+      ruleRuns: [
+        { ruleId: "CF-001", status: "evaluated", hits: 1, undecided: 0, missing: [], error: null },
+      ],
     });
   });
 
