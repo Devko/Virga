@@ -23,7 +23,23 @@ export interface VaultEntry {
   recheckUntil: number | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * The token's ciphertext, which tells this stored token apart from any
+   * other. Every store seals the token with a fresh data key and IV, so a
+   * token stored again, even the same secret under the same token ID, gets
+   * another ciphertext; a master key rotation rewraps only the data key and
+   * keeps it. A recheck matches the row on it (`SeenToken`).
+   */
+  ciphertext: Uint8Array<ArrayBuffer>;
 }
+
+/**
+ * The token a recheck read: its ID and its ciphertext. `claimRecheck`,
+ * `markChecked` and `deleteToken` act on the row only while it still holds
+ * this token, so a token stored meanwhile, even under the same token ID, is
+ * neither claimed, marked as checked nor deleted for the old one.
+ */
+export type SeenToken = Pick<VaultEntry, "tokenId" | "ciphertext">;
 
 interface Row {
   account_id: string;
@@ -51,6 +67,7 @@ const entryOf = (row: Row): VaultEntry => ({
   recheckUntil: row.recheck_until ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  ciphertext: new Uint8Array(row.token_ciphertext),
 });
 
 // D1 returns BLOB columns as arrays of numbers.
@@ -130,9 +147,9 @@ export async function getToken(
 
 /**
  * Claims the recheck of a token for one call (TM-04). It succeeds only while
- * the row still holds the token and check time the caller saw, and no other
- * claim runs. A claim lapses at `until`, so a call that dies does not block
- * the account.
+ * the row still holds the token (`SeenToken`) and check time the caller saw,
+ * and no other claim runs. A claim lapses at `until`, so a call that dies does
+ * not block the account.
  */
 export async function claimRecheck(
   db: D1Database,
@@ -143,10 +160,10 @@ export async function claimRecheck(
   const result = await db
     .prepare(
       `UPDATE vault_tokens SET recheck_until = ?
-       WHERE account_id = ? AND token_id = ? AND checked_at = ?
+       WHERE account_id = ? AND token_id = ? AND token_ciphertext = ? AND checked_at = ?
          AND (recheck_until IS NULL OR recheck_until <= ?)`,
     )
-    .bind(until, seen.accountId, seen.tokenId, seen.checkedAt, now)
+    .bind(until, seen.accountId, seen.tokenId, seen.ciphertext, seen.checkedAt, now)
     .run();
   return result.meta.changes > 0;
 }
@@ -165,38 +182,46 @@ export async function releaseRecheck(
     .run();
 }
 
-/** Records a passed recheck of the token `tokenId`, and ends any claim. */
+/**
+ * Records a passed recheck of the token `seen`, and ends any claim. Only
+ * while the row still holds that token: one stored meanwhile keeps its own
+ * check time and expiry. Returns whether the row was updated.
+ */
 export async function markChecked(
   db: D1Database,
   accountId: string,
-  tokenId: string,
+  seen: SeenToken,
   expiresOn: string | null,
   now: number,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .prepare(
       `UPDATE vault_tokens SET expires_on = ?, checked_at = ?, recheck_until = NULL, updated_at = ?
-       WHERE account_id = ? AND token_id = ?`,
+       WHERE account_id = ? AND token_id = ? AND token_ciphertext = ?`,
     )
-    .bind(expiresOn, now, now, accountId, tokenId)
+    .bind(expiresOn, now, now, accountId, seen.tokenId, seen.ciphertext)
     .run();
+  return result.meta.changes > 0;
 }
 
 /**
- * Deletes the token of an account. With `tokenId`, only that token, so a
- * failed recheck does not delete a token stored meanwhile.
+ * Deletes the token of an account. With `seen`, only while the row still
+ * holds that token, so a failed recheck does not delete a token stored
+ * meanwhile, even under the same token ID.
  */
 export async function deleteToken(
   db: D1Database,
   accountId: string,
-  tokenId?: string,
+  seen?: SeenToken,
 ): Promise<boolean> {
   const statement =
-    tokenId === undefined
+    seen === undefined
       ? db.prepare("DELETE FROM vault_tokens WHERE account_id = ?").bind(accountId)
       : db
-          .prepare("DELETE FROM vault_tokens WHERE account_id = ? AND token_id = ?")
-          .bind(accountId, tokenId);
+          .prepare(
+            "DELETE FROM vault_tokens WHERE account_id = ? AND token_id = ? AND token_ciphertext = ?",
+          )
+          .bind(accountId, seen.tokenId, seen.ciphertext);
   const result = await statement.run();
   return result.meta.changes > 0;
 }

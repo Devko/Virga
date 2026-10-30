@@ -142,7 +142,11 @@ export async function writeCheck(
 
 /**
  * Runs the write check again on a stored token. A token that fails is
- * deleted; one whose check got no answer is kept unchanged.
+ * deleted; one whose check got no answer is kept unchanged. The pass or the
+ * deletion applies only while the vault row still holds the token that was
+ * read (`SeenToken`: token ID and ciphertext), so a token rolled and stored
+ * again meanwhile, under the same token ID too, is neither deleted nor marked
+ * as checked by this recheck.
  */
 export async function recheckToken(
   env: BrokerEnv,
@@ -159,11 +163,11 @@ export async function recheckToken(
     check.reasons.push(mismatch);
   }
   if (check.ok) {
-    await markChecked(env.VAULT, entry.accountId, entry.tokenId, check.expiresOn, Date.now());
+    await markChecked(env.VAULT, entry.accountId, entry, check.expiresOn, Date.now());
     return { ...check, stored: true, removed: false };
   }
   if (check.retryable) return { ...check, stored: true, removed: false };
-  const removed = await deleteToken(env.VAULT, entry.accountId, entry.tokenId);
+  const removed = await deleteToken(env.VAULT, entry.accountId, entry);
   return { ...check, stored: false, removed };
 }
 
