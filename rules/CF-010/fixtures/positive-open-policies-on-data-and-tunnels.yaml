@@ -23,15 +23,15 @@ nodes:
   - type: access_app
     id: app-admin
     name: Admin
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-grafana
     name: Grafana
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: grafana.example.net, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: grafana.example.net, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-docs
     name: Docs
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: docs.example.org, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: docs.example.org, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_group
     id: grp-all
     name: All users

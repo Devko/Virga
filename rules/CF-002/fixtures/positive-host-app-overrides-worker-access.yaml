@@ -16,19 +16,19 @@ nodes:
   - type: access_app
     id: wa-api
     name: api (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: api, scope: all }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: api, scope: all, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: wa-shop
     name: shop (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: shop, scope: all }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: shop, scope: all, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: ha-public
     name: API public paths
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: /public }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: /public, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: ha-wildcard
     name: Everything under example.com
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_policy
     id: pol-staff
     name: Staff

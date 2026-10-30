@@ -28,23 +28,23 @@ nodes:
   - type: access_app
     id: app-static
     name: Static
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: static.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: static.example.com, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-wild
     name: Wildcard
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-gradual
     name: Gradual
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: gradual.example.org, path: /admin }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: gradual.example.org, path: /admin, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-site
     name: Site
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: site.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: site.example.org, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-data
     name: Data
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: data.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: data.example.org, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_policy
     id: pol-everyone
     name: Everyone

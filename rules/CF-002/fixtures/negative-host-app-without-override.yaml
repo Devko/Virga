@@ -16,23 +16,23 @@ nodes:
   - type: access_app
     id: ha-plain
     name: plain bypass
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: plain.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: plain.example.com, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: wa-deep
     name: deep (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: deep, scope: all }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: deep, scope: all, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: ha-wildcard
     name: Everything one level under example.com
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.com", path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: wa-strict
     name: strict (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: strict, scope: all }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: strict, scope: all, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: ha-strict
     name: strict host
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: strict.example.org, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: strict.example.org, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_policy
     id: pol-bypass
     name: Public

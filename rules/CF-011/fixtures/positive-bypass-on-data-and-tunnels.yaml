@@ -20,15 +20,15 @@ nodes:
   - type: access_app
     id: app-api
     name: API
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: api.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: app-lab
     name: Lab
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "" }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: "*.example.net", path: "", overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: wa-billing
     name: billing (Worker)
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: billing, scope: all }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: billing, scope: all, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - { type: access_policy, id: pol-office, name: Office bypass, props: { decision: bypass, include: [{ kind: ip, value: 198.51.100.0/24 }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-public, name: Public, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-worker, name: Worker bypass, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }

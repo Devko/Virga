@@ -1304,7 +1304,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "plain.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1321,7 +1322,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "deep",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1338,7 +1340,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1355,7 +1358,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "strict",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1372,7 +1376,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "strict.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -1685,7 +1690,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "api",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1702,7 +1708,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "shop",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1719,7 +1726,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "api.example.com",
-              "path": "/public"
+              "path": "/public",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -1736,7 +1744,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -3987,7 +3996,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "app.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -4004,7 +4014,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5065,7 +5076,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "admin.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5444,7 +5456,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "static.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5461,7 +5474,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.net",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5478,7 +5492,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "gradual.example.org",
-              "path": "/admin"
+              "path": "/admin",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5495,7 +5510,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "site.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5512,7 +5528,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "data.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -5796,7 +5813,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "admin.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5813,7 +5831,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "grafana.example.net",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -5830,7 +5849,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "docs.example.org",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6095,7 +6115,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "api",
-              "scope": "previews"
+              "scope": "previews",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6112,7 +6133,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "web",
-              "scope": "previews"
+              "scope": "previews",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6303,12 +6325,14 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "shop.example.com",
-              "path": "/assets"
+              "path": "/assets",
+              "overrides": []
             },
             {
               "kind": "hostname",
               "host": "shop.example.com",
-              "path": "/favicon.ico"
+              "path": "/favicon.ico",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6325,7 +6349,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "shop.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6342,7 +6367,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "landing.acme.workers.dev",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6359,7 +6385,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "site.pages.dev",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": null,
@@ -6608,7 +6635,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "api.example.com",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6625,7 +6653,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "hostname",
               "host": "*.example.net",
-              "path": ""
+              "path": "",
+              "overrides": []
             }
           ],
           "session_duration": "24h",
@@ -6642,7 +6671,8 @@ export const FIXTURES: readonly RuleFixture[] = [
             {
               "kind": "worker",
               "script": "billing",
-              "scope": "all"
+              "scope": "all",
+              "overrides": []
             }
           ],
           "session_duration": "24h",

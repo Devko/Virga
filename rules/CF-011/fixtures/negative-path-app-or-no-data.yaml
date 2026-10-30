@@ -20,19 +20,19 @@ nodes:
   - type: access_app
     id: app-assets
     name: Shop assets
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: /assets }, { kind: hostname, host: shop.example.com, path: /favicon.ico }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: /assets, overrides: [] }, { kind: hostname, host: shop.example.com, path: /favicon.ico, overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-shop
     name: Shop
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: shop.example.com, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-landing
     name: Landing
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: landing.acme.workers.dev, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: landing.acme.workers.dev, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - type: access_app
     id: app-site
     name: Site
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: site.pages.dev, path: "" }], session_duration: null, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: site.pages.dev, path: "", overrides: [] }], session_duration: null, allowed_idps: [] }
   - { type: access_policy, id: pol-assets, name: Public assets, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-landing, name: Public landing, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }
   - { type: access_policy, id: pol-site, name: Public site, props: { decision: bypass, include: [{ kind: everyone, value: null }], require: [], exclude: [], session_duration: null } }

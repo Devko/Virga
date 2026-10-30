@@ -16,7 +16,7 @@ nodes:
   - type: access_app
     id: app-admin
     name: Admin
-    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "" }], session_duration: 24h, allowed_idps: [idp-okta] }
+    props: { app_type: self_hosted, targets: [{ kind: hostname, host: admin.example.com, path: "", overrides: [] }], session_duration: 24h, allowed_idps: [idp-okta] }
   - type: access_group
     id: grp-corp
     name: Corp

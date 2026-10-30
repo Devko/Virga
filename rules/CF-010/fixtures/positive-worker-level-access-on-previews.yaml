@@ -1,6 +1,6 @@
 # Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/list/
 # Worker-level Access, previews only: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
-# Graph shape: docs/architecture/graph-contract.md, access_app target { kind: worker, script, scope }
+# Graph shape: docs/architecture/graph-contract.md, access_app target { kind: worker, script, scope, overrides }
 description: >
   Worker-level Access on the previews of api admits everyone, and an old
   version behind a version URL still binds the session KV namespace. The
@@ -18,11 +18,11 @@ nodes:
   - type: access_app
     id: wa-api
     name: api previews
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: api, scope: previews }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: api, scope: previews, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_app
     id: wa-web
     name: web previews
-    props: { app_type: self_hosted, targets: [{ kind: worker, script: web, scope: previews }], session_duration: 24h, allowed_idps: [] }
+    props: { app_type: self_hosted, targets: [{ kind: worker, script: web, scope: previews, overrides: [] }], session_duration: 24h, allowed_idps: [] }
   - type: access_policy
     id: pol-anyone
     name: Anyone
