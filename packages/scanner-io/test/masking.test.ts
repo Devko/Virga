@@ -118,6 +118,14 @@ describe("secret masking", () => {
       },
     ],
     [
+      "all but one character of the secret in the file name (R9 secret guard)",
+      () => {
+        const findings = structuredClone(gitleaksSample) as Record<string, unknown>[];
+        Object.assign(findings[0] ?? {}, { File: `dist/${CF_SECRET_BODY.slice(1)}.js` });
+        return readGitleaks(json(findings));
+      },
+    ],
+    [
       "the secret copied into the rule ID",
       () => {
         const findings = structuredClone(gitleaksSample) as Record<string, unknown>[];
