@@ -7,7 +7,7 @@ import type {
   NodeView,
   ScanSummaryView,
 } from "../src/rpc.ts";
-import type { IntakeView } from "./api.ts";
+import type { IntakeView, RemovalView } from "./api.ts";
 import { Link, paths } from "./router.tsx";
 import { JsonView, Text, time } from "./text.tsx";
 
@@ -279,6 +279,38 @@ export function IntakeResult({ intake }: { intake: IntakeView }) {
       {intake.expiresOn && (
         <p>
           Token expires <Text value={intake.expiresOn} />.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What a removal did, step by step; a step that is null failed or did not run. */
+export function RemovalResult({ result }: { result: RemovalView }) {
+  const { token, account } = result;
+  const done = token !== null && account !== null;
+  return (
+    <div className={done ? "notice" : "problem"} role="status">
+      <p>
+        {token === null
+          ? "The broker could not remove the token. Nothing was removed; try again."
+          : token.removed
+            ? "The broker deleted the stored token and cleared the account's rate budget."
+            : "The broker held no token for this account; its rate budget was cleared."}
+      </p>
+      {token !== null && (
+        <p>
+          {account === null
+            ? "The account could not be removed from the index. Try again: removal is safe to repeat."
+            : account.removed
+              ? "The account, its scan history and its graph were deleted."
+              : "The account was not in the index; its graph was cleared."}
+        </p>
+      )}
+      {done && (
+        <p>
+          Virga never writes to a scanned account, so it cannot revoke the token there. Delete it in
+          that account under Manage account, Account API tokens.
         </p>
       )}
     </div>

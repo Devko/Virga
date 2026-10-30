@@ -79,7 +79,7 @@ MCP clients reach the Worker through Access like everyone else, for example with
 
 ## SPA
 
-React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage and findings (filters, paging), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding for admins. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
+React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage and findings (filters, paging), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding and account removal for admins. Removal sits at the bottom of the account page behind a confirmation: the admin types the account ID, and the result says what each step removed and that the token still has to be revoked in the scanned account. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
 
 ## Known limits (v1)
 

@@ -19,6 +19,7 @@ import {
   FindingsTable,
   IntakeResult,
   NodeDetails,
+  RemovalResult,
   SummaryView,
 } from "./views.tsx";
 
@@ -84,6 +85,35 @@ describe("SPA views render account strings as text", () => {
       warnings: [{ code: "x", message: INJECTION }],
     };
     expectInert(renderToStaticMarkup(<IntakeResult intake={intake} />));
+  });
+
+  it("removal results say what each step did", () => {
+    const html = (token: boolean | null, account: boolean | null) =>
+      renderToStaticMarkup(
+        <RemovalResult
+          result={{
+            token: token === null ? null : { removed: token },
+            account: account === null ? null : { removed: account },
+          }}
+        />,
+      );
+    const done = html(true, true);
+    expectInert(done);
+    expect(done).toContain('class="notice"');
+    expect(done).toContain("deleted the stored token and cleared the account&#x27;s rate budget");
+    expect(done).toContain("its scan history and its graph were deleted");
+    expect(done).toContain("cannot revoke the token there");
+    expect(html(false, false)).toContain("held no token");
+    expect(html(false, false)).toContain("was not in the index");
+
+    const brokerFailed = html(null, null);
+    expectInert(brokerFailed);
+    expect(brokerFailed).toContain('class="problem"');
+    expect(brokerFailed).toContain("Nothing was removed");
+    expect(brokerFailed).not.toContain("cannot revoke");
+    const coreFailed = html(true, null);
+    expect(coreFailed).toContain('class="problem"');
+    expect(coreFailed).toContain("removal is safe to repeat");
   });
 
   it("caps deep and long JSON", () => {
