@@ -124,6 +124,7 @@ describe("runScan", () => {
       "coverage:dns",
       "sweep:dns",
       "exposure",
+      "vulns",
       "rules",
       "finish",
     ]);
@@ -155,6 +156,7 @@ describe("runScan", () => {
       { resource_class: "dns", status: "complete", chunks_total: 2, chunks_done: 2 },
       { resource_class: "exposure", status: "complete", chunks_total: 0, chunks_done: 0 },
       { resource_class: "storage", status: "no_permission", chunks_total: 1, chunks_done: 0 },
+      { resource_class: "vulns", status: "partial", chunks_total: 0, chunks_done: 0 },
     ]);
     expect(await liveNodes(h, "dns_record")).toEqual([
       "dns_record:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
@@ -237,6 +239,7 @@ describe("runScan", () => {
     expect(await coverage(h, "s1")).toEqual([
       { resource_class: "exposure", status: "complete", chunks_total: 0, chunks_done: 0 },
       { resource_class: "pages", status: "error", chunks_total: 1, chunks_done: 0 },
+      { resource_class: "vulns", status: "partial", chunks_total: 0, chunks_done: 0 },
       { resource_class: "workers", status: "partial", chunks_total: 2, chunks_done: 1 },
     ]);
     expect(await liveNodes(h, "worker_script")).toEqual(["worker_script:api"]);
@@ -268,6 +271,7 @@ describe("runScan", () => {
       "collect:tunnels:2",
       "coverage:tunnels",
       "exposure",
+      "vulns",
       "rules",
       "finish",
     ]);
@@ -300,6 +304,7 @@ describe("runScan", () => {
         h.id("s2"),
       ),
     ).toEqual([
+      expect.objectContaining({ resource_class: "vulns", status: "partial" }),
       {
         scan_id: h.id("s2"),
         resource_class: "tunnels",

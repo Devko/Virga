@@ -51,6 +51,9 @@ importers:
       '@virga/rules':
         specifier: workspace:*
         version: link:../../packages/rules
+      '@virga/vulns':
+        specifier: workspace:*
+        version: link:../../packages/vulns
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: 1.4.2

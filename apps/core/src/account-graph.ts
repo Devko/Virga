@@ -31,6 +31,7 @@ import type {
   GraphSummary,
   Neighborhood,
 } from "./graph/views.ts";
+import { livePackages, matchVulns, noVulns } from "./graph/vulns.ts";
 import type { AccountRow, NewAccount } from "./index-db.ts";
 import { assertAccountId } from "./scan/ids.ts";
 import { RULE_ERRORS_LISTED, STALE_SCAN_MS } from "./scan/policy.ts";
@@ -41,6 +42,7 @@ import type {
   RulesCounters,
   ScanEnd,
   ScanGraph,
+  VulnCounters,
 } from "./scan/types.ts";
 
 /** A scan's status, and the scan that is current in the graph. */
@@ -223,6 +225,30 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
       const detail = describe(error);
       recordCoverage(this.db, { scanId, resourceClass: "exposure", status: "error", detail });
       return { status: "error", entries: 0, decisions: {}, detail };
+    }
+  }
+
+  /**
+   * Matches the live package nodes against the advisories of the advisory
+   * source, writes the `vulns` rows and records the scan's `vulns` coverage
+   * (applyVulnRematch). Without a feed, `vulns` is `partial` with the
+   * reason, so CF-001 stays `not_evaluated`. A source or rematch that fails
+   * is a result, `vulns` coverage `error`, like an evaluator failure.
+   * Returns counts only.
+   */
+  async matchVulns(scanId: string): Promise<VulnCounters> {
+    assertCurrent(this.db, scanId);
+    const packages = livePackages(this.db);
+    try {
+      const read = await this.evaluators.advisories.read(packages);
+      // After the await: the scan must still be current before it writes.
+      assertCurrent(this.db, scanId);
+      return matchVulns(this.db, scanId, packages, read, Date.now());
+    } catch (error) {
+      if (error instanceof StaleScanError) throw error;
+      const detail = describe(error);
+      recordCoverage(this.db, { scanId, resourceClass: "vulns", status: "error", detail });
+      return { ...noVulns(packages.length), status: "error", detail };
     }
   }
 

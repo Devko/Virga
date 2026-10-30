@@ -16,7 +16,8 @@
     "@virga/collectors": "workspace:*",
     "@virga/exposure": "workspace:*",
     "@virga/graph": "workspace:*",
-    "@virga/rules": "workspace:*"
+    "@virga/rules": "workspace:*",
+    "@virga/vulns": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.4.2",

@@ -59,6 +59,7 @@ describe("ScanWorkflow", () => {
       { resource_class: "dns", status: "complete" },
       { resource_class: "exposure", status: "complete" },
       { resource_class: "storage", status: "no_permission" },
+      { resource_class: "vulns", status: "partial" },
     ]);
     expect(await sql(stub, "SELECT count(*) AS n FROM nodes WHERE deleted_at IS NULL")).toEqual([
       { n: 3 },

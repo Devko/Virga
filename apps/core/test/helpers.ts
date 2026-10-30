@@ -5,6 +5,7 @@ import type { RuleRunSummary } from "@virga/rules";
 import type { AccountGraph } from "../src/account-graph.ts";
 import type { AccountChanges } from "../src/accounts.ts";
 import type { Evaluators } from "../src/graph/evaluators.ts";
+import { NO_ADVISORY_FEED } from "../src/graph/vulns.ts";
 import { dueAccounts, upsertAccount } from "../src/index-db.ts";
 
 /**
@@ -57,6 +58,7 @@ export function fakeEvaluators(
   return {
     calls,
     ruleSet: [],
+    advisories: NO_ADVISORY_FEED,
     exposure: () => {
       calls.exposure++;
       return options.exposure ? options.exposure() : [];
