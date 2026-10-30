@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiAction } from "../src/audit.ts";
-import { MAX_MCP_BODY } from "../src/mcp.ts";
+import { MAX_MCP_BODY, MAX_TOOL_CALLS } from "../src/mcp.ts";
 import type { ToolCall } from "../src/rpc.ts";
 import { ADMIN, ORIGIN, VIEWER } from "./config.ts";
 import { ACCOUNT, auditPage, MARKUP, UNKNOWN_ACCOUNT } from "./fixtures.ts";
 import { call, captureLogs, claims, serveCerts, sign, signer, tokenFor } from "./helpers.ts";
-import { audit, calls } from "./worker.ts";
+import { audit, budget, calls } from "./worker.ts";
 
 let viewer: string;
 let admin: string;
@@ -21,6 +21,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   audit.fail = false;
+  budget.left = Number.POSITIVE_INFINITY;
 });
 
 const SERVICE_TOKEN = "e367826f93b8d71185e03fe518aff3b4.access";
@@ -247,6 +248,45 @@ async function mcp(
 const tool = (name: string, args: object, headers: Record<string, string> = {}) =>
   mcp("tools/call", { name, arguments: args }, headers);
 
+interface ToolResult {
+  content: { type: string; text: string }[];
+  isError?: boolean;
+}
+
+/** One JSON-RPC batch of tool calls; the results in the order of the calls. */
+async function batch(requests: { name: string; arguments: object }[]) {
+  const ids = requests.map(() => nextId++);
+  const response = await call("/mcp", {
+    token: viewer,
+    body: requests.map((params, i) => ({
+      jsonrpc: "2.0",
+      id: ids[i],
+      method: "tools/call",
+      params,
+    })),
+    headers: { accept: "application/json, text/event-stream" },
+    noOrigin: true,
+  });
+  const text = await response.text();
+  const messages = (response.headers.get("content-type") ?? "").includes("text/event-stream")
+    ? text
+        .split("\n")
+        .filter((line) => line.startsWith("data:") && line.slice(5).trim() !== "")
+        .map((line) => JSON.parse(line.slice(5)))
+    : [JSON.parse(text)].flat();
+  const byId = new Map(messages.map((m: { id: number }) => [m.id, m]));
+  const results = ids.map((id) => {
+    const message = byId.get(id) as { result?: ToolResult; error?: unknown } | undefined;
+    return (
+      message?.result ?? {
+        content: [{ type: "text", text: JSON.stringify(message) }],
+        isError: true,
+      }
+    );
+  });
+  return { status: response.status, results };
+}
+
 describe("tool audit trail: MCP", () => {
   it("records one entry per tool call with its outcome", async () => {
     await mcp("initialize", {
@@ -360,6 +400,78 @@ describe("tool audit trail: MCP", () => {
     expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
       ["get_scan_summary", ACCOUNT, "ok"],
     ]);
+  });
+
+  it("runs at most MAX_TOOL_CALLS tool calls per request and records the rest as one refused row (R9 hardening: audit amplification)", async () => {
+    expect(MAX_TOOL_CALLS).toBe(8);
+    const summaries = Array.from({ length: 12 }, () => ({
+      name: "get_scan_summary",
+      arguments: { account_id: ACCOUNT },
+    }));
+    const { status, results } = await batch(summaries);
+    expect(status).toBe(200);
+    expect(results).toHaveLength(12);
+    const refused = results.filter((r) => r.isError);
+    expect(refused).toHaveLength(4);
+    for (const r of refused) expect(r.content[0]?.text).toMatch(/at most 8 tool calls/);
+    expect(calls.map((c) => c.method)).toEqual(Array(8).fill("getScanSummary"));
+    expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
+      ...Array(8).fill(["get_scan_summary", ACCOUNT, "ok"]),
+      ["get_scan_summary", ACCOUNT, "refused"],
+    ]);
+  });
+
+  it("writes a single refused row for the calls of a batch that ran no tool (R9 hardening: audit amplification)", async () => {
+    // The largest batch the MCP SDK takes, none of which runs a tool.
+    const invalid = Array.from({ length: 100 }, (_, i) =>
+      i % 2 === 0
+        ? { name: "list_findings", arguments: { account_id: "../../etc" } }
+        : { name: "trigger_scan", arguments: { account_id: ACCOUNT } },
+    );
+    expect((await batch(invalid)).results).toHaveLength(100);
+    expect(calls).toEqual([]);
+    expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
+      ["list_findings", null, "refused"],
+    ]);
+
+    // The row names the first call that ran no tool.
+    audit.entries.length = 0;
+    await batch([
+      { name: "list_accounts", arguments: {} },
+      { name: "trigger_scan", arguments: { account_id: ACCOUNT } },
+      { name: "get_finding", arguments: { account_id: UNKNOWN_ACCOUNT, fingerprint: MARKUP } },
+      { name: "list_findings", arguments: { account_id: ACCOUNT, limit: 51 } },
+    ]);
+    expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
+      ["list_accounts", null, "ok"],
+      ["get_finding", UNKNOWN_ACCOUNT, "not_found"],
+      ["unknown_tool", ACCOUNT, "refused"],
+    ]);
+
+    // A batch of 100 calls that would all run writes at most MAX_TOOL_CALLS + 1 rows.
+    audit.entries.length = 0;
+    const valid = Array.from({ length: 100 }, () => ({ name: "list_accounts", arguments: {} }));
+    expect((await batch(valid)).results).toHaveLength(100);
+    expect(audit.entries).toHaveLength(MAX_TOOL_CALLS + 1);
+    for (const entry of audit.entries) expectStorable(entry);
+  });
+
+  it("records every tool that ran when later service binding calls fail (R9 hardening: audit amplification)", async () => {
+    // Enough calls for the reads and audit writes of MAX_TOOL_CALLS tools, and no more.
+    budget.left = 2 * MAX_TOOL_CALLS;
+    const logs = captureLogs();
+    const { results } = await batch(
+      Array.from({ length: 30 }, () => ({ name: "list_accounts", arguments: {} })),
+    );
+    logs.restore();
+    expect(results.filter((r) => !r.isError)).toHaveLength(MAX_TOOL_CALLS);
+    expect(calls.map((c) => c.method)).toEqual(Array(MAX_TOOL_CALLS).fill("listAccounts"));
+    // Each tool that ran has its row; only the refused row, written last, failed.
+    expect(audit.entries.map((e) => [e.action, e.outcome])).toEqual(
+      Array(MAX_TOOL_CALLS).fill(["list_accounts", "ok"]),
+    );
+    expect(logs.text()).toContain("audit: record failed Error");
+    expect(logs.text()).not.toContain(VIEWER);
   });
 
   it("records the service token of an MCP client", async () => {

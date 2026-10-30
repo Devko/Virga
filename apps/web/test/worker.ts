@@ -35,8 +35,21 @@ import {
  */
 export { default } from "../src/index.ts";
 
+/**
+ * Calls the stubs answer before they throw, like the runtime's limit on
+ * service binding calls per request; tests set it and reset it to Infinity.
+ */
+export const budget = { left: Number.POSITIVE_INFINITY };
+function spend() {
+  if (budget.left <= 0) throw new Error("Too many subrequests");
+  budget.left--;
+}
+
 export const calls: { method: string; args: unknown[] }[] = [];
-const record = (method: string, args: unknown[]) => calls.push({ method, args });
+const record = (method: string, args: unknown[]) => {
+  spend();
+  calls.push({ method, args });
+};
 
 /** Entries Admin.recordToolCall received, apart from `calls`; `fail` makes it throw. */
 export const audit: { entries: ToolCall[]; fail: boolean } = { entries: [], fail: false };
@@ -129,6 +142,7 @@ export class StubAdmin extends WorkerEntrypoint<Env> implements AdminRpc {
   }
 
   async recordToolCall(entry: ToolCall) {
+    spend();
     if (audit.fail) throw new Error(`index unavailable for ${entry.identity}`);
     audit.entries.push(entry);
   }
