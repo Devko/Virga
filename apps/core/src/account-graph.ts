@@ -84,9 +84,13 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
    * Starts a scan. Idempotent for a retried step. Refuses while another scan
    * is running, because its sweep would tombstone what this one writes; a
    * scan running longer than STALE_SCAN_MS is marked failed instead, and is
-   * refused if its instance comes back (a restart).
+   * refused if its instance comes back (a restart). Refuses after deleteAll
+   * until clearRemoved.
    */
   beginScan(id: string, kind: "full" | "partial" | "event" = "full", at = Date.now()): BeginResult {
+    if (this.db.query("SELECT 1 FROM meta WHERE key = 'removed'").length > 0) {
+      return { started: false, removed: true };
+    }
     for (const other of this.db.query<{ id: string; started_at: number }>(
       "SELECT id, started_at FROM scans WHERE status = 'running' AND id != ? ORDER BY started_at DESC",
       id,
@@ -220,13 +224,21 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
    * Deletes the account's whole graph, for offboarding. The object is
    * migrated again, so it stays an empty, valid graph: a scan that still runs
    * is refused like any scan that is not current, and an account that is
-   * added again starts from nothing.
+   * added again starts from nothing. The `removed` marker in meta makes
+   * beginScan refuse new scans, for example from an instance that was queued
+   * before the removal (R4-03), until clearRemoved.
    */
   async deleteAll(): Promise<void> {
     await this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.storage.deleteAll();
       migrate(this.db);
+      this.db.run("INSERT INTO meta (key, value) VALUES ('removed', ?)", String(Date.now()));
     });
+  }
+
+  /** Lets scans begin again after deleteAll, for an account that is added again. */
+  clearRemoved(): void {
+    this.db.run("DELETE FROM meta WHERE key = 'removed'");
   }
 
   /** Runs one compiled rule. One call per rule keeps each request well below the CPU limit. */

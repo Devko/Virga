@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { createReader } from "@virga/cf-api";
 import { type FixtureTransport, fixtureTransport } from "@virga/cf-api/testing";
 import type { Collector } from "@virga/collectors";
@@ -6,9 +6,10 @@ import { evaluateExposure } from "@virga/exposure";
 import { evaluateRules, RULES } from "@virga/rules";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EVALUATORS } from "../src/graph/evaluators.ts";
-import { d1ScanIndex } from "../src/index-db.ts";
+import { d1ScanIndex, getAccount } from "../src/index-db.ts";
 import { STALE_SCAN_MS } from "../src/scan/policy.ts";
 import { runScan } from "../src/scan/run.ts";
+import type { ScanIndex } from "../src/scan/types.ts";
 import { fakeStep } from "./fake-step.ts";
 import { type ApiState, apiRoutes, bucket, initialState, record, ZONE_A } from "./fixtures/api.ts";
 import {
@@ -38,6 +39,7 @@ interface Harness {
       collectors?: readonly Collector[];
       now?: number;
       replay?: Map<string, unknown>;
+      index?: ScanIndex;
       /** Runs before the step of that name. */
       before?: Record<string, () => Promise<unknown>>;
     },
@@ -74,7 +76,7 @@ async function harness(evaluators = fakeEvaluators()): Promise<Harness> {
             },
           },
           graph: () => stub,
-          index: d1ScanIndex(env.INDEX),
+          index: options.index ?? d1ScanIndex(env.INDEX),
           reader: (id) => {
             const transport = fixtureTransport(apiRoutes(id, state));
             transports.push(transport);
@@ -449,6 +451,74 @@ describe("runScan", () => {
     });
     expect(JSON.parse((await scanRun(h.id("A")))?.summary ?? "{}").status).toBe("partial");
     expect(await lastScanAt(h.accountId)).toBe(NOW + 3_600_000);
+  });
+
+  /** What a scan left of a removed account, in the index and in the graph. */
+  const leftovers = async (h: Harness) => ({
+    account: await getAccount(env.INDEX, h.accountId),
+    runs: (
+      await env.INDEX.prepare("SELECT id FROM scan_runs WHERE account_id = ?")
+        .bind(h.accountId)
+        .all()
+    ).results,
+    scans: await sql(h.stub, "SELECT id FROM scans"),
+    nodes: await sql(h.stub, "SELECT id FROM nodes"),
+    coverage: await sql(h.stub, "SELECT scan_id FROM coverage"),
+  });
+  const nothing = { account: null, runs: [], scans: [], nodes: [], coverage: [] };
+
+  it("R4-03: a queued scan whose begin step runs after removeAccount stops without writing", async () => {
+    const h = await harness();
+    expect((await h.scan("s1")).summary.status).toBe("partial");
+    const calls = h.transports.length;
+
+    // The instance was created before the removal; its first step runs after it.
+    const remove = () => exports.Admin.removeAccount(h.accountId);
+    const { summary, steps } = await h.scan("s2", {
+      now: NOW + 3_600_000,
+      before: { begin: remove },
+    });
+
+    expect(summary).toMatchObject({ status: "skipped", finishedAt: null, classes: {} });
+    expect(summary.detail).toMatch(/not in the index/);
+    expect(steps.names()).toEqual(["begin"]);
+    expect(h.transports.length).toBe(calls);
+    expect(h.evaluators.calls.rules).toEqual([h.id("s1")]);
+    expect(await leftovers(h)).toEqual(nothing);
+  });
+
+  it("R4-03: a begin step retried after the index failed stops when the account was removed in between", async () => {
+    const h = await harness();
+    const index = d1ScanIndex(env.INDEX);
+    let failed = false;
+    const flaky: ScanIndex = {
+      ...index,
+      async beginRun(run) {
+        if (failed) return index.beginRun(run);
+        failed = true;
+        // The graph began the scan; the removal lands before the step is retried.
+        await exports.Admin.removeAccount(h.accountId);
+        throw new Error("D1_ERROR: network connection lost");
+      },
+    };
+    const { summary, steps } = await h.scan("s1", { index: flaky });
+
+    expect(steps.record("begin")?.attempts).toBe(2);
+    expect(steps.names()).toEqual(["begin"]);
+    expect(summary).toMatchObject({ status: "skipped", finishedAt: null });
+    expect(h.transports).toEqual([]);
+    expect(await leftovers(h)).toEqual(nothing);
+  });
+
+  it("R4-03: the index gives a scan that began as the account was removed no row", async () => {
+    const h = await harness();
+    await exports.Admin.removeAccount(h.accountId);
+    await d1ScanIndex(env.INDEX).beginRun({
+      id: h.id("s1"),
+      accountId: h.accountId,
+      startedAt: NOW,
+    });
+    expect(await scanRun(h.id("s1"))).toBeNull();
   });
 
   it("replays to the same steps without repeating work", async () => {
