@@ -237,7 +237,7 @@ The tool audit trail ([design spec](../concept/design-spec.md), "Audit trail") i
 | --- | --- |
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT`; newest first is `ORDER BY id DESC`, and ids are never reused |
 | `at` | When core wrote the row, epoch milliseconds |
-| `identity` | The Access identity: a lowercase email, or a service token's client ID (`common_name`); 1 to 320 characters, with no space, C0 or C1 control, U+00A0, U+200B to U+200F, U+2028 to U+202E, U+2066 to U+2069 or U+FEFF. The web Worker refuses any other identity with 403 before serving it (R9-04) |
+| `identity` | The Access identity: a lowercase email, or a service token's client ID (`common_name`); 1 to 320 characters of well-formed Unicode (no lone surrogate; R10 hardening), with no space, C0 or C1 control, U+00A0, U+200B to U+200F, U+2028 to U+202E, U+2066 to U+2069 or U+FEFF. The web Worker refuses any other identity with 403 before serving it (R9-04) |
 | `identity_type` | `email` or `service_token` |
 | `channel` | `ui` (`Sec-Fetch-Site: same-origin`, the SPA), `api` (other API clients) or `mcp` (tool calls). Clients can set the header, so the channel describes the call; only the identity is verified |
 | `action` | The route template, such as `GET /api/accounts/{id}/findings`, `GET unmatched` for a path that matched no route, or the MCP tool name (`unknown_tool` for a name that is not one, or for an MCP body over 64 KiB, which is not read). Never the raw URL or query; at most 100 characters of `[A-Za-z0-9_ /{}.-]` |
