@@ -2,7 +2,22 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the round 8 findings fixed: R8-01 to R8-03, the source side of the leads R8-04 and R8-05, and the guard hardening of the [round 8 verification](2026-10-30-verification-round-8.md)? (2) review of every round 9 change at commit 7570672: `deploy-3`, `supply-chain-3`, `rules-6`, `web-export`, `vulns-1`, `scanner-io-1`, `terraform-1` (and `docs-4`, docs only)
-- Status: not yet fixed; R9-01 to R9-06 are open
+- Status: round 10 of the [work packages](../team/work-packages.md) fixed R9-01 to R9-06, the leads L-1 and L-2, and the hardening items H-1 to H-4 and those listed below; the [round 10 verification](2026-10-30-verification-round-10.md) confirms them, with H-1 partly fixed (R10-03)
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R9-01 | `supply-chain-4` | d373a5e | `scripts/test/check-release-age.test.ts` (R9-01: `lockfile-dir=other` and 22 more settings refused, the root `.npmrc` read strictly) |
+| R9-02 | `supply-chain-4` (gate), `deploy-4` (deploy) | d373a5e; 7144a22 | `check-release-age.test.ts` (R9-02: an app `.npmrc`); `config.test.ts` and `deploy.test.ts` (R9-02: refused before and after the builds) |
+| R9-03 | `web-audit-2` | e2b18c1 | `apps/web` (R9-03: 413 and one `refused` row for a body over 64 KiB) |
+| R9-04 | `web-audit-2` | 1cc2527 | `apps/web/test/identity.test.ts` (the web and core rules compared on the same cases; 403 for an identity core cannot store) |
+| R9-05 | `vulns-2` | 28dbdbf | `packages/vulns` (R9-05: npm names in either case, the review's `JSONStream` case through `rematch`) |
+| R9-06 | `scanner-io-2` | efa7449 | `packages/scanner-io/test/memory.test.ts` (R9-06: nine hostile shapes, capped heaps) |
+| L-1, H-1, strongest integrity, `pnpm` fields, `.nvmrc` | `supply-chain-4` | 2c46c37, 5aa55a0, 56d6f29, d4390ed, ca67a3d | `check-release-age.test.ts` (L-1, H-1, TM-32, TM-29) |
+| L-2, H-2, `main` and `migrations_dir`, redaction, Terraform | `deploy-4` | 6c6c98e, 3724810, 54ac814, cfa1551, 68ae3a0, 0848d6d | `scripts/test/workspace.test.ts`, `config.test.ts`, `deploy.test.ts`, `run.test.ts`, `guide.test.ts`, `test-range.test.ts` |
+| H-3, H-4, audit purge | `core-6` | 8691afc, 05c5dba, dfc4453 | `apps/core/test/rules-runtime.test.ts` (H-3, H-4), `audit.test.ts` (audit amplification) |
+| Audit rows per request, export escaping, `untruncated_size` | `web-audit-2` | f22a18a, 8400701, a2dcafb | `apps/web` tests named after each item |
+| Duplicate keys in `vulns` | `vulns-2` | 3cfea6f | `packages/vulns/test/json.test.ts`, `osv.test.ts`, `kev.test.ts`, `rematch.test.ts` |
+| Secret guard, invisible characters | `scanner-io-2` | 89198d9, 440fd16, 017a5a2 | `packages/scanner-io` ("R9 secret guard: …", "R9 invisible characters: …") |
 
 ## Summary
 

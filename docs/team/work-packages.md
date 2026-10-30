@@ -174,6 +174,8 @@ From the [round 9 verification](../reviews/2026-10-30-verification-round-9.md), 
 | `scanner-io-2` | R9-06 (containers bounded, measured in workerd); the gitleaks secret guard on partial matches; invisible characters in kept strings; decision 0010 (vendored CycloneDX 1.6 schema, `@cfworker/json-schema` in tests) | `packages/scanner-io/**`, `docs/architecture/scanner-io.md`, the lockfile entries of the new dev dependency | Every SBOM the tests build validates against the schema |
 | `review-10` | Read-only review of the round 10 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
 
+Round 10 status (2026-10-30): all seven packages are merged, and the [round 10 verification](../reviews/2026-10-30-verification-round-10.md) (one reviewer) confirms R9-01 to R9-06, L-1, L-2, H-2 to H-4 and the round 9 hardening items as fixed, and H-1 as partly fixed. It found R10-01 (medium: the gate does not see the root `.pnpmfile.cjs`, whose hook can point pnpm at an undated lockfile) and R10-02 to R10-04 (low: `package.yaml` with `pnpm.executionEnv`, the workflow guard read by indent and raw text, tsconfig `paths` past the L-2 checks). From round 10 on, packages run on Sonnet or Opus by risk: Opus for security-critical design work and every review, Sonnet for docs and well-specified packages.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
