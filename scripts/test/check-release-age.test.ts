@@ -12,6 +12,7 @@ import {
   main,
   PackageJsonError,
   parseLockfile,
+  parseNpmrc,
   parsePackageManager,
   parseWorkspace,
 } from "../check-release-age.ts";
@@ -602,6 +603,73 @@ describe("R6-03: the locked integrity is the one the registry publishes", () => 
     });
     const result = await checkReleaseAge(text, options(fetch));
     expect(result.failures).toEqual([]);
+  });
+
+  it("TM-32: a sha1 integrity equal to dist.shasum fails when the registry publishes sha512", async () => {
+    const text = lockfile([
+      "  old@1.0.0:\n    resolution: {integrity: sha1-AQIDBAUGBwgJCgsMDQ4PEBESExQ=}",
+    ]);
+    const shasum = "0102030405060708090a0b0c0d0e0f1011121314";
+    const integrity = `sha512-${"A".repeat(86)}==`;
+    const { fetch } = mockFetch({
+      old: () =>
+        Response.json(
+          registryDocument("old", { "1.0.0": ago(30) }, { "1.0.0": { integrity, shasum } }),
+        ),
+    });
+    const result = await checkReleaseAge(
+      text,
+      options(fetch, {
+        exceptions: [{ package: "old@1.0.0", accepts: "too_young", reason: "not for this" }],
+      }),
+    );
+    expect(result.failures).toEqual([
+      {
+        package: "old@1.0.0",
+        reason: "mismatch",
+        detail:
+          "the lockfile's integrity is sha1, but the registry publishes a sha512 digest for this version; pnpm verifies only the algorithm the lockfile names, so lock the sha512 integrity",
+      },
+    ]);
+    expect(result.excepted).toEqual([]);
+  });
+
+  it("TM-32: requires the strongest algorithm in dist.integrity", async () => {
+    const sha256 = `sha256-${"B".repeat(43)}=`;
+    const sha384 = `sha384-${"C".repeat(64)}`;
+    const sha512 = `sha512-${"D".repeat(86)}==`;
+    const sha1 = "sha1-AQIDBAUGBwgJCgsMDQ4PEBESExQ=";
+    const text = lockfile([
+      `  a@1.0.0:\n    resolution: {integrity: ${sha256}}`,
+      `  b@1.0.0:\n    resolution: {integrity: ${sha384}}`,
+      `  c@1.0.0:\n    resolution: {integrity: ${sha512}}`,
+      `  d@1.0.0:\n    resolution: {integrity: ${sha384}}`,
+    ]);
+    const published = (name: string, integrity: string) => () =>
+      Response.json(registryDocument(name, { "1.0.0": ago(30) }, { "1.0.0": { integrity } }));
+    const { fetch } = mockFetch({
+      a: published("a", `${sha256} ${sha512}`),
+      b: published("b", `${sha512} ${sha384}`),
+      c: published("c", `${sha1} ${sha512}`),
+      d: published("d", `${sha1} ${sha384}`),
+    });
+    const result = await checkReleaseAge(text, options(fetch));
+    expect(result.failures.map((f) => [f.package, f.reason, f.detail])).toEqual([
+      [
+        "a@1.0.0",
+        "mismatch",
+        expect.stringMatching(
+          /^the lockfile's integrity is sha256, but the registry publishes a sha512 digest/,
+        ),
+      ],
+      [
+        "b@1.0.0",
+        "mismatch",
+        expect.stringMatching(
+          /^the lockfile's integrity is sha384, but the registry publishes a sha512 digest/,
+        ),
+      ],
+    ]);
   });
 });
 
@@ -1383,7 +1451,7 @@ describe("R8-01: config dependencies are refused", () => {
     for (const pnpm of ["configDependencies", [], null]) {
       await refusedBy(root(pnpm), /^error: package\.json pnpm is not an object/);
     }
-    expect(await runMain(root({ overrides: {} }))).toEqual(PASSES);
+    expect(await runMain(root({}))).toEqual(PASSES);
   });
 
   it("R8-01: refuses settings that make pnpm read another lockfile or run code", async () => {
@@ -1449,6 +1517,75 @@ describe("R8-01: config dependencies are refused", () => {
     const settings = parseWorkspace(readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"));
     expect(settings.get("packages")).toContain("apps/*");
     expect(settings.get("minimumReleaseAge")).toBe("20160");
+  });
+});
+
+describe("TM-29: package.json holds no pnpm settings the check does not know", () => {
+  const root = (fields: Record<string, unknown>) =>
+    checkout({ "package.json": manifest({ packageManager: "pnpm@10.28.0", ...fields }) });
+  const NONE =
+    "; the project sets no pnpm field in package.json, so the check accepts none; extend it before adding one";
+
+  it("TM-29: refuses each pnpm field in package.json, with its reason", async () => {
+    const BUILDS = "changes which packages may run install scripts";
+    const OTHER =
+      "is not a field the check accepts; pnpm settings here can change what pnpm installs or runs";
+    const cases: [string, unknown, string][] = [
+      ["overrides", { yaml: "2.9.1" }, ": replaces versions anywhere in the dependency graph"],
+      [
+        "patchedDependencies",
+        { "yaml@2.8.0": "patches/yaml.patch" },
+        ": applies patch files to installed packages",
+      ],
+      [
+        "packageExtensions",
+        { "yaml@*": { dependencies: { "left-pad": "1.3.0" } } },
+        ": adds dependencies to the manifests of installed packages",
+      ],
+      ["neverBuiltDependencies", [], ": lets every package it does not list run install scripts"],
+      ["onlyBuiltDependencies", ["esbuild"], `: ${BUILDS}`],
+      ["onlyBuiltDependenciesFile", "builds.json", `: ${BUILDS}`],
+      ["ignoredBuiltDependencies", ["esbuild"], `: ${BUILDS}`],
+      [
+        "executionEnv",
+        { nodeVersion: "23.0.0" },
+        ": makes pnpm download a Node\\.js runtime and run scripts with it",
+      ],
+      ["allowedDeprecatedVersions", { request: "*" }, ` ${OTHER}`],
+      ["supportedArchitectures", { os: ["current"] }, ` ${OTHER}`],
+    ];
+    for (const [field, value, reason] of cases) {
+      await refusedBy(
+        root({ pnpm: { [field]: value } }),
+        new RegExp(`^error: package\\.json pnpm\\.${field}${reason}.*${NONE}$`),
+      );
+    }
+  });
+
+  it("TM-29: refuses resolutions, which pnpm reads as overrides", async () => {
+    await refusedBy(
+      root({ resolutions: { yaml: "2.9.1" } }),
+      new RegExp(
+        `^error: package\\.json resolutions: pnpm reads it as overrides, which replace versions anywhere in the dependency graph${NONE}$`,
+      ),
+    );
+  });
+
+  it("TM-29: accepts an empty pnpm field, and none", async () => {
+    expect(await runMain(root({ pnpm: {} }))).toEqual(PASSES);
+    expect(await runMain(root({}))).toEqual(PASSES);
+  });
+
+  it("TM-29: refuses a pnpm field in an app's package.json", async () => {
+    await refusedBy(
+      checkout({
+        "apps/web/package.json": manifest({
+          name: "@virga/web",
+          pnpm: { executionEnv: { nodeVersion: "23.0.0" } },
+        }),
+      }),
+      /^error: apps\/web\/package\.json has a pnpm field; pnpm takes its settings from the root package\.json, where the check reads them, and executionEnv from each project/,
+    );
   });
 });
 
@@ -1563,6 +1700,192 @@ describe("R8-02: only the root names the package manager", () => {
   });
 });
 
+describe("R9-01: the root .npmrc is read strictly", () => {
+  /** The committed .npmrc. */
+  const NPMRC = "save-exact=true\nengine-strict=true\n";
+  const npmrc = (text: string, files: Record<string, string> = {}) =>
+    checkout({ ".npmrc": text, ...files });
+  /** main exits 1 with one error for `.npmrc line <line>: <message>`. */
+  const refuses = async (text: string, line: number, message: RegExp) => {
+    const result = await runMain(npmrc(text));
+    expect(result).toEqual({
+      code: 1,
+      out: [],
+      err: [expect.stringMatching(new RegExp(`^error: \\.npmrc line ${line}: ${message.source}`))],
+    });
+    return result.err.join("\n");
+  };
+  const ONLY = "; the project's \\.npmrc holds only save-exact=true and engine-strict=true";
+
+  it("R9-01: refuses lockfile-dir=other, which makes pnpm install from a lockfile the check never dated", async () => {
+    // The review's case: the root lockfile locks yaml 2.8.0, 400 days old, and
+    // other/pnpm-lock.yaml locks 2.9.1, one day old, which pnpm would install.
+    const root = npmrc(`${NPMRC}lockfile-dir=other\n`, {
+      "pnpm-lock.yaml": lockfile([registryEntry("yaml@2.8.0")]),
+      "other/pnpm-lock.yaml": lockfile([registryEntry("yaml@2.9.1")]),
+    });
+    const { fetch } = mockFetch({ ...PNPM_REGISTRY, yaml: { "2.8.0": ago(400), "2.9.1": ago(1) } });
+    expect(await runMain(root, { fetch })).toEqual({
+      code: 1,
+      out: [],
+      err: [
+        expect.stringMatching(
+          /^error: \.npmrc line 3: lockfile-dir makes pnpm install from a lockfile other than the root pnpm-lock\.yaml the check dates/,
+        ),
+      ],
+    });
+  });
+
+  it("R9-01: refuses each setting that changes the lockfile, the registry or the runtime, or runs code", async () => {
+    const SECRET = "npm_SYNTHETICr9token0123456789abcdef";
+    const LOCKFILE = "makes pnpm install from a lockfile other than the root pnpm-lock\\.yaml";
+    const RUNTIME = "makes pnpm download and run a Node\\.js runtime the check does not date";
+    const FETCH = "changes where or how pnpm fetches packages";
+    const CODE = "makes pnpm run code the check does not read";
+    const CREDENTIAL =
+      "a registry credential, token helper or client certificate \\(the check prints neither key nor value\\)";
+    const cases: [string, string][] = [
+      ["lockfile-dir=other", `lockfile-dir ${LOCKFILE}`],
+      ["git-branch-lockfile=true", `git-branch-lockfile ${LOCKFILE}`],
+      [
+        "merge-git-branch-lockfiles-branch-pattern=main",
+        `merge-git-branch-lockfiles-branch-pattern ${LOCKFILE}`,
+      ],
+      ["shared-workspace-lockfile=false", `shared-workspace-lockfile ${LOCKFILE}`],
+      ["lockfile=false", `lockfile ${LOCKFILE}`],
+      ["use-node-version=23.0.0", `use-node-version ${RUNTIME}`],
+      ["node-version=23.0.0", `node-version ${RUNTIME}`],
+      ["node-mirror:release=http://127.0.0.1:8080/", `node-mirror:release ${RUNTIME}`],
+      ["registry=https://registry.invalid/", `registry ${FETCH}`],
+      ["@virga:registry=https://registry.invalid/", `@virga:registry ${FETCH}`],
+      ["strict-ssl=false", `strict-ssl ${FETCH}`],
+      ["https-proxy=http://proxy.invalid/", `https-proxy ${FETCH}`],
+      [`//registry.npmjs.org/:_authToken=${SECRET}`, CREDENTIAL],
+      [`_authToken=${SECRET}`, CREDENTIAL],
+      [`_auth=${SECRET}`, CREDENTIAL],
+      ["//registry.npmjs.org/:tokenHelper=/tmp/helper", CREDENTIAL],
+      [
+        `${SECRET}=true`,
+        `the key on this line \\(not printed\\) is not a setting the check accepts`,
+      ],
+      ["pnpmfile=.pnpmfile.cjs", `pnpmfile ${CODE}`],
+      ["global-pnpmfile=/tmp/x.cjs", `global-pnpmfile ${CODE}`],
+      ["node-options=--require=./x.cjs", `node-options ${CODE}`],
+      ["script-shell=/tmp/sh", `script-shell ${CODE}`],
+      ["ignore-scripts=false", "ignore-scripts is not a setting the check accepts"],
+    ];
+    for (const [line, message] of cases) {
+      const err = await refuses(`${NPMRC}${line}\n`, 3, new RegExp(`${message}.*${ONLY}`));
+      expect(err).not.toContain(SECRET);
+    }
+  });
+
+  it("R9-01: reads .npmrc strictly: one key=value per line, comments on their own lines", async () => {
+    const VALUE =
+      "save-exact has a value the check does not accept; it accepts save-exact=true only";
+    const cases: [string, number, string][] = [
+      ["save-exact = true\n", 1, "write the setting as key=value, without spaces around the key"],
+      ["  save-exact=true\n", 1, "write the setting as key=value, without spaces around the key"],
+      ["save-exact=false\n", 1, VALUE],
+      ['save-exact="true"\n', 1, VALUE],
+      ["save-exact= true\n", 1, VALUE],
+      ["save-exact=true ; exact versions\n", 1, VALUE],
+      ["save-exact=true # exact versions\n", 1, VALUE],
+      [`save-exact=\${SAVE_EXACT}\n`, 1, VALUE],
+      ["lockfile-dir\n", 1, "expected one key=value per line"],
+      ["[registry]\nsave-exact=true\n", 1, "expected one key=value per line"],
+      ["save-exact=true\nsave-exact=true\n", 2, "save-exact appears twice"],
+      ["save-exact[]=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
+      ["SAVE-EXACT=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
+      ["save-exact=true\rlockfile-dir=other\n", 2, "lockfile-dir makes pnpm install"],
+      ["\u00A0# not a comment line\n", 1, "expected one key=value per line"],
+    ];
+    for (const [text, line, message] of cases) await refuses(text, line, new RegExp(message));
+  });
+
+  it("R9-01: accepts the committed .npmrc, comment lines, CRLF, a BOM and no .npmrc", async () => {
+    expect(parseNpmrc(readFileSync(join(REPO_ROOT, ".npmrc"), "utf8"))).toEqual(
+      new Map([
+        ["save-exact", "true"],
+        ["engine-strict", "true"],
+      ]),
+    );
+    expect(await runMain(npmrc(NPMRC))).toEqual(PASSES);
+    const commented =
+      "\uFEFF# exact versions\r\n  ; engines\r\n\r\nsave-exact=true \r\nengine-strict=true";
+    expect(await runMain(npmrc(commented))).toEqual(PASSES);
+    expect(await runMain(npmrc(""))).toEqual(PASSES);
+    expect(await runMain(checkout())).toEqual(PASSES);
+  });
+});
+
+describe("R9-02: only the root holds .npmrc", () => {
+  it("R9-02: refuses an app's .npmrc, which makes its build fetch and run a Node.js runtime", async () => {
+    const mirror = "use-node-version=23.0.0\nnode-mirror:release=http://127.0.0.1:8080/\n";
+    for (const path of ["apps/web/.npmrc", "apps/.npmrc", "packages/graph/.npmrc"]) {
+      await refusedBy(
+        checkout({ ".npmrc": "save-exact=true\n", [path]: mirror }),
+        new RegExp(
+          `^error: ${path.replaceAll(".", "\\.")}: only the root may hold \\.npmrc; pnpm also reads the \\.npmrc of the directory a command runs in`,
+        ),
+      );
+    }
+    await refusedBy(
+      checkout({ "apps/web/.npmrc": "" }),
+      /^error: apps\/web\/\.npmrc: only the root may hold \.npmrc/,
+    );
+  });
+});
+
+describe("L-1: names a case-insensitive file system opens as the files the check reads", () => {
+  it("L-1: refuses pnpm-workspace.yaml spelled with U+017F (long s) below the root", async () => {
+    // The review's case: toLowerCase does not fold U+017F, so this passed with config dependencies.
+    await refusedBy(
+      checkout({ "apps/web/pnpm-work\u017Fpace.yaml": "configDependencies: {}\n" }),
+      /^error: apps\/web\/pnpm-work\u017Fpace\.yaml: only the root may hold pnpm-workspace\.yaml/,
+    );
+  });
+
+  it("L-1: refuses .corepack.env, .npmrc and a package manager in package.json, however spelled", async () => {
+    await refusedBy(
+      checkout({ "apps/web/.corepac\u212A.env": "COREPACK_NPM_REGISTRY=https://x.invalid\n" }),
+      /^error: apps\/web\/\.corepac\u212A\.env: corepack loads \.corepack\.env files/,
+    );
+    for (const name of [".NPMRC", ".npm\u200Brc", ".\uFF4Epmrc"]) {
+      await refusedBy(
+        checkout({ [`apps/web/${name}`]: "use-node-version=23.0.0\n" }),
+        new RegExp(`^error: apps/web/${name.replace(".", "\\.")}: only the root may hold \\.npmrc`),
+      );
+    }
+    await refusedBy(
+      checkout({
+        "apps/web/pac\u212Aage.json": manifest({
+          name: "@virga/web",
+          packageManager: "pnpm@10.33.2",
+        }),
+      }),
+      /^error: apps\/web\/pac\u212Aage\.json names packageManager/,
+    );
+  });
+
+  it("L-1: refuses a name at the root that folds to a file the check reads by its exact name", async () => {
+    const variants: [string, string][] = [
+      ["pnpm-work\u017Fpace.yaml", "pnpm-workspace.yaml"],
+      ["pac\u212Aage.json", "package.json"],
+      ["pnpm-loc\u212A.yaml", "pnpm-lock.yaml"],
+      [".NPMRC", ".npmrc"],
+    ];
+    for (const [name, target] of variants) {
+      await refusedBy(
+        checkout({ [name]: "{}\n" }),
+        new RegExp(
+          `^error: ${name.replaceAll(".", "\\.")}: a case-insensitive file system opens this name as ${target.replaceAll(".", "\\.")}, which the check reads by that exact name only`,
+        ),
+      );
+    }
+  });
+});
+
 describe("EXCEPTIONS", () => {
   it("names exact versions and says why", () => {
     for (const exception of EXCEPTIONS) {
@@ -1638,25 +1961,94 @@ describe("CI workflow", () => {
       .filter(([, job]) => !needs(job).includes("release-age"))
       .map(([name]) => name);
 
+  /** The keys the release-age job, and each of its steps, may have (H-1). */
+  const CHECK_JOB_KEYS = new Set(["name", "runs-on", "timeout-minutes", "steps"]);
+  const CHECK_STEP_KEYS = new Set(["name", "uses", "with", "run"]);
+
   /**
-   * What lets a workflow install before the check (R8-04): a job the guard
-   * cannot read, a job that installs without needing release-age, a
-   * release-age job that does not run the check alone, a pnpm/action-setup
-   * version input, or an action not pinned by commit SHA.
+   * What could let the check in the release-age job fail without failing the
+   * job, or change what it runs (H-1): continue-on-error on the job or a
+   * step, and any key the guard does not know, such as shell,
+   * working-directory, env, if, defaults or container. Keys are read at
+   * indent 4 (the job) and, under steps:, at indent 6 after "- " or at indent 8.
+   */
+  function checkJobProblems(check: string): string[] {
+    const problems: string[] = [];
+    let steps = false;
+    for (const line of check.split("\n")) {
+      const jobKey = /^ {4}(\S[^:]*):/.exec(line)?.[1];
+      if (/^ {4}\S/.test(line)) steps = jobKey === "steps";
+      const stepKey = steps ? /^ {6}- (\S[^:]*):|^ {8}(\S[^:]*):/.exec(line) : null;
+      const key = jobKey ?? stepKey?.[1] ?? stepKey?.[2];
+      if (key === undefined) continue;
+      if (key === "continue-on-error") {
+        problems.push(
+          "release-age has continue-on-error, so the jobs that need it run when the check fails",
+        );
+      } else if (!(jobKey === undefined ? CHECK_STEP_KEYS : CHECK_JOB_KEYS).has(key)) {
+        problems.push(
+          `release-age has ${JSON.stringify(key)}, a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`,
+        );
+      }
+    }
+    return problems;
+  }
+
+  /**
+   * GitHub's status check functions. A job-level if: with one of them drops
+   * the implicit success(), so the job runs when a job it needs failed (H-1).
+   * Function names are not case-sensitive.
+   */
+  const STATUS_FUNCTION = /\b(?:always|failure|cancelled)\s*\(/i;
+
+  /** A job's own keys and values, without its steps, whose if: runs only in a started job. */
+  const jobLevel = (job: string) => job.replace(/^ {4}steps:\n(?: {5,}.*\n)*/m, "");
+
+  /**
+   * Lines with a YAML anchor, alias or merge key, which GitHub resolves and the
+   * guard does not: `if: *run` could name `&run always()` elsewhere.
+   */
+  const ANCHOR = /(?:^[ \t]*-|:)[ \t]+[&*][\w-]|^[ \t]*(?:- )?<<[ \t]*:/;
+
+  /**
+   * What lets a workflow install before the check (R8-04), or after a failed
+   * check (H-1): a job the guard cannot read, a job that installs without
+   * needing release-age, a release-age job that does not run the check alone
+   * or whose check can fail without failing it, workflow-level env or
+   * defaults, an installing job whose if: runs it when release-age failed,
+   * anchors and aliases, a pnpm/action-setup version input, or an action not
+   * pinned by commit SHA.
    */
   function gateProblems(text: string): string[] {
     const { jobs: all, unread } = readJobs(text);
     const problems = unread.map((line) => `cannot read ${JSON.stringify(line)} under jobs:`);
     for (const name of ungated(text)) problems.push(`job ${name} installs before release-age`);
-    if ([...all.values()].some((job) => INSTALLS.test(job))) {
-      const check = all.get("release-age");
-      if (
-        check === undefined ||
+    const check = all.get("release-age");
+    if (
+      [...all.values()].some((job) => INSTALLS.test(job)) &&
+      (check === undefined ||
         !check.includes("      - run: node scripts/check-release-age.ts\n") ||
         INSTALLS.test(check) ||
-        needs(check).length > 0
-      ) {
-        problems.push("no release-age job that runs the check before anything else");
+        needs(check).length > 0)
+    ) {
+      problems.push("no release-age job that runs the check before anything else");
+    }
+    if (check !== undefined) problems.push(...checkJobProblems(check));
+    for (const [, key] of text.matchAll(/^(env|defaults):/gm)) {
+      problems.push(
+        `workflow-level ${key}: applies to the release-age job too; set it on the jobs that need it`,
+      );
+    }
+    for (const [name, job] of all) {
+      if (name !== "release-age" && INSTALLS.test(job) && STATUS_FUNCTION.test(jobLevel(job))) {
+        problems.push(`job ${name} has an if: that runs it when release-age failed`);
+      }
+    }
+    for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
+      if (ANCHOR.test(line)) {
+        problems.push(
+          `anchors, aliases or merge keys, which the guard does not resolve: line ${index + 1} could hide an if: or continue-on-error`,
+        );
       }
     }
     for (const [, inputs] of text.matchAll(/- uses: pnpm\/action-setup@.*\n((?: {8}.*\n)*)/g)) {
@@ -1726,6 +2118,211 @@ describe("CI workflow", () => {
       "deploy.yml: pnpm/action-setup has a version input",
       "deploy.yml: example/workflows/.github/workflows/deploy.yml@main is not pinned by commit SHA",
     ]);
+  });
+
+  /** A workflow with a release-age job and an install job that needs it, with lines added. */
+  function scratchWorkflow(
+    extra: { top?: string[]; check?: string[]; step?: string[]; install?: string[] } = {},
+  ): string {
+    return [
+      "name: CI",
+      "",
+      ...(extra.top ?? []),
+      "jobs:",
+      "  release-age:",
+      "    runs-on: ubuntu-24.04",
+      ...(extra.check ?? []),
+      "    steps:",
+      "      - name: Release age",
+      "        run: node scripts/check-release-age.ts",
+      "      - run: node scripts/check-release-age.ts",
+      ...(extra.step ?? []),
+      "  install:",
+      "    needs: release-age",
+      ...(extra.install ?? []),
+      "    steps:",
+      `      - uses: pnpm/action-setup@${"0".repeat(40)}`,
+      "      - run: pnpm install --frozen-lockfile",
+      "",
+    ].join("\n");
+  }
+
+  it("H-1: flags a release-age check that can fail without failing its job", () => {
+    expect(gateProblems(scratchWorkflow())).toEqual([]);
+    const IGNORED =
+      "release-age has continue-on-error, so the jobs that need it run when the check fails";
+    for (const value of ["true", `\${{ true }}`, "false"]) {
+      expect(
+        gateProblems(scratchWorkflow({ step: [`        continue-on-error: ${value}`] })),
+      ).toEqual([IGNORED]);
+      expect(gateProblems(scratchWorkflow({ check: [`    continue-on-error: ${value}`] }))).toEqual(
+        [IGNORED],
+      );
+    }
+    expect(gateProblems(scratchWorkflow({ step: ["        'continue-on-error': true"] }))).toEqual([
+      `release-age has "'continue-on-error'", a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`,
+    ]);
+  });
+
+  it("H-1: flags keys that change what the release-age check runs", () => {
+    const unknown = (key: string) =>
+      `release-age has "${key}", a key the guard does not know; keys such as shell, working-directory, env and if change what the check runs, or whether it runs`;
+    const cases: [Parameters<typeof scratchWorkflow>[0], string[]][] = [
+      [{ step: ["        shell: bash -c 'exit 0' {0}"] }, [unknown("shell")]],
+      [{ step: ["        working-directory: other"] }, [unknown("working-directory")]],
+      [{ step: ["        env:", "          NODE_OPTIONS: --import=./x.mjs"] }, [unknown("env")]],
+      [{ step: ["        if: false"] }, [unknown("if")]],
+      [{ step: ["      - {run: 'exit 0', continue-on-error: true}"] }, [unknown("{run")]],
+      [{ check: ["    defaults:", "      run:", "        shell: sh"] }, [unknown("defaults")]],
+      [{ check: ["    container: node:22"] }, [unknown("container")]],
+      [{ check: ["    if: false"] }, [unknown("if")]],
+      [
+        { top: ["defaults:", "  run:", "    working-directory: other", ""] },
+        [
+          "workflow-level defaults: applies to the release-age job too; set it on the jobs that need it",
+        ],
+      ],
+      [
+        { top: ["env:", "  NODE_OPTIONS: --import=./x.mjs", ""] },
+        ["workflow-level env: applies to the release-age job too; set it on the jobs that need it"],
+      ],
+    ];
+    for (const [extra, problems] of cases)
+      expect(gateProblems(scratchWorkflow(extra))).toEqual(problems);
+  });
+
+  it("H-1: flags an installing job whose if: runs it when release-age failed", () => {
+    const RUNS = "job install has an if: that runs it when release-age failed";
+    for (const condition of [
+      "always()",
+      "failure()",
+      `\${{ !cancelled() }}`,
+      "success() || failure()",
+      "Always ()",
+      `\${{ always() && github.event_name == 'push' }}`,
+    ]) {
+      expect(gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }))).toEqual([RUNS]);
+    }
+    expect(gateProblems(scratchWorkflow({ install: ["    if: >-", "      always()"] }))).toEqual([
+      RUNS,
+    ]);
+    expect(gateProblems(scratchWorkflow({ install: ["    'if': always()"] }))).toEqual([RUNS]);
+    for (const condition of ["success()", "github.event_name == 'push'"]) {
+      expect(gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }))).toEqual([]);
+    }
+    // A step's if: runs only inside a job that has started.
+    const upload = scratchWorkflow().replace(
+      "      - run: pnpm install --frozen-lockfile\n",
+      "      - run: pnpm install --frozen-lockfile\n      - if: always()\n        run: echo done\n",
+    );
+    expect(gateProblems(upload)).toEqual([]);
+  });
+
+  it("H-1: flags anchors, aliases and merge keys, which could hide an if: or continue-on-error", () => {
+    const HIDDEN =
+      "anchors, aliases or merge keys, which the guard does not resolve: line {n} could hide an if: or continue-on-error";
+    const at = (n: number) => HIDDEN.replace("{n}", String(n));
+    const anchored = scratchWorkflow({
+      top: ["env:", "  RUN: &run always()", ""],
+      install: ["    if: *run"],
+    });
+    expect(gateProblems(anchored)).toEqual([
+      "workflow-level env: applies to the release-age job too; set it on the jobs that need it",
+      at(4),
+      at(15),
+    ]);
+    const merged = scratchWorkflow({ step: ["        <<: {continue-on-error: true}"] });
+    expect(gateProblems(merged)).toContain(at(10));
+    const aliased = scratchWorkflow({ step: ["      - *step"] });
+    expect(gateProblems(aliased)).toEqual([at(10)]);
+  });
+
+  /**
+   * actions/setup-node steps that do not take the Node.js version from .nvmrc
+   * (TM-32): each must give node-version-file: .nvmrc and no node-version,
+   * which setup-node prefers. A step's lines run from its "- " at indent 6 to
+   * the next line indented less than 8.
+   */
+  function nodeProblems(text: string): string[] {
+    const lines = text.split(/\r\n|\r|\n/);
+    const problems: string[] = [];
+    for (const [index, line] of lines.entries()) {
+      if (!line.includes("actions/setup-node@")) continue;
+      let start = index;
+      while (start > 0 && !/^ {6}- /.test(lines[start] ?? "")) start--;
+      let end = index + 1;
+      while (end < lines.length && /^(?: {8}|\s*$)/.test(lines[end] ?? "")) end++;
+      const step = lines.slice(start, end).join("\n");
+      if (
+        !/^ {6}- uses: actions\/setup-node@|^ {8}uses: actions\/setup-node@/.test(line) ||
+        !/^ {10}node-version-file: \.nvmrc$/m.test(step) ||
+        /^ {10}node-version:/m.test(step)
+      ) {
+        problems.push(
+          `line ${index + 1}: actions/setup-node does not take the version from .nvmrc`,
+        );
+      }
+    }
+    return problems;
+  }
+
+  it("TM-32: .nvmrc pins an exact Node.js version of at least 22.18, and every setup-node reads it", () => {
+    const pinned = readFileSync(join(REPO_ROOT, ".nvmrc"), "utf8");
+    const [, major = "", minor = ""] = /^(\d+)\.(\d+)\.\d+\n$/.exec(pinned) ?? [];
+    expect(pinned).toMatch(/^\d+\.\d+\.\d+\n$/);
+    expect(Number(major) > 22 || (Number(major) === 22 && Number(minor) >= 18)).toBe(true);
+    const steps = readdirSync(WORKFLOWS).flatMap((file) =>
+      nodeProblems(readFileSync(join(WORKFLOWS, file), "utf8")).map((p) => `${file} ${p}`),
+    );
+    expect(steps).toEqual([]);
+    expect(workflow.match(/uses: actions\/setup-node@/g)).toHaveLength(3);
+  });
+
+  it("TM-32: flags a setup-node step that does not read .nvmrc", () => {
+    const sha = "0".repeat(40);
+    const node = (step: string[]) =>
+      nodeProblems(
+        ["jobs:", "  check:", "    steps:", ...step, "      - run: node -v", ""].join("\n"),
+      );
+    const NOT = "line 4: actions/setup-node does not take the version from .nvmrc";
+    expect(node([`      - uses: actions/setup-node@${sha}`])).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version: 22",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          node-version: 23",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with: {node-version-file: .nvmrc}",
+      ]),
+    ).toEqual([NOT]);
+    expect(
+      node([
+        "      - name: Node",
+        `        uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+      ]),
+    ).toEqual([]);
+    expect(
+      node([
+        `      - uses: actions/setup-node@${sha}`,
+        "        with:",
+        "          node-version-file: .nvmrc",
+        "          cache: pnpm",
+      ]),
+    ).toEqual([]);
   });
 
   it("R8-05: deploy-dry-run needs release-age and check, so one green status covers rules:check", () => {

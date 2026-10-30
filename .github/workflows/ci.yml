@@ -14,15 +14,22 @@ concurrency:
 jobs:
   # R4-07, R6-03, R6-04: every version in pnpm-lock.yaml, and the pnpm version
   # in package.json packageManager, was published at least 14 days ago, and
-  # each locked integrity is the registry's. minimumReleaseAge does not apply
-  # to an install from the lockfile, and pnpm/action-setup installs the pnpm
-  # that packageManager names (so it gets no version input), so every job that
-  # installs needs this one. R8-01: pnpm-workspace.yaml holds only the settings
-  # the check knows, and no config dependencies, which pnpm installs outside
-  # the lockfile. R8-02: only the root package.json names the package manager,
-  # and no directory holds .corepack.env, since corepack reads both from the
-  # directory a command runs in. The only job that needs the registry; it
-  # installs nothing and runs no package code.
+  # each locked integrity is the registry's, in the strongest algorithm the
+  # registry publishes (TM-32). minimumReleaseAge does not apply to an install
+  # from the lockfile, and pnpm/action-setup installs the pnpm that
+  # packageManager names (so it gets no version input), so every job that
+  # installs needs this one. R8-01, R9-01, TM-29: pnpm-workspace.yaml and the
+  # root .npmrc hold only the settings the check knows, and package.json no
+  # pnpm settings; others make pnpm install config dependencies, install from
+  # another lockfile (lockfile-dir), download a Node.js runtime or run code.
+  # R8-02, R9-02, L-1: only the root package.json names the package manager,
+  # only the root holds pnpm-workspace.yaml and .npmrc, and no directory holds
+  # .corepack.env, however a case-insensitive file system would spell them,
+  # since corepack and pnpm read them from the directory a command runs in.
+  # H-1: no continue-on-error or other key here that lets the check fail
+  # without failing this job, and no if: on an installing job that runs it
+  # after this job failed. The only job that needs the registry; it installs
+  # nothing and runs no package code. Node.js is the exact version in .nvmrc.
   release-age:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
