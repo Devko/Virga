@@ -12,6 +12,7 @@ import {
   main,
   PackageJsonError,
   parseLockfile,
+  parseNpmrc,
   parsePackageManager,
   parseWorkspace,
 } from "../check-release-age.ts";
@@ -1560,6 +1561,143 @@ describe("R8-02: only the root names the package manager", () => {
       packageJson: manifest({ packageManager: "pnpm@10.28.0" }),
     });
     expect(real).toEqual(PASSES);
+  });
+});
+
+describe("R9-01: the root .npmrc is read strictly", () => {
+  /** The committed .npmrc. */
+  const NPMRC = "save-exact=true\nengine-strict=true\n";
+  const npmrc = (text: string, files: Record<string, string> = {}) =>
+    checkout({ ".npmrc": text, ...files });
+  /** main exits 1 with one error for `.npmrc line <line>: <message>`. */
+  const refuses = async (text: string, line: number, message: RegExp) => {
+    const result = await runMain(npmrc(text));
+    expect(result).toEqual({
+      code: 1,
+      out: [],
+      err: [expect.stringMatching(new RegExp(`^error: \\.npmrc line ${line}: ${message.source}`))],
+    });
+    return result.err.join("\n");
+  };
+  const ONLY = "; the project's \\.npmrc holds only save-exact=true and engine-strict=true";
+
+  it("R9-01: refuses lockfile-dir=other, which makes pnpm install from a lockfile the check never dated", async () => {
+    // The review's case: the root lockfile locks yaml 2.8.0, 400 days old, and
+    // other/pnpm-lock.yaml locks 2.9.1, one day old, which pnpm would install.
+    const root = npmrc(`${NPMRC}lockfile-dir=other\n`, {
+      "pnpm-lock.yaml": lockfile([registryEntry("yaml@2.8.0")]),
+      "other/pnpm-lock.yaml": lockfile([registryEntry("yaml@2.9.1")]),
+    });
+    const { fetch } = mockFetch({ ...PNPM_REGISTRY, yaml: { "2.8.0": ago(400), "2.9.1": ago(1) } });
+    expect(await runMain(root, { fetch })).toEqual({
+      code: 1,
+      out: [],
+      err: [
+        expect.stringMatching(
+          /^error: \.npmrc line 3: lockfile-dir makes pnpm install from a lockfile other than the root pnpm-lock\.yaml the check dates/,
+        ),
+      ],
+    });
+  });
+
+  it("R9-01: refuses each setting that changes the lockfile, the registry or the runtime, or runs code", async () => {
+    const SECRET = "npm_SYNTHETICr9token0123456789abcdef";
+    const LOCKFILE = "makes pnpm install from a lockfile other than the root pnpm-lock\\.yaml";
+    const RUNTIME = "makes pnpm download and run a Node\\.js runtime the check does not date";
+    const FETCH = "changes where or how pnpm fetches packages";
+    const CODE = "makes pnpm run code the check does not read";
+    const CREDENTIAL =
+      "a registry credential, token helper or client certificate \\(the check prints neither key nor value\\)";
+    const cases: [string, string][] = [
+      ["lockfile-dir=other", `lockfile-dir ${LOCKFILE}`],
+      ["git-branch-lockfile=true", `git-branch-lockfile ${LOCKFILE}`],
+      [
+        "merge-git-branch-lockfiles-branch-pattern=main",
+        `merge-git-branch-lockfiles-branch-pattern ${LOCKFILE}`,
+      ],
+      ["shared-workspace-lockfile=false", `shared-workspace-lockfile ${LOCKFILE}`],
+      ["lockfile=false", `lockfile ${LOCKFILE}`],
+      ["use-node-version=23.0.0", `use-node-version ${RUNTIME}`],
+      ["node-version=23.0.0", `node-version ${RUNTIME}`],
+      ["node-mirror:release=http://127.0.0.1:8080/", `node-mirror:release ${RUNTIME}`],
+      ["registry=https://registry.invalid/", `registry ${FETCH}`],
+      ["@virga:registry=https://registry.invalid/", `@virga:registry ${FETCH}`],
+      ["strict-ssl=false", `strict-ssl ${FETCH}`],
+      ["https-proxy=http://proxy.invalid/", `https-proxy ${FETCH}`],
+      [`//registry.npmjs.org/:_authToken=${SECRET}`, CREDENTIAL],
+      [`_authToken=${SECRET}`, CREDENTIAL],
+      [`_auth=${SECRET}`, CREDENTIAL],
+      ["//registry.npmjs.org/:tokenHelper=/tmp/helper", CREDENTIAL],
+      [
+        `${SECRET}=true`,
+        `the key on this line \\(not printed\\) is not a setting the check accepts`,
+      ],
+      ["pnpmfile=.pnpmfile.cjs", `pnpmfile ${CODE}`],
+      ["global-pnpmfile=/tmp/x.cjs", `global-pnpmfile ${CODE}`],
+      ["node-options=--require=./x.cjs", `node-options ${CODE}`],
+      ["script-shell=/tmp/sh", `script-shell ${CODE}`],
+      ["ignore-scripts=false", "ignore-scripts is not a setting the check accepts"],
+    ];
+    for (const [line, message] of cases) {
+      const err = await refuses(`${NPMRC}${line}\n`, 3, new RegExp(`${message}.*${ONLY}`));
+      expect(err).not.toContain(SECRET);
+    }
+  });
+
+  it("R9-01: reads .npmrc strictly: one key=value per line, comments on their own lines", async () => {
+    const VALUE =
+      "save-exact has a value the check does not accept; it accepts save-exact=true only";
+    const cases: [string, number, string][] = [
+      ["save-exact = true\n", 1, "write the setting as key=value, without spaces around the key"],
+      ["  save-exact=true\n", 1, "write the setting as key=value, without spaces around the key"],
+      ["save-exact=false\n", 1, VALUE],
+      ['save-exact="true"\n', 1, VALUE],
+      ["save-exact= true\n", 1, VALUE],
+      ["save-exact=true ; exact versions\n", 1, VALUE],
+      ["save-exact=true # exact versions\n", 1, VALUE],
+      [`save-exact=\${SAVE_EXACT}\n`, 1, VALUE],
+      ["lockfile-dir\n", 1, "expected one key=value per line"],
+      ["[registry]\nsave-exact=true\n", 1, "expected one key=value per line"],
+      ["save-exact=true\nsave-exact=true\n", 2, "save-exact appears twice"],
+      ["save-exact[]=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
+      ["SAVE-EXACT=true\n", 1, "the key on this line \\(not printed\\) is not a setting"],
+      ["save-exact=true\rlockfile-dir=other\n", 2, "lockfile-dir makes pnpm install"],
+      [" # not a comment line\n", 1, "expected one key=value per line"],
+    ];
+    for (const [text, line, message] of cases) await refuses(text, line, new RegExp(message));
+  });
+
+  it("R9-01: accepts the committed .npmrc, comment lines, CRLF, a BOM and no .npmrc", async () => {
+    expect(parseNpmrc(readFileSync(join(REPO_ROOT, ".npmrc"), "utf8"))).toEqual(
+      new Map([
+        ["save-exact", "true"],
+        ["engine-strict", "true"],
+      ]),
+    );
+    expect(await runMain(npmrc(NPMRC))).toEqual(PASSES);
+    const commented =
+      "﻿# exact versions\r\n  ; engines\r\n\r\nsave-exact=true \r\nengine-strict=true";
+    expect(await runMain(npmrc(commented))).toEqual(PASSES);
+    expect(await runMain(npmrc(""))).toEqual(PASSES);
+    expect(await runMain(checkout())).toEqual(PASSES);
+  });
+});
+
+describe("R9-02: only the root holds .npmrc", () => {
+  it("R9-02: refuses an app's .npmrc, which makes its build fetch and run a Node.js runtime", async () => {
+    const mirror = "use-node-version=23.0.0\nnode-mirror:release=http://127.0.0.1:8080/\n";
+    for (const path of ["apps/web/.npmrc", "apps/.npmrc", "packages/graph/.npmrc"]) {
+      await refusedBy(
+        checkout({ ".npmrc": "save-exact=true\n", [path]: mirror }),
+        new RegExp(
+          `^error: ${path.replaceAll(".", "\\.")}: only the root may hold \\.npmrc; pnpm also reads the \\.npmrc of the directory a command runs in`,
+        ),
+      );
+    }
+    await refusedBy(
+      checkout({ "apps/web/.npmrc": "" }),
+      /^error: apps\/web\/\.npmrc: only the root may hold \.npmrc/,
+    );
   });
 });
 

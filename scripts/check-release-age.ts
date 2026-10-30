@@ -12,8 +12,11 @@
 // dependencies outside the lockfile, so the check reads pnpm-workspace.yaml
 // strictly and refuses them (R8-01), and corepack reads the nearest
 // packageManager and any .corepack.env from the directory a command runs in,
-// so only the root may name the package manager (R8-02). Needs network access
-// to registry.npmjs.org and nothing else; CI runs it before anything is installed.
+// so only the root may name the package manager (R8-02). The root .npmrc is
+// read as strictly, since lockfile-dir makes pnpm install from a lockfile the
+// check never dated, and no directory below the root may hold one (R9-01,
+// R9-02). Needs network access to registry.npmjs.org and nothing else; CI runs
+// it before anything is installed.
 import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -646,6 +649,113 @@ export function parseWorkspace(text: string): Map<string, string | string[]> {
   return settings;
 }
 
+export class NpmrcError extends CheckError {}
+
+/** The settings of the root .npmrc the check accepts, each with the one value it accepts (R9-01). */
+const NPMRC_SETTINGS: ReadonlyMap<string, string> = new Map([
+  ["save-exact", "true"],
+  ["engine-strict", "true"],
+]);
+
+const npmrcError = (line: number, problem: string) =>
+  new NpmrcError(`.npmrc line ${line}: ${problem}`);
+
+/** A key shaped like a setting name, which the check prints; any other key could be a credential. */
+const SETTING_NAME = /^@?[a-z0-9][a-z0-9._-]{0,63}(?::[a-z0-9._-]{1,63})?$/;
+
+const LOCKFILE_SETTINGS = new Set([
+  "lockfile",
+  "lockfile-dir",
+  "git-branch-lockfile",
+  "merge-git-branch-lockfiles",
+  "merge-git-branch-lockfiles-branch-pattern",
+  "shared-workspace-lockfile",
+]);
+const RUNTIME_SETTINGS = new Set(["use-node-version", "node-version", "node-mirror"]);
+const FETCH_SETTINGS = new Set([
+  "registry",
+  "strict-ssl",
+  "proxy",
+  "https-proxy",
+  "noproxy",
+  "no-proxy",
+]);
+const CODE_SETTINGS = new Set(["pnpmfile", "global-pnpmfile", "node-options", "script-shell"]);
+const CREDENTIAL_SETTINGS =
+  /(?:^|:)(?:_auth|_authtoken|_password|username|email|always-auth|certfile|keyfile|tokenhelper|ca|cafile|cert|key)$/;
+
+/**
+ * Why the check refuses a key of .npmrc. Never names a value, and names the
+ * key only if it is shaped like a setting name.
+ */
+function npmrcKeyProblem(key: string): string {
+  const accepted = [...NPMRC_SETTINGS].map(([name, value]) => `${name}=${value}`).join(" and ");
+  const only = `the project's .npmrc holds only ${accepted}, so extend the check before adding a setting`;
+  const lower = key.toLowerCase();
+  if (lower.startsWith("//") || CREDENTIAL_SETTINGS.test(lower)) {
+    return `a registry credential, token helper or client certificate (the check prints neither key nor value): the repository holds no credentials, and pnpm runs a token helper as a command; ${only}`;
+  }
+  if (!SETTING_NAME.test(key)) {
+    return `the key on this line (not printed) is not a setting the check accepts; ${only}`;
+  }
+  const name = key.replace(/:.*$/, "");
+  if (LOCKFILE_SETTINGS.has(key)) {
+    return `${key} makes pnpm install from a lockfile other than the root pnpm-lock.yaml the check dates, or without one; ${only}`;
+  }
+  if (RUNTIME_SETTINGS.has(name)) {
+    return `${key} makes pnpm download and run a Node.js runtime the check does not date; ${only}`;
+  }
+  if (FETCH_SETTINGS.has(key) || key.endsWith(":registry")) {
+    return `${key} changes where or how pnpm fetches packages, and the check dates versions on registry.npmjs.org; ${only}`;
+  }
+  if (CODE_SETTINGS.has(key)) {
+    return `${key} makes pnpm run code the check does not read: a pnpmfile, a shell or Node.js options for scripts; ${only}`;
+  }
+  return `${key} is not a setting the check accepts; a setting can make pnpm install from another lockfile, fetch from another registry or run code the check does not date; ${only}`;
+}
+
+/**
+ * The settings of the root .npmrc (R9-01). pnpm reads it as an INI file, and
+ * settings such as lockfile-dir make it install from a lockfile the check
+ * never dated, or download a Node.js runtime, so the check accepts only the
+ * settings the project uses, each with its one value, written as key=value
+ * without spaces. Anything else is refused with its line number: sections,
+ * quoted values, inline comments, variables and duplicate keys. Whole-line
+ * comments (# or ;) are allowed. Values are never printed.
+ */
+export function parseNpmrc(text: string): Map<string, string> {
+  const settings = new Map<string, string>();
+  // pnpm's INI reader breaks lines at any CR or LF.
+  const lines = text.replace(/^﻿/, "").split(/\r\n|\r|\n/);
+  for (const [index, line] of lines.entries()) {
+    const number = index + 1;
+    const content = line.replace(/[ \t]+$/, "");
+    if (content === "" || /^[ \t]*[#;]/.test(content)) continue;
+    const equals = content.indexOf("=");
+    if (equals < 0) {
+      throw npmrcError(
+        number,
+        "expected one key=value per line; a line without = sets a key to true, and a [section] line starts a section",
+      );
+    }
+    const key = content.slice(0, equals);
+    if (key === "" || /^\s|\s$/.test(key)) {
+      throw npmrcError(number, "write the setting as key=value, without spaces around the key");
+    }
+    const accepted = NPMRC_SETTINGS.get(key);
+    if (accepted === undefined) throw npmrcError(number, npmrcKeyProblem(key));
+    if (settings.has(key)) throw npmrcError(number, `${key} appears twice`);
+    if (content.slice(equals + 1) !== accepted) {
+      throw npmrcError(
+        number,
+        `${key} has a value the check does not accept; it accepts ${key}=${accepted} only`,
+      );
+    }
+    settings.set(key, accepted);
+  }
+  return settings;
+}
+
 export class PackageJsonError extends CheckError {}
 
 export interface PackageManagerPin {
@@ -786,9 +896,10 @@ function checkNestedManifest(path: string, shown: string): void {
  * Package-manager inputs below the root (R8-02). Corepack takes the nearest
  * package.json that names packageManager or devEngines.packageManager, and
  * loads .corepack.env files, starting from the directory a command runs in;
- * pnpm takes the nearest pnpm-workspace.yaml in the same way. So only the root
- * package.json may name the package manager, only the root may hold
- * pnpm-workspace.yaml, and no directory may hold .corepack.env. Walks the
+ * pnpm takes the nearest pnpm-workspace.yaml in the same way, and reads the
+ * .npmrc of that directory too (R9-02). So only the root package.json may name
+ * the package manager, only the root may hold pnpm-workspace.yaml and .npmrc,
+ * and no directory may hold .corepack.env. Walks the
  * checkout without node_modules and .git, and refuses symbolic links rather
  * than follow them, since corepack and pnpm would. Names are compared without
  * case, as a case-insensitive file system opens them.
@@ -823,6 +934,11 @@ export function checkCheckout(root: string): void {
       if (name === "pnpm-workspace.yaml" && !(atRoot && entry.name === name)) {
         throw new CheckoutError(
           `${shown}: only the root may hold pnpm-workspace.yaml; pnpm takes the nearest one, starting from the directory a command runs in, with its settings and config dependencies`,
+        );
+      }
+      if (name === ".npmrc" && !(atRoot && entry.name === name)) {
+        throw new CheckoutError(
+          `${shown}: only the root may hold .npmrc; pnpm also reads the .npmrc of the directory a command runs in, where use-node-version and node-mirror make it download and run a Node.js runtime and lockfile-dir makes it install from another lockfile (R9-02)`,
         );
       }
       if (entry.isDirectory()) {
@@ -1235,6 +1351,16 @@ function readText(root: string, name: string): string {
   }
 }
 
+/** Like readText, but undefined if the file does not exist. */
+function readOptional(root: string, name: string): string | undefined {
+  try {
+    return readFileSync(join(root, name), "utf8");
+  } catch (cause) {
+    if (isRecord(cause) && cause.code === "ENOENT") return undefined;
+    throw new CheckError(`${name} cannot be read${errorCode(cause)}`);
+  }
+}
+
 const LABELS: Record<Failure["reason"], string> = {
   too_young: "too young",
   not_registry: "not checked",
@@ -1256,8 +1382,13 @@ export async function main(options: MainOptions = {}): Promise<number> {
     // R8-01: config dependencies and settings that make pnpm read another
     // lockfile or a pnpmfile are refused before anything is fetched.
     parseWorkspace(readText(root, "pnpm-workspace.yaml"));
-    // R8-02: corepack and pnpm read these from the directory a command runs in.
+    // R8-02, R9-02: corepack and pnpm read these from the directory a command
+    // runs in. The walk also refuses a root .npmrc that is a symbolic link.
     checkCheckout(root);
+    // R9-01: settings such as lockfile-dir make pnpm install from a lockfile
+    // the check never dated.
+    const npmrc = readOptional(root, ".npmrc");
+    if (npmrc !== undefined) parseNpmrc(npmrc);
     result = await checkReleaseAge(lockfile, { ...options, packageJson, now, minAgeDays });
   } catch (cause) {
     if (!(cause instanceof CheckError)) throw cause;
