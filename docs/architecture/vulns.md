@@ -8,7 +8,7 @@ The goal is the `vulns` input of CF-001 (and later CF-005): which package nodes 
 
 | Input | Form | Source |
 | --- | --- | --- |
-| Package nodes | Node IDs `package:<purl>`, npm purls such as `pkg:npm/%40scope/name@1.2.3` | Not built yet: the `workers` collector from `package_dependencies`, after [S-04](../spikes/S-04-worker-dependencies.md) |
+| Package nodes | Node IDs `package:<purl>`, npm purls in the data model's form (name in lower case), such as `pkg:npm/%40scope/name@1.2.3` | Not built yet: the `workers` collector from `package_dependencies`, after [S-04](../spikes/S-04-worker-dependencies.md) |
 | Advisories | One OSV record per JSON text, read with `readOsvFeed` | Not built yet: the advisory mirror |
 | KEV catalog | The CISA catalog JSON, read with `readKevCatalog` | Not built yet: the same mirror |
 | Existing rows | `listVulns(db)` | The `vulns` table |
@@ -49,13 +49,13 @@ Version strings are not checked by the reader: `ECOSYSTEM` versions are uninterp
 - No qualifiers or subpath. A qualifier such as `repository_url` can name another registry, where the same name is another package.
 - An optional scope, `%40scope` or `@scope`, then the name. Each part uses the characters `encodeURIComponent` leaves alone; at most 214 characters together, as npm allows.
 - The version is percent-decoded and must be [SemVer 2.0.0](https://semver.org/spec/v2.0.0.html): no `v` or `=` prefix, no ranges. Numeric parts compare as strings, so numbers above 2^53 compare exactly.
-- The name keeps its case and is compared exactly. npm names are case sensitive, and old packages such as `JSONStream` have capitals. The collector must keep npm's spelling.
+- The name keeps its case, and matching compares names without regard to ASCII case (R9-05). The purl spec lowercases npm names, and every writer follows it ([data model](data-model.md#package-node-ids)): `scanner-io` writes `JSONStream` 1.3.1 as `pkg:npm/jsonstream@1.3.1`, while OSV keeps npm's spelling. npm refuses new names with capitals, so only old packages differ in case; matching both is an extra match, which is the safe direction. Only `A` to `Z` are folded (`npmNameKey`): npm names are ASCII, and Unicode folding would turn U+212A (KELVIN SIGN) into `k`, so an advisory name with it would name `keyv`.
 
 A package that does not parse is reported in `unparsed` with the reason and is not matched.
 
 ## Matching
 
-For a package and an advisory, every npm entry whose name equals the package name (or is `*`) is evaluated; the others do not apply. Three results: `affected`, `not_affected`, `unknown`.
+For a package and an advisory, every npm entry whose name equals the package name without regard to ASCII case (or is `*`) is evaluated; the others do not apply. The row keeps the package node ID as given. Three results: `affected`, `not_affected`, `unknown`.
 
 - **Ranges** follow the schema's evaluation pseudocode. With `limit` events, the version must be below one of them (`*` is infinity). Then the events are walked in version order, `introduced: "0"` first: `introduced` at or below the version starts an affected span, `fixed` at or below it ends one, `last_affected` below it ends one. At equal versions, `introduced` comes first, so `introduced: X, fixed: X` affects nothing and `introduced: X, last_affected: X` affects exactly X. Several spans in one range work, and the order of events in the record does not matter.
 - **`SEMVER` and `ECOSYSTEM`** are evaluated alike: npm versions are SemVer, ordered by SemVer precedence. Build metadata does not count.

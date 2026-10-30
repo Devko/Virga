@@ -20,7 +20,7 @@ export {
   readOsvFeed,
   readOsvRecord,
 } from "./osv.ts";
-export { type NpmPurl, parseNpmPurl } from "./purl.ts";
+export { type NpmPurl, npmNameKey, parseNpmPurl } from "./purl.ts";
 export {
   type RematchInput,
   type RematchResult,

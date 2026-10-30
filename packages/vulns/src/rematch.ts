@@ -2,7 +2,7 @@ import type { VulnRecord } from "@virga/graph";
 import { isKnownExploited, type KevCatalog } from "./kev.ts";
 import { matchAdvisory } from "./match.ts";
 import type { AdvisoryFeed, OsvAdvisory } from "./osv.ts";
-import { parseNpmPurl } from "./purl.ts";
+import { npmNameKey, parseNpmPurl } from "./purl.ts";
 import { type SeverityRank, severityRank } from "./severity.ts";
 
 export interface RematchInput {
@@ -150,10 +150,11 @@ export function rematch(input: RematchInput): RematchResult {
   const { feed, kev, at } = input;
   const source = input.source ?? "osv";
 
+  // Advisories by npm name key: names match without regard to ASCII case (R9-05).
   const byName = new Map<string, OsvAdvisory[]>();
   const wildcard: OsvAdvisory[] = [];
   for (const advisory of feed.advisories) {
-    for (const name of new Set(advisory.affected.map((e) => e.name))) {
+    for (const name of new Set(advisory.affected.map((e) => npmNameKey(e.name)))) {
       if (name === "*") wildcard.push(advisory);
       else {
         const list = byName.get(name);
@@ -202,7 +203,7 @@ export function rematch(input: RematchInput): RematchResult {
       unparsed.add(packageId);
       continue;
     }
-    const candidates = new Set([...(byName.get(purl.name) ?? []), ...wildcard]);
+    const candidates = new Set([...(byName.get(npmNameKey(purl.name)) ?? []), ...wildcard]);
     for (const advisory of candidates) {
       const match = matchAdvisory(advisory, purl.name, purl.version);
       if (match.decision === "not_affected") continue;

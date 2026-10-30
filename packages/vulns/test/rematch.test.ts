@@ -300,6 +300,45 @@ describe("rematch", () => {
     expect(result.detail).toBe("advisory feed not complete");
   });
 
+  describe("R9-05: npm names in either case", () => {
+    const record = {
+      id: "GHSA-vrga-case-0000",
+      modified: "2026-10-01T00:00:00Z",
+      database_specific: { severity: "CRITICAL" },
+      affected: [
+        {
+          package: { ecosystem: "npm", name: "JSONStream" },
+          ranges: [{ type: "SEMVER", events: [{ introduced: "0" }, { fixed: "1.3.6" }] }],
+        },
+      ],
+    };
+    const cased = readOsvFeed([JSON.stringify(record)]);
+    // As scanner-io's npmPurl writes it, and as npm spells the name.
+    const LOWER = "package:pkg:npm/jsonstream@1.3.1";
+    const KEPT = "package:pkg:npm/JSONStream@1.3.1";
+    const open = (packageId: string) =>
+      row(packageId, "GHSA-vrga-case-0000", { fixedIn: "1.3.6", firstSeen: AT });
+
+    it.each([LOWER, KEPT])("matches %s and keeps its node ID", (packageId) => {
+      const result = run([packageId], [], { feed: cased });
+      expect(result.rows).toEqual([open(packageId)]);
+      expect(result.complete).toBe(true);
+    });
+
+    it("opens the lower-case node when it replaces the one with capitals", () => {
+      const old = row(KEPT, "GHSA-vrga-case-0000", { fixedIn: "1.3.6" });
+      const result = run([LOWER], [old], { feed: cased });
+      expect(result.rows).toEqual([{ ...old, status: "fixed" }, open(LOWER)]);
+      expect(result.counts).toMatchObject({ opened: 1, fixed: 1 });
+      expect(result.complete).toBe(true);
+    });
+
+    it("matches both spellings in one run, one row each", () => {
+      const result = run([LOWER, KEPT], [], { feed: cased });
+      expect(result.rows).toEqual([open(KEPT), open(LOWER)]);
+    });
+  });
+
   it("does not take an empty feed for the end of every advisory unless it is complete", () => {
     const empty = readOsvFeed([]);
     const open = row(A, "GHSA-vrga-0001-test1");
