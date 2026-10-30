@@ -161,11 +161,13 @@ const RPC_TYPES: true[] = [
   true as Typed<Awaited<ReturnType<typeof reader.getNeighborhood>>>,
   true as Typed<Awaited<ReturnType<typeof exports.Admin.addAccount>>>,
   true as Typed<Awaited<ReturnType<typeof exports.Admin.triggerScan>>>,
+  true as Typed<Awaited<ReturnType<typeof exports.Admin.removeAccount>>>,
   true as Typed<Awaited<ReturnType<Stub["beginScan"]>>>,
   true as Typed<Awaited<ReturnType<Stub["writeChunk"]>>>,
   true as Typed<Awaited<ReturnType<Stub["sweep"]>>>,
   true as Typed<Awaited<ReturnType<Stub["computeExposure"]>>>,
   true as Typed<Awaited<ReturnType<Stub["evaluateRules"]>>>,
+  true as Typed<Awaited<ReturnType<Stub["finishScan"]>>>,
   true as Typed<Awaited<ReturnType<Stub["scanSummary"]>>>,
 ];
 
@@ -188,6 +190,7 @@ describe("GraphReader", () => {
     expect(Object.getOwnPropertyNames(Admin.prototype).sort()).toEqual([
       "addAccount",
       "constructor",
+      "removeAccount",
       "triggerScan",
     ]);
   });

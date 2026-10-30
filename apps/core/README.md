@@ -38,7 +38,9 @@ Only the running scan that is current in the graph may write (R2-07). `writeChun
 
 `GraphReader` (read-only, for the web Worker): `listAccounts()` (every account in the index by name, then ID, at most 1,000; it reads only the index), `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account.
 
-`Admin`: `addAccount({ id, name, cadenceHours, profile })` and `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running.
+`Admin`: `addAccount({ id, name, cadenceHours, profile })`, `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running, and `removeAccount(accountId)`.
+
+`removeAccount` deletes the account's `accounts` and `scan_runs` rows, then its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, then an empty schema again). It returns `{ removed }`, true when the account was in the index, and is idempotent, so a retry finishes a partial removal. With the index rows gone, no new scan starts. A scan that still runs is refused at its next write, and `finishRun` gives it no row back. Full offboarding also needs the broker: the web Worker calls `TokenIntake.remove(accountId)` first, so a running scan gets no more API access, then `Admin.removeAccount(accountId)`.
 
 ## Tests
 

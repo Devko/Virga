@@ -215,6 +215,19 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     return end;
   }
 
+  /**
+   * Deletes the account's whole graph, for offboarding. The object is
+   * migrated again, so it stays an empty, valid graph: a scan that still runs
+   * is refused like any scan that is not current, and an account that is
+   * added again starts from nothing.
+   */
+  async deleteAll(): Promise<void> {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.deleteAll();
+      migrate(this.db);
+    });
+  }
+
   /** Runs one compiled rule. One call per rule keeps each request well below the CPU limit. */
   runRule(ruleId: string, overrides?: Record<string, number | string>): RuleHit[] {
     const rule = RULES.find((r) => r.id === ruleId);

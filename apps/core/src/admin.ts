@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   type AccountRow,
+  deleteAccount,
   getAccount,
   type NewAccount,
   runningScan,
@@ -12,10 +13,13 @@ export type TriggerResult =
   | { started: true; id: string }
   | { started: false; reason: "unknown_account" | "running" | "exists"; id: string | null };
 
+/** `removed` says whether the account was in the index. */
+export type RemoveResult = { removed: boolean };
+
 /**
- * Account administration for the web Worker. Minimal for now: register an
- * account in the index and start a scan by hand. Tokens are stored through
- * the broker's TokenIntake, never here.
+ * Account administration for the web Worker: register an account in the
+ * index, start a scan by hand, and remove an account. Tokens are stored and
+ * removed through the broker's TokenIntake, never here.
  */
 export class Admin extends WorkerEntrypoint<Env> {
   /** Adds the account or updates its name, cadence and profile. */
@@ -39,5 +43,20 @@ export class Admin extends WorkerEntrypoint<Env> {
       instances: [{ id, params: { accountId } }],
     });
     return created.length > 0 ? { started: true, id } : { started: false, reason: "exists", id };
+  }
+
+  /**
+   * Removes the account: its rows in the index (`accounts`, `scan_runs`),
+   * then its whole graph. The index goes first, so no new scan starts; a
+   * scan that still runs is refused at its next write. Idempotent, so a
+   * retry after a partial failure finishes the job. The token stays in the
+   * broker until TokenIntake.remove deletes it.
+   */
+  async removeAccount(accountId: string): Promise<RemoveResult> {
+    assertAccountId(accountId);
+    const removed = await deleteAccount(this.env.INDEX, accountId);
+    const graphs = this.env.ACCOUNT_GRAPH;
+    await graphs.get(graphs.idFromName(accountId)).deleteAll();
+    return { removed };
   }
 }

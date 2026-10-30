@@ -210,6 +210,16 @@ function checkNewAccount(input: NewAccount): Required<NewAccount> {
   return { id: input.id, name, cadenceHours, profile };
 }
 
+/** Deletes an account and its scan runs. Returns whether the account was in the index. */
+export async function deleteAccount(db: D1Database, id: string): Promise<boolean> {
+  assertAccountId(id);
+  const [, account] = await db.batch([
+    db.prepare("DELETE FROM scan_runs WHERE account_id = ?").bind(id),
+    db.prepare("DELETE FROM accounts WHERE id = ?").bind(id),
+  ]);
+  return (account?.meta.changes ?? 0) > 0;
+}
+
 /** Adds an account, or updates name, cadence and profile of an existing one. */
 export async function upsertAccount(
   db: D1Database,
