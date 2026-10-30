@@ -9,7 +9,7 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
 | `ACCOUNT_GRAPH` | `AccountGraph`, named by account ID |
 | `SCAN_WORKFLOW` | `ScanWorkflow` (`virga-scan`), params `{ accountId }` |
 | `DISPATCH_WORKFLOW` | `DispatchWorkflow` (`virga-dispatch`), `schedules: ["17 * * * *"]` (UTC) |
-| `INDEX` | D1 `virga-index`: `accounts` and `scan_runs` ([migrations/0001_index.sql](migrations/0001_index.sql)) |
+| `INDEX` | D1 `virga-index`: `accounts` and `scan_runs` ([migrations/](migrations/)) |
 | `BROKER` | Service binding to `virga-broker`, entrypoint `ApiCaller`; the only way to the Cloudflare API |
 
 ## Scan
@@ -40,16 +40,22 @@ Only the running scan that is current in the graph may write (R2-07). `writeChun
 
 `getScanSummary` returns `{ account, lastRun, graph }`: the index row, the latest `scan_runs` row, and the graph's summary. `graph.ruleRuns` lists, per rule of the latest scan, its status, hits (decided rows), undecided rows, missing inputs and the error text (`Untrusted`, at most 500 characters). A rule that is not evaluated, or an undecided row, is not a pass.
 
-`Admin`: `addAccount({ id, name, cadenceHours, profile })`, which also calls the account's graph object to clear its `removed` marker (`AccountGraph.clearRemoved`), so an account that is added again can be scanned again; `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running, and `removeAccount(accountId)`.
+`Admin`: `addAccount({ id, name, cadenceHours, profile })`, which also calls the account's graph object to clear its `removed` marker (`AccountGraph.clearRemoved`), so an account that is added again can be scanned again; `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless the account is unknown (`unknown_account`), being removed (`removing`) or has a scan running (`running`), and `removeAccount(accountId)`. `addAccount` on an account that is still `removing` finishes the removal first, so the account starts from nothing.
 
-`removeAccount` deletes the account's `accounts` and `scan_runs` rows, then its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, an empty schema again, and a `removed` key in `meta`). It returns `{ removed }`, true when the account was in the index, and is idempotent, so a retry finishes a partial removal. After the removal (R4-03):
+`removeAccount` runs in an order that never hides an account whose graph is left (R5-08):
 
-- The dispatcher and `triggerScan` start no new scan.
-- A scan whose begin step runs after the removal (dispatched, already queued, or a retried begin step) finds the account missing from the index and ends `skipped` (detail `account <id> is not in the index`), with no write to the graph or the index and no API call.
-- While `removed` is set, `AccountGraph.beginScan` refuses with `{ started: false, removed: true }`, in case the removal lands between the index check and the graph call. The index's `beginRun` adds a `running` row only while the account exists.
-- A scan that still runs is refused at its next write, and `finishRun` gives it no row back.
+1. Mark the account `removing` (`accounts.removing_at`, migration 0002). From here on it is listed with status `removing`.
+2. Delete its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, an empty schema again, and a `removed` key in `meta`).
+3. Delete its `accounts` and `scan_runs` rows.
 
-The index rows go first. If `deleteAll` then fails, the account no longer shows in any list while its graph remains, until the removal is repeated (R5-08; round 6 changes the order).
+It returns `{ removed }`, true when the account was in the index, and is idempotent: a step that fails leaves the account listed as `removing`, and a retry finishes the removal. From the first step on (R4-03, R5-08):
+
+- The dispatcher (`dueAccounts`) and `triggerScan` start no new scan.
+- A scan whose begin step runs after the mark (dispatched, already queued, or a retried begin step) finds the account missing or `removing` in the index and ends `skipped` (detail `account <id> is not in the index or is being removed`), with no write to the graph or the index and no API call.
+- While `removed` is set, `AccountGraph.beginScan` refuses with `{ started: false, removed: true }`, in case the removal lands between the index check and the graph call. The index's `beginRun` adds a `running` row only while the account exists and is not `removing`.
+- A scan that began before the mark keeps writing until the graph is deleted, is refused at its next write after that, and `finishRun` gives it no row back. If the graph deletion fails, such a scan can still finish into the graph of the `removing` account; a repeat of the removal deletes that data.
+
+Concurrent `addAccount` and `removeAccount` calls for one account are not serialized. In the worst interleaving the graph is left empty without its `removed` marker, the same small window as before R5-08.
 
 Full offboarding also needs the broker: the web Worker calls `TokenIntake.remove(accountId)` first, so a running scan gets no more API access, then `Admin.removeAccount(accountId)`.
 

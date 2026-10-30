@@ -111,7 +111,14 @@ Emitted only when the script has `preview_urls: true`.
 | `production_branch` | string \| null | |
 | `subdomain` | string | `<project>.pages.dev` |
 | `preview_deployments` | string | `all`, `none` or `custom`, from the preview branch settings |
-| `plain_text_vars` | `{ name, environment, kind, looks_secret, secret_pattern }[]` | Plain-text env vars of the preview and production configs, sorted by environment, then name. Secret env vars are never read and values are never stored; `looks_secret` is `null` when the API returns no value |
+| `plain_text_vars` | `{ name, environment, kind, looks_secret, secret_pattern }[]` | Plain-text env vars of the preview and production configs, sorted by environment, then name. Secret env vars are never read and values are never stored; `looks_secret` is `null` when the API returns no value. What the API did not return is recorded, not dropped (R5-07): see below |
+
+Two entry shapes mark what could not be read, both with `looks_secret` and `secret_pattern` `null`:
+
+- `kind: "unread"`, `name: null`: the environment has no `env_vars` object (no `deployment_configs`, no config for the environment, or `env_vars` missing, `null` or not an object). One entry per such environment.
+- `kind: "unknown"`: a variable that is neither `plain_text` nor `secret_text`. Its value is not read.
+
+A variable whose value is `null`, the API's delete marker, yields nothing.
 
 `pages_domain` — native ID: custom domain or `<project>.pages.dev`; name: same. Props: `project`, `status`.
 
@@ -130,7 +137,7 @@ Emitted only when the script has `preview_urls: true`.
 | `enabled` | boolean \| null | `null` when the API omits the field or sends another type |
 | `zone_id` | string \| null | |
 
-Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point. Round 6 changes that (R4-02): the `r2.dev` domain is emitted unless the API says it is disabled, with `enabled` `null` when that cannot be read. CF-021 version 3 and the exposure evaluator already treat any `enabled` other than `false` as possibly public, for custom and `r2.dev` domains: CF-021 returns an undecided row, and the evaluator decides the domain `unknown`.
+Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted unless the API says `enabled: false`; `enabled` is `null` when the flag is missing or not a boolean (R4-02). CF-021 version 3 and the exposure evaluator already treat any `enabled` other than `false` as possibly public, for custom and `r2.dev` domains: CF-021 returns an undecided row, and the evaluator decides the domain `unknown`.
 
 `d1_database` — native ID: database UUID; name: database name. Props: `created_at` (string \| null).
 
@@ -221,14 +228,15 @@ The rule types `ip_list`, `auth_method`, `auth_context`, `external_evaluation`, 
 | `tunnel_type` | string | `cfd_tunnel` or `warp_connector` (Mesh) |
 | `status` | string \| null | `healthy`, `down`, `inactive`, ... |
 | `config_src` | string \| null | `cloudflare` (remotely managed) or `local` |
-| `ingress_truncated` | boolean | `true` when the ingress yields more than 1,000 entry points and the rest were not emitted |
+| `ingress_truncated` | boolean | `true` when the ingress yields more than 1,000 entry points and the rest were not emitted; always `false` for locally managed tunnels and Mesh nodes |
 
 `tunnel_hostname` — native ID: `<tunnel_id>:<hostname>:<path>`; name: hostname.
 
 - The tunnel ID keeps two tunnels that serve the same hostname apart.
 - The `:` between hostname and path keeps a hostname and a path from combining into another hostname's ID (review R5-04).
 - When the ID would exceed 512 characters, the path part becomes `sha256:<hex of the path>` (R5-05). The full path stays in `path`, and no rule is dropped for its length.
-- Fall-through expansion yields at most 1,000 `tunnel_hostname` nodes per tunnel (R5-06). Beyond that, the tunnel gets `ingress_truncated: true`, and the evaluator returns `unknown` for every entry point of that tunnel.
+- A pair that cannot have that ID gets `<tunnel_id>:sha256:<hex of the JSON array [hostname, path]>`. This happens when an earlier pair already holds the ID (a hostname containing `:`, or a literal path that reads `sha256:<hex>`), or when the hostname alone makes the ID too long. If that ID is taken too, which only a crafted rule can cause, the chunk fails with an error and the class gets a signal.
+- A tunnel yields at most 1,000 `tunnel_hostname` nodes (R5-06). Nodes are kept in rule order, and for a rule without a hostname in sorted hostname order; shadowed rules and rules without a hostname that answer with `http_status` do not count. Beyond that, the tunnel gets `ingress_truncated: true`, and the evaluator returns `unknown` for every entry point of that tunnel.
 - `via_fallthrough` nodes use the same form, with the hostname from the ingress and the path of the rule without a hostname.
 - For one hostname and path only the first matching rule applies, so a hostname rule and a rule without a hostname never share an ID; the ID does not depend on the rule's position.
 
@@ -258,7 +266,8 @@ Known limits of the per-rule model, and which way each errs:
 - Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
 - A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
 - A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
-- Until the collector follows the ID form above (round 6), `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point (R5-04). This was already true before round 4.
+- The cap bounds the number of nodes, not their size. One path-only rule with a path near the props limit, expanded over 1,000 hostnames, still yields a very large chunk. The chunk then fails with a signal rather than silently, but it can stall the `tunnels` class.
+- When every emitted node of a truncated tunnel answers with `http_status`, CF-004 has no row for the tunnel and does not see the truncation.
 
 ### tokens
 
@@ -347,7 +356,7 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
    - `worker_route`, `worker_custom_domain`, `workers_dev`, `worker_preview_url`
    - `pages_domain`, `pages_preview`
    - `r2_public_domain` unless `enabled` is `false`; with `enabled` `null` the entry point is `unknown`
-   - `tunnel_hostname`
+   - `tunnel_hostname`; when its tunnel has `ingress_truncated: true`, the entry point is `unknown` (see item 6)
 2. **Matching.**
    - Every Access app with a `hostname` target that matches the entry point's host decides the path prefixes it covers: an exact host beats a wildcard, and a longer path beats a shorter one.
    - An Access hostname wildcard covers one label. It never covers a route or tunnel host that matches any depth: those deeper hosts are decided as if no hostname app matched them (Worker-level Access if it applies, otherwise `public` with confidence 1).
@@ -385,6 +394,7 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
 6. **Unsupported input** → `unknown`.
    - That covers a target of kind `other`, a target without the shape above (for example without `overrides`), a hostname target whose host has a port or a wildcard other than a leading `*.`, a wildcard the evaluator cannot place, and missing coverage for `access` while the entry point exists.
    - An `other` target naming a `worker_id` that no `worker_script` carries may apply to every entry point whose Worker has `worker_id` `null`.
+   - A `tunnel_hostname` whose tunnel (the `ROUTES_TO` target or `tunnel:<tunnel_id>`) has `ingress_truncated: true` is `unknown` at its own path label, confidence 0, with the tunnel node as `reason_id` (R5-06). Rules the collector left out may take its requests first.
    - An `other` target only makes the entry points it might cover `unknown`: API type `all_workers` only Worker entry points, `all_preview_workers` only preview URLs, `worker` or `preview_worker` only that Worker's.
 7. **Confidence:**
    - 2 when the decision follows from complete data with exact matching

@@ -2,12 +2,12 @@
 
 - Date: 2026-10-30
 - Scope: all code merged up to commit 0677dde (round 1), read-only review by a reviewer agent
-- Status: fixes landed in rounds 2 to 4. The [verification review](2026-10-30-verification-round-4.md) confirms seven of them and rates R2-02, R2-08 and R2-10 as partly fixed. Their follow-ups R4-02, R4-06 and R4-07 were fixed in round 5 of the [work packages](../team/work-packages.md), except the collector half of R4-02, which is planned in round 6. No review has verified the round 5 fixes yet.
+- Status: fixes landed in rounds 2 to 4. The [verification review](2026-10-30-verification-round-4.md) confirms seven of them and rates R2-02, R2-08 and R2-10 as partly fixed. Their follow-ups R4-02, R4-06 and R4-07 were fixed in round 5 of the [work packages](../team/work-packages.md), and the collector half of R4-02 in round 6. No review has verified the round 5 and round 6 fixes yet.
 
 | Finding | Fixed by | Test | Verification (round 4) | Follow-up |
 | --- | --- | --- | --- | --- |
 | R2-01 | `fix-exposure`, decision 0003 | `packages/exposure/test` (R2-01 cases) | fixed | — |
-| R2-02 | `undecided` | `packages/rules/test/evaluate.test.ts`, `undecided-*` fixtures | partly fixed: CF-021 still drops custom domains whose `enabled` is `null`, so their finding resolves; follow-up R4-02 | R4-02 fixed in round 5 by `fix-rules-3`: CF-021 version 3 makes a domain with an unknown `enabled` state undecided (`packages/rules/test/cf021.test.ts`). Open: the storage collector still drops an `r2.dev` domain whose `enabled` it cannot read (round 6, `tunnels-limits`) |
+| R2-02 | `undecided` | `packages/rules/test/evaluate.test.ts`, `undecided-*` fixtures | partly fixed: CF-021 still drops custom domains whose `enabled` is `null`, so their finding resolves; follow-up R4-02 | R4-02 fixed in round 5 by `fix-rules-3`: CF-021 version 3 makes a domain with an unknown `enabled` state undecided (`packages/rules/test/cf021.test.ts`). The collector half was fixed in round 6 by `tunnels-limits`: an `r2.dev` domain whose `enabled` cannot be read is emitted with `enabled: null` |
 | R2-03 | `fix-exposure` | `packages/exposure/test` (R2-03 cases) | fixed | — |
 | R2-04 | `fix-collectors` | `packages/collectors/test/identity/tunnels.test.ts` (R2-04) | fixed | — |
 | R2-05 | `access-v2` | `packages/collectors/test/identity/targets.test.ts` | fixed | — |

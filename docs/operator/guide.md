@@ -335,16 +335,18 @@ Where to look:
 The removal runs in this order:
 
 1. The broker deletes the stored token, then the account's rate budget (`TokenIntake.remove`). A scan that still runs gets no more API access.
-2. Core deletes the account's index rows (`accounts`, `scan_runs`), then its whole graph: nodes, history and findings (`Admin.removeAccount`). The UI and the API stop showing the account, and the dispatcher starts no more scans of it. A scan that still runs is refused at its next write. A scan that was queued before the removal and begins after it stops at its first step, without an API call or a write (R4-03).
+2. Core marks the account `removing` in the index, deletes its whole graph (nodes, history and findings), then its index rows (`accounts`, `scan_runs`) (`Admin.removeAccount`, R5-08). Until the last step the account stays listed with status `removing`. From the first step on, the dispatcher and **Start scan** start no scan of it, and a scan that begins then, for example one queued before the removal, stops at its first step without an API call or a write (R4-03). A scan that still runs is refused at its next write once the graph is deleted.
 
 | Response | Meaning |
 | --- | --- |
 | 200 `{ token: { removed }, account: { removed } }` | Done. `removed: false` means there was nothing left to delete, for example on a repeat |
 | 400 `confirmation_required` | The body does not name the account |
 | 502 `token_not_removed` | The broker step failed. Core was not called, so the account stays listed. Run the removal again |
-| 502 `account_not_removed` | The token is gone; the index rows or the graph may remain. Run the removal again. If the index rows are already gone, the account no longer shows in the UI while its graph remains (R5-08): repeat the removal over the API |
+| 502 `account_not_removed` | The token is gone; the account stays listed as `removing`, with or without its graph. Run the removal again, or onboard the account again, which finishes the removal first |
 
 Both steps are idempotent, so a repeat finishes a partial removal. To scan the account again, onboard it again with a new token.
+
+The `removing` state is stored in `accounts.removing_at` ([migration 0002](../../apps/core/migrations/0002_account_removal.sql)), which `pnpm deploy` applies with the other index migrations.
 
 What stays behind:
 

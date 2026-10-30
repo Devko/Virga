@@ -94,6 +94,21 @@ Round 5 status (2026-10-30): all five packages are merged. R4-01 to R4-07 are fi
 | `core-offboarding` | R5-08: removal order and markers such that a partial failure never hides an account with data left | `apps/core/**` except `test/e2e/**`, `apps/web/src/**` if the route needs to change | Tests cover each failure point |
 | `docs-2` | Apply the documentation changes requested in round 5; document `pnpm check:release-age`; update the review status tables | `docs/**` except `team/`, `CONTRIBUTING.md`, `CLAUDE.md`, `apps/broker/README.md`, `apps/core/README.md` | Every request is applied or answered |
 
+Round 6 status (2026-10-30): all four packages are merged. R5-01 to R5-08 and the collector half of R4-02 are fixed, with tests that reproduce each finding; the [round 5 verification](../reviews/2026-10-30-verification-round-5.md) lists commits, tests and leftovers. No review has verified the round 5 and round 6 fixes yet.
+
+- The body-parser 2.3.0 / fast-uri 3.1.8 trade-off from round 5 is unchanged.
+- The Worker side of R5-07 (a version whose `resources.bindings` is missing) waits for evidence of the API shape (S-05 needs a paid account).
+
+## Packages for phase 1, round 7
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `rules-4` | CF-004: an undecided row for a tunnel with `ingress_truncated` that has no other CF-004 row; CF-024: undecided fixtures for the `unread` and `unknown` entries of `pages_project.plain_text_vars` | `rules/**`, `packages/rules/**` | Fixtures for each case; `rules:check` passes |
+| `collectors-4` | R5-06 leftover: a byte budget per tunnel on the emitted path props that also sets `ingress_truncated` | `packages/collectors/**`, `apps/core/test/e2e/**` | Tests at the budget boundary and with the review's long path |
+| `deploy-env` | R5-03 leftover: build Wrangler's environment from an allowlist; keep `assets.directory` inside the app directory | `scripts/**`, `docs/operator/**` | Tests per variable class and per path case; the dry run passes |
+| `web-removing` | The `removing` state in the SPA (notice, retry, no Start scan) and in the MCP `list_accounts` description | `apps/web/**` | Render and route tests |
+| `review-6` | Read-only verification of R4-01 to R4-07 and R5-01 to R5-08; review of the round 5 and round 6 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
@@ -102,8 +117,9 @@ Round 5 status (2026-10-30): all five packages are merged. R4-01 to R4-07 are fi
 - No real Cloudflare credentials and no network calls in tests. API shapes come from the API reference on developers.cloudflare.com, written as fixtures.
 - Read-only always (see CLAUDE.md, non-negotiables).
 - Before committing: `pnpm install`, the package's own typecheck and tests, and `pnpm lint`.
+- After any change to `pnpm-lock.yaml`: `pnpm check:release-age` (needs network access to registry.npmjs.org). A version younger than 14 days is removed from the lockfile and resolved again; exceptions go into `EXCEPTIONS` in `scripts/check-release-age.ts` (CONTRIBUTING.md).
 - Commits carry a DCO sign-off. Branches are not pushed; the integrator merges them.
 
 ## Integration
 
-The integrator merges in dependency order: `broker` and `exposure` first, then `platform`, `identity`, `rules` and `scan`. After each merge: `pnpm install`, `pnpm rules:build`, `pnpm ci`. Conflicts in owned paths go back to the work package; conflicts in shared files are the integrator's.
+The integrator merges in dependency order: `broker` and `exposure` first, then `platform`, `identity`, `rules` and `scan`. After each merge: `pnpm install`, `pnpm rules:build`, `pnpm run ci`. Conflicts in owned paths go back to the work package; conflicts in shared files are the integrator's.

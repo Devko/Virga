@@ -2,12 +2,12 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 2 review](2026-10-30-security-review.md) fixed? (2) review of the round 3 changes, at commit c5f076c
-- Status: R4-01 to R4-07 fixed in round 5 of the [work packages](../team/work-packages.md), except the collector half of R4-02 (an `r2.dev` domain whose `enabled` cannot be read), which is planned in round 6. No review has verified the round 5 fixes yet: the [round 5 verification](2026-10-30-verification-round-5.md) reviewed the round 4 code.
+- Status: R4-01 to R4-07 fixed in round 5 of the [work packages](../team/work-packages.md), except the collector half of R4-02 (an `r2.dev` domain whose `enabled` cannot be read), which was fixed in round 6 (`tunnels-limits`, 3bf63ef). No review has verified the round 5 and round 6 fixes yet: the [round 5 verification](2026-10-30-verification-round-5.md) reviewed the round 4 code.
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |
 | R4-01 | `fix-exposure-3` | 0597e12, 6f7d3a8, 913dea0 | `packages/exposure/test/evaluate.test.ts` (seven R4-01 cases: a narrower Bypass, any policy order, an undecided issuer, tied apps, a public override path) |
-| R4-02 | `fix-rules-3` (CF-021 version 3) | 953f00b | `packages/rules/test/cf021.test.ts` (R4-02 tests), fixture `rules/CF-021/fixtures/undecided-unknown-enabled-state.yaml`. Open: the storage collector still emits the `r2.dev` domain only when `enabled` is `true` (round 6, `tunnels-limits`) |
+| R4-02 | `fix-rules-3` (CF-021 version 3) | 953f00b | `packages/rules/test/cf021.test.ts` (R4-02 tests), fixture `rules/CF-021/fixtures/undecided-unknown-enabled-state.yaml`. Collector half in round 6 by `tunnels-limits` (3bf63ef): the `r2.dev` domain is emitted with `enabled: null` when the flag cannot be read; `packages/collectors/test/platform/storage.test.ts` (R4-02), `packages/exposure/test/evaluate.test.ts` (R4-02) and e2e (R4-02) |
 | R4-03 | `fix-core-3` | a43844e | `apps/core/test/run.test.ts` (three R4-03 tests), `apps/core/test/workflow.test.ts` (two), `apps/core/test/admin.test.ts` (one) |
 | R4-04 | `fix-rules-3` | 13fff70 | `packages/rules/test/compile.test.ts` (R4-04 tests, including the review's copy of CF-004 without `exposure` in `requires`) |
 | R4-05 | `fix-rules-3` | 13fff70 | `packages/rules/test/compile.test.ts` (R4-05 tests: writes behind a CTE, with and without `RETURNING`) |

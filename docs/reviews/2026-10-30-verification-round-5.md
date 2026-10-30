@@ -2,7 +2,25 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 3 review](2026-10-30-security-review-round-3.md) fixed? (2) review of the round 4 changes, at commit 2a5c436
-- Status: new findings R5-01 to R5-08 open; fixes are planned in round 6 of the [work packages](../team/work-packages.md)
+- Status: R5-01 to R5-08 fixed in round 6 of the [work packages](../team/work-packages.md); not yet verified by a review. Leftovers are listed below the table
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R5-01 | `deploy-hardening` | 83531c8 | `scripts/test/jsonc.test.ts`, `scripts/test/config.test.ts` (R5-01 tests); `scripts/test/wrangler-parse.test.ts` compares the parser with the pinned Wrangler on the review's config, the committed configs and generated texts |
+| R5-02 | `deploy-hardening` | 1be6bef | `scripts/test/topology.test.ts` (R5-02 tests: `unsafe.bindings`, cross-Worker `workflows`, `build.command`, unknown keys, every allowed path exists in Wrangler's schema) |
+| R5-03 | `deploy-hardening` | b7e0f6a | `scripts/test/run.test.ts`, `config.test.ts`, `deploy.test.ts` (R5-03 tests: `.env`, `.env.local`, `.dev.vars`, `--env-file`, `CLOUDFLARE_API_BASE_URL`, `CLOUDFLARE_ENV`, `WRANGLER_CI_OVERRIDE_NAME`). Also closes the rest of R3-03 |
+| R5-04 | `tunnels-limits` | 8c6bb3e | `packages/collectors/test/identity/tunnels.test.ts` (R5-04 tests, including both review cases and a `:` in a hostname); e2e `apps/core/test/e2e/scan.test.ts` (R5-04) |
+| R5-05 | `tunnels-limits` | b2d9336 | `tunnels.test.ts` (R5-05 tests: the review's 474-character regex, a 600-character path, an overlong hostname); e2e (R5-05) |
+| R5-06 | `tunnels-limits` | 1778496 | `tunnels.test.ts` (R5-06 tests: the review's 96 KB case, the 1,000/1,001 boundary); `packages/exposure/test/evaluate.test.ts` (R5-06); e2e (R5-06) |
+| R5-07 | `tunnels-limits` (Pages side) | 9df389b | `packages/collectors/test/platform/pages.test.ts` (R5-07 tests); e2e (R5-07: the open Pages finding of CF-024 stays open as undecided) |
+| R5-08 | `core-offboarding` | 8d11162, 1bac065 | `apps/core/test/admin.test.ts` (graph deletion fails, index deletion fails, a scan begins in between, re-adding a `removing` account); `apps/core/test/index-db.test.ts` |
+
+Leftovers after round 6:
+
+- R5-03: variables in the operator's shell other than the pinned API variables still reach Wrangler (for example `HTTPS_PROXY`, `NODE_TLS_REJECT_UNAUTHORIZED`). The deploy does not build Wrangler's environment from an allowlist. `assets.directory` may point outside the app directory.
+- R5-06: the cap bounds the node count, not the size of the nodes; and a truncated tunnel whose emitted nodes all answer with `http_status` gives CF-004 no row (see the contract's known limits).
+- R5-07: the Worker side (a version whose `resources.bindings` is missing is still read as no bindings) needs S-05-style evidence of the API shape and a contract entry first.
+- R5-08: concurrent `addAccount` and `removeAccount` calls for one account are not serialized; graphs left by the pre-round-6 removal order are not detected automatically.
 
 ## Summary
 
