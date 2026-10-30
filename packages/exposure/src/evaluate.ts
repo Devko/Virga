@@ -34,6 +34,8 @@ interface Entry {
   /** The path set is wider than what the entry point serves (tunnel path regex). */
   approximate: boolean;
   scripts: Set<string>;
+  /** One of `scripts` has no known Worker ID. */
+  unidentified: boolean;
   preview: boolean;
   /** Served by a Worker, so Worker-level Access can apply. */
   worker: boolean;
@@ -157,7 +159,7 @@ function entryScripts(node: GraphNode, graph: GraphInput): Set<string> {
 /**
  * Workers route hosts: `*.zone` matches subhosts at any depth, `*zone`
  * matches the host itself, its subhosts and, inside the zone, hosts whose
- * first label ends with it.
+ * first label ends with it. An Access app never covers the any-depth part.
  * developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior
  */
 function routeHosts(host: string, zone: string | undefined): HostPattern[] | null {
@@ -252,6 +254,7 @@ function buildEntry(node: GraphNode, graph: GraphInput): Built {
       path,
       approximate,
       scripts,
+      unidentified: [...scripts].some((s) => !graph.scripts.get(s)?.workerId),
       preview: node.type === "worker_preview_url",
       worker: scripts.size > 0,
       originAccess,
@@ -282,7 +285,8 @@ function hostTokens(value: unknown, depth = 0, out: string[] = []): string[] {
 /**
  * Whether a target the evaluator cannot interpret might cover the entry
  * point. Only a target that clearly names another Worker, Workers in general
- * or other hosts is ruled out.
+ * or other hosts is ruled out. A Worker ID that no script in the graph has
+ * may belong to a script whose ID is not known.
  */
 function couldApply(raw: unknown, entry: Entry, refs: Map<string, string>): boolean {
   if (isObject(raw)) {
@@ -290,9 +294,12 @@ function couldApply(raw: unknown, entry: Entry, refs: Map<string, string>): bool
     if (type === "private" || type === "via_mcp_server_portal") return false;
     if (type === "all_workers") return entry.worker;
     if (type === "all_preview_workers") return entry.preview;
-    const ref = str(raw.worker_id) ?? str(raw.script);
+    const id = str(raw.worker_id);
+    const ref = id ?? str(raw.script);
     if (ref) {
-      return servesWorker(entry, ref, refs) && (type !== "preview_worker" || entry.preview);
+      if (type === "preview_worker" && !entry.preview) return false;
+      if (servesWorker(entry, ref, refs)) return true;
+      return id !== null && !refs.has(id) && entry.unidentified;
     }
   }
   const hosts = hostTokens(raw);
@@ -318,6 +325,13 @@ function overrideVerdict(app: App, overrides: Override[], label: PathSet): Verdi
       : "a destination override path with a wildcard cannot be placed",
   };
 }
+
+/**
+ * The verdict that speaks for candidates whose decisions agree. One that
+ * comes with an Access token does, so an origin check cannot hide it.
+ */
+const agreed = (verdicts: Verdict[]): Verdict | undefined =>
+  verdicts.find((v) => v.token) ?? verdicts[0];
 
 function ranked<T>(items: T[], primary: (t: T) => number, secondary: (t: T) => number): T[] {
   const sorted = [...items].sort((a, b) => primary(b) - primary(a) || secondary(b) - secondary(a));
@@ -351,7 +365,7 @@ function decideHostname(
   const verdicts = [...hostFirst, ...pathFirst].map((c) =>
     overrideVerdict(c.app, c.target.overrides, label),
   );
-  const [winner] = verdicts;
+  const winner = agreed(verdicts);
   const top = hostFirst[0];
   if (!winner || !top) return null;
   if (verdicts.some((v) => v.decision !== winner.decision)) {
@@ -393,7 +407,7 @@ function decideWorker(
     const first = group[0];
     if (!first) continue;
     const verdicts = group.map((c) => overrideVerdict(c.app, c.target.overrides, label));
-    const [winner] = verdicts;
+    const winner = agreed(verdicts);
     if (!winner) continue;
     if (verdicts.some((v) => v.decision !== winner.decision)) {
       return unknown(first.app.node.id, "Worker-level Access applications disagree");
@@ -413,15 +427,16 @@ function decideWorker(
  * cloudflared validates the Access token of every request to a tunnel
  * hostname with `access_required` and rejects requests without one. Access
  * issues that token only when an Allow or Service Auth policy admits the
- * request; Bypass enforces nothing. Such a hostname is therefore never
- * `public`: where Access alone would leave it public, it is `access`, decided
- * by the tunnel hostname. The audience tags cloudflared checks are not
- * collected, so the decision has at most medium confidence. `access`,
- * `service_auth` and `unknown` stay as they are.
+ * request; Bypass enforces nothing. Where Access alone would leave such a
+ * hostname public without a token, it is `access`, decided by the tunnel
+ * hostname. The audience tags cloudflared checks are not collected, so the
+ * decision has at most medium confidence. A Service Auth policy that admits
+ * everyone issues the token, so that stays `public`; `access`, `service_auth`
+ * and `unknown` stay as they are.
  * developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
  */
 function withOriginAccess(result: Result, entryId: string): Result {
-  if (result.decision !== "public") return result;
+  if (result.decision !== "public" || result.token) return result;
   return {
     decision: "access",
     confidence: Math.min(result.confidence, 1) as Confidence,
@@ -508,6 +523,10 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
   const ordered = [...labels.entries()].sort(
     ([a, x], [b, y]) => specificity(x) - specificity(y) || byText(a, b),
   );
+  // An Access wildcard spans one label, so no hostname app covers a key that
+  // matches any depth; the hosts below the apps' depth stay uncovered.
+  const deeper = (key: HostPattern) =>
+    key.multiLevel && hostCandidates.some((c) => relateHost(c.target.host, key) === "inside");
   for (const [text, label] of ordered) {
     const perHost = [...keys.values()].map((key): Result => {
       const result = decideHostname(hostCandidates, key, label) ??
@@ -515,7 +534,9 @@ function evaluateEntry(entry: Entry, apps: App[], refs: Map<string, string>): Ma
           decision: "public",
           confidence: 2,
           reasonId: null,
-          reason: "no Access application covers this entry point",
+          reason: deeper(key)
+            ? "Access wildcards match one subdomain level; deeper hosts are not covered"
+            : "no Access application covers this entry point",
         };
       return entry.originAccess ? withOriginAccess(result, entry.node.id) : result;
     });

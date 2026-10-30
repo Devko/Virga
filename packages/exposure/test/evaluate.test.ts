@@ -24,6 +24,12 @@ const APP = (id: string) => `access_app:${id}`;
 const POLICY = (id: string) => `access_policy:${id}`;
 const EMAIL: Selector = { kind: "email_domain", value: "example.com" };
 const TOKEN: Selector = { kind: "service_token", value: "token-1" };
+const ANY_TOKEN: Selector = { kind: "any_valid_service_token", value: null };
+const OFFICE: Selector = { kind: "ip", value: "192.0.2.0/24" };
+const ANY_V4: Selector = { kind: "ip", value: "0.0.0.0/0" };
+const ANY_V6: Selector = { kind: "ip", value: "::/0" };
+const PT: Selector = { kind: "geo", value: "PT" };
+const IP_LIST: Selector = { kind: "other", value: { ip_list: { id: "list-1" } } };
 
 const DEV = "w.my-subdomain.workers.dev";
 const PREVIEW = "abcd1234-w.my-subdomain.workers.dev";
@@ -34,6 +40,8 @@ interface Case {
   build: (g: Graph) => void;
   options?: Options;
   expect: Expected[];
+  /** Every row's reason matches. */
+  reason?: RegExp;
 }
 
 /** One Worker `w` with a route, a Custom Domain, workers.dev and a version URL. */
@@ -49,6 +57,26 @@ const allowApp = (g: Graph, id: string, targets: unknown[]) =>
   g.app(id, targets, [g.policy(`${id}-allow`, "allow", [EMAIL])]);
 const bypassApp = (g: Graph, id: string, targets: unknown[]) =>
   g.app(id, targets, [g.policy(`${id}-bypass`, "bypass", [EVERYONE])]);
+
+/** Tunnel hostname `<id>.example.com` behind app `<id>` with one policy, also named `<id>`. */
+function tunnelApp(
+  g: Graph,
+  id: string,
+  decision: string,
+  include: Selector[],
+  require: Selector[] = [],
+) {
+  g.tunnelHostname(`${id}.example.com`);
+  g.app(id, [host(`${id}.example.com`)], [g.policy(id, decision, include, require)]);
+}
+
+/** The row `tunnelApp` yields for `<id>`. */
+const tunnelRow = (
+  id: string,
+  decision: string,
+  confidence: number,
+  reasonId: string | null,
+): Expected => [TH(`${id}.example.com`), "/", decision, confidence, reasonId];
 
 const cases: Case[] = [
   // Entry points
@@ -169,8 +197,7 @@ const cases: Case[] = [
       g.script("w");
       g.customDomain("app.example.com", "w");
       g.customDomain("other.example.com", "w");
-      // `*app` also matches `app` and has as many literal characters.
-      bypassApp(g, "aw", [host("*.example.com"), host("*app.example.com")]);
+      bypassApp(g, "aw", [host("*.example.com")]);
       allowApp(g, "ae", [host("app.example.com")]);
     },
     expect: [
@@ -199,14 +226,14 @@ const cases: Case[] = [
       workerEntries(g);
       allowApp(g, "root", [host("app.example.com")]);
       bypassApp(g, "static", [host("app.example.com", "/static/*")]);
-      allowApp(g, "previews", [host("*-w.my-subdomain.workers.dev")]);
+      allowApp(g, "dev", [host("*.my-subdomain.workers.dev")]);
     },
     expect: [
       [CD("app.example.com"), "/", "access", 2, APP("root")],
       [CD("app.example.com"), "/static/*", "public", 2, POLICY("static-bypass")],
-      [`worker_preview_url:${PREVIEW}`, "/", "access", 1, APP("previews")],
+      [`worker_preview_url:${PREVIEW}`, "/", "access", 1, APP("dev")],
       ["worker_route:r1", "/", "public", 2, null],
-      [`workers_dev:${DEV}`, "/", "public", 2, null],
+      [`workers_dev:${DEV}`, "/", "access", 1, APP("dev")],
     ],
   },
   {
@@ -304,13 +331,33 @@ const cases: Case[] = [
     ],
   },
   {
-    name: "a wildcard route behind a matching wildcard app",
+    name: "R2-03: a wildcard route matches deeper hosts than a one-label Access wildcard covers",
     build: (g) => {
       g.script("w");
       g.route("r", "*.example.com/*", "w");
       allowApp(g, "a1", [host("*.example.com")]);
     },
-    expect: [["worker_route:r", "/", "access", 1, APP("a1")]],
+    expect: [["worker_route:r", "/", "public", 1, null]],
+    reason: /deeper/,
+  },
+  {
+    name: "R2-03: one-label Access wildcards at several depths still leave deeper hosts public",
+    build: (g) => {
+      g.script("w");
+      g.route("r", "*.example.com/*", "w");
+      allowApp(g, "a1", [host("*.example.com"), host("*.a.example.com")]);
+    },
+    expect: [["worker_route:r", "/", "public", 1, null]],
+  },
+  {
+    name: "R2-03: Worker-level Access covers a wildcard route at any depth",
+    build: (g) => {
+      g.script("w");
+      g.route("r", "*.example.com/*", "w");
+      allowApp(g, "a1", [host("*.example.com")]);
+      allowApp(g, "w", [worker("w")]);
+    },
+    expect: [["worker_route:r", "/", "access", 1, APP("w")]],
   },
   {
     name: "a wildcard route with only some hosts behind Access is public",
@@ -322,14 +369,16 @@ const cases: Case[] = [
     expect: [["worker_route:r", "/", "public", 1, null]],
   },
   {
-    name: "a wildcard route with one host bypassed is public",
+    name: "a wildcard entry point with one host bypassed is public",
     build: (g) => {
-      g.script("w");
-      g.route("r", "*.example.com/*", "w");
-      allowApp(g, "all", [host("*.example.com")]);
-      bypassApp(g, "status", [host("status.example.com")]);
+      g.pages("site");
+      allowApp(g, "all", [host("*.site.pages.dev")]);
+      bypassApp(g, "status", [host("status.site.pages.dev")]);
     },
-    expect: [["worker_route:r", "/", "public", 1, POLICY("status-bypass")]],
+    expect: [
+      ["pages_domain:site.pages.dev", "/", "public", 2, null],
+      ["pages_preview:*.site.pages.dev", "/", "public", 1, POLICY("status-bypass")],
+    ],
   },
   {
     name: "a *zone route also serves the apex",
@@ -342,7 +391,7 @@ const cases: Case[] = [
     expect: [["worker_route:r", "/", "public", 1, null]],
   },
   {
-    name: "a *zone route behind apex and wildcard apps",
+    name: "R2-03: a *zone route behind apex and wildcard apps is public on deeper hosts",
     build: (g) => {
       g.zone("zone-1", "example.com");
       g.script("w");
@@ -350,7 +399,7 @@ const cases: Case[] = [
       allowApp(g, "apex", [host("example.com")]);
       allowApp(g, "sub", [host("*.example.com")]);
     },
-    expect: [["worker_route:r", "/", "access", 1, APP("apex")]],
+    expect: [["worker_route:r", "/", "public", 1, null]],
   },
   {
     name: "a *sub route inside the zone also serves hosts ending in sub",
@@ -404,12 +453,23 @@ const cases: Case[] = [
     ],
   },
   {
-    name: "a wildcard tunnel hostname behind a wildcard app",
+    name: "R2-03: a wildcard tunnel hostname matches deeper hosts than a one-label Access wildcard covers",
     build: (g) => {
       g.tunnelHostname("*.internal.example.com", "", "http://localhost:8080");
       allowApp(g, "internal", [host("*.internal.example.com")]);
     },
-    expect: [[TH("*.internal.example.com"), "/", "access", 1, APP("internal")]],
+    expect: [[TH("*.internal.example.com"), "/", "public", 1, null]],
+    reason: /deeper/,
+  },
+  {
+    name: "R2-03: a wildcard tunnel hostname that requires an Access token is access at every depth",
+    build: (g) => {
+      g.tunnelHostname("*.internal.example.com", "", "http://localhost:8080", {
+        accessRequired: true,
+      });
+      allowApp(g, "internal", [host("*.internal.example.com")]);
+    },
+    expect: [[TH("*.internal.example.com"), "/", "access", 1, TH("*.internal.example.com")]],
   },
   {
     name: "two tunnels that serve the same hostname are separate entry points",
@@ -443,6 +503,24 @@ const cases: Case[] = [
       [TH("staff.example.com"), "/", "access", 2, APP("staff")],
       [TH("web.example.com"), "/", "access", 2, APP("web")],
       [TH("web.example.com"), "/health", "access", 1, TH("web.example.com")],
+    ],
+  },
+  {
+    name: "Service Auth for every address issues the Access token a tunnel requires, so it stays public",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("any.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("office.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("both.example.com", "", "http://localhost:8080", required);
+      g.app("any", [host("any.example.com")], [g.policy("any", "non_identity", [ANY_V4])]);
+      g.app("office", [host("office.example.com")], [g.policy("office", "bypass", [OFFICE])]);
+      bypassApp(g, "both-1", [host("both.example.com")]);
+      g.app("both-2", [host("both.example.com")], [g.policy("both", "non_identity", [ANY_V6])]);
+    },
+    expect: [
+      [TH("any.example.com"), "/", "public", 2, POLICY("any")],
+      [TH("both.example.com"), "/", "public", 2, POLICY("both")],
+      [TH("office.example.com"), "/", "access", 1, TH("office.example.com")],
     ],
   },
   {
@@ -618,17 +696,160 @@ const cases: Case[] = [
     },
     expect: [[TH("api.example.com"), "/", "access", 2, APP("api")]],
   },
+  // Bypass and Service Auth: decision 0003
   {
-    name: "a bypass limited to an IP range is access",
+    name: "R2-01: a bypass for 0.0.0.0/0 and ::/0 is public, like one for everyone",
+    build: (g) => {
+      g.r2Domain("files.example.com", "customer-exports", "custom", true);
+      g.app(
+        "files",
+        [host("files.example.com")],
+        [g.policy("anywhere", "bypass", [ANY_V4, ANY_V6])],
+      );
+      tunnelApp(g, "ssh", "bypass", [ANY_V4, ANY_V6]);
+      tunnelApp(g, "web", "bypass", [EVERYONE], [ANY_V4]);
+    },
+    expect: [
+      ["r2_public_domain:files.example.com", "/", "public", 2, POLICY("anywhere")],
+      tunnelRow("ssh", "public", 2, POLICY("ssh")),
+      tunnelRow("web", "public", 2, POLICY("web")),
+    ],
+  },
+  {
+    name: "R2-01: a bypass limited to an IP range is public, with the limit in the reason",
+    build: (g) => tunnelApp(g, "ssh", "bypass", [OFFICE]),
+    expect: [tunnelRow("ssh", "public", 2, POLICY("ssh"))],
+    reason: /^hostname application: bypass .*\bip\b/,
+  },
+  {
+    name: "R2-01: a bypass limited to other non-identity selectors is public",
+    build: (g) => {
+      tunnelApp(g, "geo", "bypass", [PT]);
+      tunnelApp(g, "cert", "bypass", [{ kind: "certificate", value: null }]);
+      tunnelApp(g, "cn", "bypass", [{ kind: "common_name", value: "client.example.com" }]);
+      tunnelApp(g, "device", "bypass", [{ kind: "device_posture", value: "posture-1" }]);
+      tunnelApp(g, "token", "bypass", [TOKEN]);
+      tunnelApp(g, "tokens", "bypass", [ANY_TOKEN]);
+    },
+    expect: ["geo", "cert", "cn", "device", "token", "tokens"].map((id) =>
+      tunnelRow(id, "public", 2, POLICY(id)),
+    ),
+  },
+  {
+    name: "R2-01: a bypass with a selector the evaluator cannot read is unknown",
+    build: (g) => tunnelApp(g, "ssh", "bypass", [IP_LIST]),
+    expect: [tunnelRow("ssh", "unknown", 0, POLICY("ssh"))],
+  },
+  {
+    name: "R2-01: a bypass with identity selectors is unknown",
+    build: (g) => {
+      tunnelApp(g, "email", "bypass", [EMAIL]);
+      tunnelApp(g, "idp", "bypass", [{ kind: "login_method", value: "idp-1" }]);
+      tunnelApp(g, "team", "bypass", [
+        { kind: "idp_group", value: { idp: "idp-1", name: "org/team" } },
+      ]);
+    },
+    expect: ["email", "idp", "team"].map((id) => tunnelRow(id, "unknown", 0, POLICY(id))),
+  },
+  {
+    name: "R2-01: a bypass through Access groups is public for networks, unknown for identities",
+    build: (g) => {
+      g.group("office", [OFFICE]);
+      g.group("nested", [{ kind: "group", value: "office" }, PT]);
+      g.group("staff", [EMAIL]);
+      tunnelApp(g, "net", "bypass", [{ kind: "group", value: "nested" }]);
+      tunnelApp(g, "staff", "bypass", [{ kind: "group", value: "staff" }]);
+    },
+    expect: [
+      tunnelRow("net", "public", 2, POLICY("net")),
+      tunnelRow("staff", "unknown", 0, POLICY("staff")),
+    ],
+  },
+  {
+    name: "R2-01: a bypass that admits a network is public whatever else it includes",
+    build: (g) => {
+      tunnelApp(g, "list", "bypass", [IP_LIST, OFFICE]);
+      tunnelApp(g, "email", "bypass", [EMAIL, OFFICE]);
+      tunnelApp(g, "gone", "bypass", [{ kind: "group", value: "deleted" }, OFFICE]);
+    },
+    expect: ["list", "email", "gone"].map((id) => tunnelRow(id, "public", 2, POLICY(id))),
+  },
+  {
+    name: "R2-01: a bypass limited to a network wins over an allow policy ordered before it",
     build: (g) => {
       g.tunnelHostname("ssh.example.com");
       g.app(
         "ssh",
         [host("ssh.example.com")],
-        [g.policy("office", "bypass", [{ kind: "ip", value: "192.0.2.0/24" }])],
+        [g.policy("staff", "allow", [EMAIL]), g.policy("office", "bypass", [OFFICE])],
       );
     },
-    expect: [[TH("ssh.example.com"), "/", "access", 2, APP("ssh")]],
+    expect: [[TH("ssh.example.com"), "/", "public", 2, POLICY("office")]],
+  },
+  {
+    name: "R2-01: Service Auth for 0.0.0.0/0 or ::/0 is public",
+    build: (g) => {
+      tunnelApp(g, "v4", "non_identity", [ANY_V4]);
+      tunnelApp(g, "v6", "non_identity", [TOKEN, ANY_V6]);
+      g.tunnelHostname("api.example.com");
+      g.app(
+        "api",
+        [host("api.example.com")],
+        [g.policy("staff", "allow", [EMAIL]), g.policy("any", "non_identity", [ANY_V4])],
+      );
+    },
+    expect: [
+      tunnelRow("v4", "public", 2, POLICY("v4")),
+      tunnelRow("v6", "public", 2, POLICY("v6")),
+      tunnelRow("api", "public", 2, POLICY("any")),
+    ],
+  },
+  {
+    name: "R2-01: Service Auth with IP ranges, countries or unreadable selectors is unknown",
+    build: (g) => {
+      tunnelApp(g, "office", "non_identity", [OFFICE]);
+      tunnelApp(g, "geo", "non_identity", [PT]);
+      tunnelApp(g, "list", "non_identity", [TOKEN, IP_LIST]);
+      tunnelApp(g, "email", "non_identity", [EMAIL]);
+      tunnelApp(g, "device", "non_identity", [{ kind: "device_posture", value: "posture-1" }]);
+    },
+    expect: ["office", "geo", "list", "email", "device"].map((id) =>
+      tunnelRow(id, "unknown", 0, POLICY(id)),
+    ),
+  },
+  {
+    name: "a bypass or Service Auth policy without readable include rules is unknown",
+    build: (g) => {
+      tunnelApp(g, "empty", "bypass", []);
+      tunnelApp(g, "svc-empty", "non_identity", []);
+      const odd = (id: string, decision: string, include: unknown) => {
+        g.tunnelHostname(`${id}.example.com`);
+        g.node("access_policy", id, id, { decision, include, require: [], exclude: [] });
+        g.app(id, [host(`${id}.example.com`)], [POLICY(id)]);
+      };
+      odd("bad", "bypass", "?");
+      odd("svc-bad", "non_identity", { service_token: { token_id: "token-1" } });
+      odd("svc-item", "non_identity", ["?", TOKEN]);
+    },
+    expect: ["empty", "svc-empty", "bad", "svc-bad", "svc-item"].map((id) =>
+      tunnelRow(id, "unknown", 0, POLICY(id)),
+    ),
+  },
+  {
+    name: "R2-01: Service Auth with service tokens or certificates is service_auth",
+    build: (g) => {
+      tunnelApp(g, "token", "non_identity", [TOKEN]);
+      tunnelApp(g, "tokens", "non_identity", [ANY_TOKEN]);
+      tunnelApp(g, "cert", "non_identity", [
+        { kind: "certificate", value: null },
+        { kind: "common_name", value: "client.example.com" },
+      ]);
+      g.group("bots", [TOKEN]);
+      tunnelApp(g, "group", "non_identity", [{ kind: "group", value: "bots" }]);
+    },
+    expect: ["token", "tokens", "cert", "group"].map((id) =>
+      tunnelRow(id, "service_auth", 2, APP(id)),
+    ),
   },
   {
     name: "a bypass for everyone narrowed by require rules is still public",
@@ -874,6 +1095,40 @@ const cases: Case[] = [
     ],
   },
   {
+    name: "an uninterpreted Worker target with an unknown ID may apply to a Worker whose ID is unknown",
+    build: (g) => {
+      g.script("w");
+      g.customDomain("app.example.com", "w");
+      g.script("v", { worker_id: "id-v" });
+      g.customDomain("v.example.com", "v");
+      g.tunnelHostname("ssh.example.com");
+      allowApp(g, "all", [allWorkers()]);
+      bypassApp(g, "odd", [other({ type: "worker", worker_id: "id-gone" })]);
+    },
+    expect: [
+      [CD("app.example.com"), "/", "unknown", 0, APP("odd")],
+      [CD("v.example.com"), "/", "access", 1, APP("all")],
+      [TH("ssh.example.com"), "/", "public", 2, null],
+    ],
+  },
+  {
+    name: "a hostname target with a port or another host wildcard than a leading *. is not interpretable",
+    build: (g) => {
+      g.script("w");
+      g.customDomain("app.example.com", "w");
+      g.customDomain("app.x.example.org", "w");
+      g.customDomain("app.example.net", "w");
+      allowApp(g, "port", [host("app.example.com:8443")]);
+      allowApp(g, "inner", [host("app.*.example.org")]);
+      allowApp(g, "partial", [host("*app.example.net")]);
+    },
+    expect: [
+      [CD("app.example.com"), "/", "unknown", 0, APP("port")],
+      [CD("app.example.net"), "/", "unknown", 0, APP("partial")],
+      [CD("app.x.example.org"), "/", "unknown", 0, APP("inner")],
+    ],
+  },
+  {
     name: "a hostname target that does not parse is not interpretable",
     build: (g) => {
       g.script("w");
@@ -985,7 +1240,7 @@ describe("evaluateExposure", () => {
     try {
       const rows = evaluateExposure(db);
       expect(summarize(rows)).toEqual(sorted(c.expect));
-      for (const row of rows) expect(row.reason).toMatch(/\S/);
+      for (const row of rows) expect(row.reason).toMatch(c.reason ?? /\S/);
     } finally {
       db.close();
     }
