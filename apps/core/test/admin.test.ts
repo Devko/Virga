@@ -1,7 +1,10 @@
 import { introspectWorkflow } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { SCHEMA_VERSION } from "@virga/graph";
 import { describe, expect, it } from "vitest";
-import { newAccountId, rejection, runningScanRow, setupAccount } from "./helpers.ts";
+import { d1ScanIndex, getAccount } from "../src/index-db.ts";
+import type { ScanSummary } from "../src/scan/types.ts";
+import { newAccountId, rejection, runningScanRow, setupAccount, sql } from "./helpers.ts";
 
 const admin = exports.Admin;
 
@@ -61,5 +64,105 @@ describe("Admin", () => {
       reason: "running",
       id: `running-${accountId}`,
     });
+  });
+});
+
+describe("Admin.removeAccount", () => {
+  const AT = Date.UTC(2026, 9, 30, 9, 17);
+  const node = { type: "worker_script" as const, nativeId: "api", name: "api" };
+  const runs = (accountId: string) =>
+    env.INDEX.prepare("SELECT id, status FROM scan_runs WHERE account_id = ? ORDER BY id")
+      .bind(accountId)
+      .all()
+      .then((r) => r.results);
+
+  /** An account with a finished scan: index rows and a graph with a node. */
+  async function scannedAccount() {
+    const accountId = newAccountId();
+    const { stub } = await setupAccount(accountId);
+    const index = d1ScanIndex(env.INDEX);
+    const scanId = `scan-${accountId}-done`;
+    await stub.beginScan(scanId, "full", AT);
+    await index.beginRun({ id: scanId, accountId, startedAt: AT });
+    await stub.writeChunk(scanId, "workers", { nodes: [node], edges: [] }, { singleChunk: true });
+    await stub.finishScan(scanId, "complete", AT + 1);
+    const summary = { scanId, accountId, status: "complete" } as ScanSummary;
+    await index.finishRun({
+      id: scanId,
+      accountId,
+      startedAt: AT,
+      finishedAt: AT + 1,
+      status: "complete",
+      summary,
+    });
+    return { accountId, stub, index };
+  }
+
+  it("deletes the account's index rows and its graph, and leaves other accounts alone", async () => {
+    const { accountId, stub } = await scannedAccount();
+    const other = await scannedAccount();
+    expect(await runs(accountId)).toHaveLength(1);
+
+    expect(await admin.removeAccount(accountId)).toEqual({ removed: true });
+
+    expect(await getAccount(env.INDEX, accountId)).toBeNull();
+    expect(await runs(accountId)).toEqual([]);
+    expect(await exports.GraphReader.getScanSummary(accountId)).toBeNull();
+    expect((await exports.GraphReader.listAccounts()).map((a) => a.id)).not.toContain(accountId);
+    // The graph object is empty: no scan, node or row of any table is left.
+    const tables = await sql<{ name: string }>(
+      stub,
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
+    );
+    for (const { name } of tables) {
+      const kept = name === "meta" ? "WHERE key != 'schema_version'" : "";
+      expect(await sql(stub, `SELECT count(*) AS n FROM "${name}" ${kept}`), name).toEqual([
+        { n: 0 },
+      ]);
+    }
+    expect(await sql(stub, "SELECT value FROM meta WHERE key = 'schema_version'")).toEqual([
+      { value: String(SCHEMA_VERSION) },
+    ]);
+
+    expect(await getAccount(env.INDEX, other.accountId)).not.toBeNull();
+    expect(await runs(other.accountId)).toHaveLength(1);
+    expect(await sql(other.stub, "SELECT id FROM nodes")).toEqual([{ id: "worker_script:api" }]);
+  });
+
+  it("is idempotent and validates the account ID", async () => {
+    const { accountId } = await scannedAccount();
+    expect(await admin.removeAccount(accountId)).toEqual({ removed: true });
+    expect(await admin.removeAccount(accountId)).toEqual({ removed: false });
+    expect(await admin.removeAccount(newAccountId())).toEqual({ removed: false });
+    expect(await rejection(admin.removeAccount("../accounts"))).toMatch(/invalid account ID/);
+  });
+
+  it("refuses the writes of a scan that still runs, and gives it no index row back", async () => {
+    const { accountId, stub, index } = await scannedAccount();
+    const scanId = `scan-${accountId}-running`;
+    await stub.beginScan(scanId, "full", AT + 3_600_000);
+    await index.beginRun({ id: scanId, accountId, startedAt: AT + 3_600_000 });
+
+    await admin.removeAccount(accountId);
+
+    const write = stub.writeChunk(
+      scanId,
+      "workers",
+      { nodes: [node], edges: [] },
+      {
+        singleChunk: true,
+      },
+    );
+    expect(await rejection(write)).toMatch(/StaleScanError/);
+    await index.finishRun({
+      id: scanId,
+      accountId,
+      startedAt: AT + 3_600_000,
+      finishedAt: AT + 3_600_001,
+      status: "failed",
+      summary: { scanId, accountId, status: "failed" } as ScanSummary,
+    });
+    expect(await runs(accountId)).toEqual([]);
+    expect(await sql(stub, "SELECT count(*) AS n FROM nodes")).toEqual([{ n: 0 }]);
   });
 });

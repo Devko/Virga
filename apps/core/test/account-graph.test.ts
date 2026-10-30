@@ -13,6 +13,7 @@ import { FIXTURES } from "@virga/rules/fixtures";
 import { describe, expect, it } from "vitest";
 import type { AccountGraph } from "../src/account-graph.ts";
 import { DEFAULT_EVALUATORS, type Evaluators } from "../src/graph/evaluators.ts";
+import { STALE_SCAN_MS } from "../src/scan/policy.ts";
 import { syntheticGraph } from "./synthetic.ts";
 
 const freshGraph = () => env.ACCOUNT_GRAPH.get(env.ACCOUNT_GRAPH.newUniqueId());
@@ -41,7 +42,8 @@ describe("AccountGraph in Durable Object SQLite", () => {
     });
     await stub.beginScan("s1", "full");
     expect(await stub.applyBatch(batch("s1", true))).toEqual({ nodes: 2, edges: 1, changed: 3 });
-    await stub.beginScan("s2", "full");
+    await stub.finishScan("s1", "complete");
+    expect(await stub.beginScan("s2", "full")).toEqual({ started: true });
     expect((await stub.applyBatch(batch("s2", false))).changed).toBe(0);
     await stub.recordCoverage("s2", "workers", "complete");
     expect(await stub.sweep("s2", "workers")).toEqual({ swept: true, nodes: 1, edges: 1 });
@@ -172,30 +174,38 @@ describe("scan steps in AccountGraph", () => {
   it("counts rule runs and turns a failing lifecycle into a result", async () => {
     const stub = freshGraph();
     await stub.beginScan("s1", "full", 1);
-    const run = (ruleId: string, status: "evaluated" | "not_evaluated" | "error", hits = 0) => ({
+    const run = (
+      ruleId: string,
+      status: "evaluated" | "not_evaluated" | "error",
+      hits = 0,
+      undecided = 0,
+    ) => ({
       ruleId,
       status,
       hits,
+      undecided,
       missing: [],
       opened: hits,
       resolved: status === "evaluated" ? 1 : 0,
     });
     await useEvaluators(stub, {
       rules: () => [
-        run("CF-001", "evaluated", 2),
+        run("CF-001", "evaluated", 2, 1),
         run("CF-002", "not_evaluated"),
         run("CF-003", "error"),
+        run("CF-004", "evaluated", 0, 3),
       ],
     });
     expect(await stub.evaluateRules("s1")).toEqual({
       status: "complete",
-      rules: 3,
-      evaluated: 1,
+      rules: 4,
+      evaluated: 2,
       notEvaluated: 1,
       errors: 1,
       hits: 2,
+      undecided: 4,
       opened: 2,
-      resolved: 1,
+      resolved: 2,
     });
     await useEvaluators(stub, {
       rules: () => {
@@ -207,6 +217,96 @@ describe("scan steps in AccountGraph", () => {
       rules: 0,
       detail: "Error: lifecycle broke",
     });
+  });
+});
+
+describe("writes from a scan that is not the running scan", () => {
+  const hostname = {
+    type: "tunnel_hostname" as const,
+    nativeId: "t1:ssh.example.com",
+    name: "ssh.example.com",
+  };
+  const chunk = { nodes: [hostname], edges: [] };
+  const once = { singleChunk: true };
+  const refused = /StaleScanError: scan A is not the running scan/;
+
+  /** Every scan-scoped write of scan A, each expected to be refused. */
+  const writesOfA = (stub: Stub) => [
+    failure(stub.writeChunk("A", "tunnels", chunk, once)),
+    failure(stub.applyBatch({ scanId: "A", resourceClass: "tunnels", ...chunk })),
+    failure(stub.recordCoverage("A", "tunnels", "complete")),
+    failure(stub.sweep("A", "tunnels")),
+    failure(stub.computeExposure("A")),
+    failure(stub.evaluateRules("A")),
+  ];
+
+  it("R2-07: refuses every write of a scan marked failed as stale, so the newer scan's sweep keeps live nodes", async () => {
+    const stub = freshGraph();
+    await stub.beginScan("A", "full", 1_000);
+    // A runs for more than 12 hours; the next scan marks it failed and takes over.
+    expect(await stub.beginScan("B", "full", 1_000 + STALE_SCAN_MS + 1)).toEqual({ started: true });
+    await stub.writeChunk("B", "tunnels", chunk, once);
+
+    // A's instance is still running and retries a chunk, then goes on.
+    for (const write of writesOfA(stub)) expect(await write).toMatch(refused);
+
+    await stub.recordCoverage("B", "tunnels", "complete");
+    expect(await stub.sweep("B", "tunnels")).toEqual({ swept: true, nodes: 0, edges: 0 });
+    expect(await rows(stub, "SELECT id, seen_scan, deleted_at FROM nodes")).toEqual([
+      { id: "tunnel_hostname:t1:ssh.example.com", seen_scan: "B", deleted_at: null },
+    ]);
+    expect(await rows(stub, "SELECT DISTINCT scan_id FROM coverage")).toEqual([{ scan_id: "B" }]);
+    expect(await rows(stub, "SELECT count(*) AS n FROM rule_runs")).toEqual([{ n: 0 }]);
+    expect(await rows(stub, "SELECT value FROM meta WHERE key = 'current_scan'")).toEqual([
+      { value: "B" },
+    ]);
+    // Finishing A changes nothing: it stays failed.
+    expect(await stub.finishScan("A", "complete", 2_000)).toBe("failed");
+    expect(await rows(stub, "SELECT id, status FROM scans ORDER BY started_at")).toEqual([
+      { id: "A", status: "failed" },
+      { id: "B", status: "running" },
+    ]);
+  });
+
+  it("R2-07: refuses writes of a scan that a newer scan superseded, ended or still marked running", async () => {
+    const stub = freshGraph();
+    await stub.beginScan("A", "full", 1_000);
+    await stub.writeChunk("A", "tunnels", chunk, once);
+    expect(await stub.finishScan("A", "complete", 2_000)).toBe("complete");
+    await stub.beginScan("B", "full", 3_000);
+    await stub.writeChunk("B", "tunnels", chunk, once);
+
+    // A's instance runs again, for example restarted by hand.
+    for (const write of writesOfA(stub)) expect(await write).toMatch(refused);
+    expect(await stub.finishScan("A", "failed", 4_000)).toBe("complete");
+
+    // A row still marked running while another scan is current, as the sweep
+    // of the round 1 write path could leave it.
+    await rows(stub, "UPDATE scans SET status = 'running', finished_at = NULL WHERE id = 'A'");
+    for (const write of writesOfA(stub)) expect(await write).toMatch(refused);
+    expect(await stub.finishScan("A", "complete", 4_000)).toBe("failed");
+
+    // A scan the graph has never seen is refused as well.
+    expect(await failure(stub.recordCoverage("Z", "tunnels", "complete"))).toMatch(
+      /StaleScanError: scan Z/,
+    );
+    expect(await rows(stub, "SELECT id, seen_scan, deleted_at FROM nodes")).toEqual([
+      { id: "tunnel_hostname:t1:ssh.example.com", seen_scan: "B", deleted_at: null },
+    ]);
+    expect(await rows(stub, "SELECT id, status FROM scans ORDER BY started_at")).toEqual([
+      { id: "A", status: "failed" },
+      { id: "B", status: "running" },
+    ]);
+  });
+
+  it("finishes the current scan once and answers a retried finish with its status", async () => {
+    const stub = freshGraph();
+    await stub.beginScan("A", "full", 1_000);
+    expect(await stub.finishScan("A", "complete", 2_000)).toBe("complete");
+    expect(await stub.finishScan("A", "failed", 3_000)).toBe("complete");
+    expect(await rows(stub, "SELECT status, finished_at FROM scans")).toEqual([
+      { status: "complete", finished_at: 2_000 },
+    ]);
   });
 });
 

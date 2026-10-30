@@ -59,7 +59,14 @@ interface Snapshot {
   scanId: string;
   summary: ScanSummary;
   coverage: { resource_class: string; status: string; detail: string | null }[];
-  ruleRuns: { rule_id: string; status: string; hits: number; missing: string | null }[];
+  ruleRuns: {
+    rule_id: string;
+    status: string;
+    hits: number;
+    undecided: number;
+    missing: string | null;
+    error: string | null;
+  }[];
   findings: FindingRow[];
   subjects: Map<string, string>;
   exposure: ExposureDbRow[];
@@ -129,7 +136,8 @@ async function scan(name: string, now: number): Promise<Snapshot> {
     ),
     ruleRuns: await sql(
       stub,
-      "SELECT rule_id, status, hits, missing FROM rule_runs WHERE scan_id = ? ORDER BY rule_id",
+      `SELECT rule_id, status, hits, undecided, missing, error FROM rule_runs WHERE scan_id = ?
+       ORDER BY rule_id`,
       scanId,
     ),
     findings: await sql<FindingRow>(
@@ -279,7 +287,9 @@ describe("first scan of the seeded account", () => {
         rule_id: "CF-001",
         status: "not_evaluated",
         hits: 0,
+        undecided: 0,
         missing: JSON.stringify(["packages", "vulns"]),
+        error: null,
       });
       expect(first.findings.filter((f) => f.rule_id === "CF-001")).toEqual([]);
     });
@@ -294,7 +304,10 @@ describe("first scan of the seeded account", () => {
             rule_id,
             status: "evaluated",
             hits: expect.any(Number),
+            // Every entry point is decided, so no rule has an undecided row.
+            undecided: 0,
             missing: null,
+            error: null,
           })),
       );
       expect(first.summary.rules).toMatchObject({
@@ -302,6 +315,7 @@ describe("first scan of the seeded account", () => {
         rules: RULES.length,
         notEvaluated: 1,
         errors: 0,
+        undecided: 0,
       });
     });
   });

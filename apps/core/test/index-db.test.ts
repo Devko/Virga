@@ -1,9 +1,17 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
-import { d1ScanIndex, dueAccounts, getAccount, latestRun, runningScan } from "../src/index-db.ts";
+import {
+  d1ScanIndex,
+  dueAccounts,
+  getAccount,
+  latestRun,
+  listAccounts,
+  runningScan,
+  upsertAccount,
+} from "../src/index-db.ts";
 import { STALE_SCAN_MS } from "../src/scan/policy.ts";
 import type { ScanSummary } from "../src/scan/types.ts";
-import { allDue, indexAccount, lastScanAt, runningScanRow } from "./helpers.ts";
+import { allDue, indexAccount, lastScanAt, newAccountId, runningScanRow } from "./helpers.ts";
 
 const HOUR = 3_600_000;
 // The dispatcher's cron fires at minute 17 (wrangler.jsonc).
@@ -84,5 +92,55 @@ describe("scan runs", () => {
       summary,
     });
     expect(await lastScanAt(accountId)).toBe(AT);
+  });
+});
+
+// Runs last: it adds 1,001 accounts to the index this file shares.
+describe("listAccounts", () => {
+  const byNameThenId = (a: { name: string; id: string }, b: { name: string; id: string }) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
+  it("lists every account by name, then ID, with its schedule", async () => {
+    const [low, high] = [newAccountId(), newAccountId()].sort();
+    const other = newAccountId();
+    await upsertAccount(env.INDEX, { id: other, name: "Beta", cadenceHours: 6 }, AT);
+    await upsertAccount(env.INDEX, { id: high ?? "", name: "Alpha" }, AT);
+    await upsertAccount(env.INDEX, { id: low ?? "", name: "Alpha", profile: "workload" }, AT);
+
+    const accounts = await listAccounts(env.INDEX);
+    expect(accounts).toEqual([...accounts].sort(byNameThenId));
+    const mine = accounts.filter((a) => [low, high, other].includes(a.id));
+    expect(mine).toEqual([
+      {
+        id: low,
+        name: "Alpha",
+        status: "active",
+        cadenceHours: 24,
+        profile: "workload",
+        createdAt: AT,
+        lastScanAt: null,
+      },
+      expect.objectContaining({ id: high, name: "Alpha", profile: "inventory" }),
+      expect.objectContaining({ id: other, name: "Beta", cadenceHours: 6 }),
+    ]);
+    expect(accounts.find((a) => a.id === seeded.paused)).toMatchObject({ status: "paused" });
+  });
+
+  it("returns at most 1,000 accounts", async () => {
+    await env.INDEX.prepare(
+      `INSERT INTO accounts (id, name, status, created_at)
+       WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001)
+       SELECT lower(hex(randomblob(16))), printf('Bulk %04d', i), 'paused', ? FROM n`,
+    )
+      .bind(AT)
+      .run();
+    const total = await env.INDEX.prepare("SELECT count(*) AS n FROM accounts").first<{
+      n: number;
+    }>();
+    expect(total?.n).toBeGreaterThan(1000);
+
+    const accounts = await listAccounts(env.INDEX);
+    expect(accounts).toHaveLength(1000);
+    expect(accounts).toEqual([...accounts].sort(byNameThenId));
   });
 });

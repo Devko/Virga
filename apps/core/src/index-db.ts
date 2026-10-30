@@ -83,21 +83,15 @@ export function d1ScanIndex(db: D1Database): ScanIndex {
 
     async finishRun(run: ScanRunEnd) {
       await db.batch([
+        // Only a running row, which beginRun wrote: a scan instance that runs
+        // again after it ended (R2-07) keeps the first result, and a removed
+        // account gets no row back.
         db
           .prepare(
-            `INSERT INTO scan_runs (id, account_id, started_at, finished_at, status, summary)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (id) DO UPDATE SET finished_at = excluded.finished_at,
-               status = excluded.status, summary = excluded.summary`,
+            `UPDATE scan_runs SET finished_at = ?, status = ?, summary = ?
+             WHERE id = ? AND account_id = ? AND status = 'running'`,
           )
-          .bind(
-            run.id,
-            run.accountId,
-            run.startedAt,
-            run.finishedAt,
-            run.status,
-            JSON.stringify(run.summary),
-          ),
+          .bind(run.finishedAt, run.status, JSON.stringify(run.summary), run.id, run.accountId),
         // Never move last_scan_at back, e.g. when an older instance finishes late.
         db
           .prepare(
@@ -136,6 +130,18 @@ export async function dueAccounts(
     .bind(options.after ?? "", hour, at - STALE_SCAN_MS, options.limit)
     .all<{ id: string }>();
   return results.map((r) => r.id);
+}
+
+/** Accounts one list returns at most. */
+export const MAX_ACCOUNTS = 1000;
+
+/** Every account in the index, by name, then ID; at most MAX_ACCOUNTS. */
+export async function listAccounts(db: D1Database): Promise<AccountRow[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM accounts ORDER BY name, id LIMIT ?")
+    .bind(MAX_ACCOUNTS)
+    .all<AccountRecord>();
+  return results.map(accountRow);
 }
 
 export async function getAccount(db: D1Database, id: string): Promise<AccountRow | null> {
@@ -202,6 +208,16 @@ function checkNewAccount(input: NewAccount): Required<NewAccount> {
   const profile = input.profile ?? "inventory";
   if (!PROFILES.includes(profile)) throw new TypeError("invalid profile");
   return { id: input.id, name, cadenceHours, profile };
+}
+
+/** Deletes an account and its scan runs. Returns whether the account was in the index. */
+export async function deleteAccount(db: D1Database, id: string): Promise<boolean> {
+  assertAccountId(id);
+  const [, account] = await db.batch([
+    db.prepare("DELETE FROM scan_runs WHERE account_id = ?").bind(id),
+    db.prepare("DELETE FROM accounts WHERE id = ?").bind(id),
+  ]);
+  return (account?.meta.changes ?? 0) > 0;
 }
 
 /** Adds an account, or updates name, cadence and profile of an existing one. */

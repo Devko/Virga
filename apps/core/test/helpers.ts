@@ -69,11 +69,20 @@ export function fakeEvaluators(
               ruleId: "CF-001",
               status: "not_evaluated",
               hits: 0,
+              undecided: 0,
               missing: ["packages", "vulns"],
               opened: 0,
               resolved: 0,
             },
-            { ruleId: "CF-002", status: "evaluated", hits: 2, missing: [], opened: 2, resolved: 1 },
+            {
+              ruleId: "CF-002",
+              status: "evaluated",
+              hits: 2,
+              undecided: 1,
+              missing: [],
+              opened: 2,
+              resolved: 1,
+            },
           ];
     },
   };

@@ -23,10 +23,12 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
    - `coverage:<class>`: all chunks ok is `complete`. `NoPermissionError` is `no_permission` without retries. Calls the broker refuses, 404s and invalid output are `error` without retries. Anything else is retried (3 times, waiting out the broker's `retryAfter` on 429) and then `error`, or `partial` if earlier chunks were written. Collection of a class stops at the first failed chunk.
 3. `sweep:<class>` for each `complete` class only.
 4. `exposure`: `AccountGraph.computeExposure` runs the evaluator, replaces `exposure` and records coverage `exposure`.
-5. `rules`: `AccountGraph.evaluateRules` runs the findings lifecycle over `RULES`.
+5. `rules`: `AccountGraph.evaluateRules` runs the findings lifecycle over `RULES` and sums the runs: evaluated, not evaluated and failed rules, hits (decided rows), undecided rows, and opened and resolved findings. Each run is a `rule_runs` row with `hits`, `undecided` and, for a failed run, `error` (graph migration 2).
 6. `finish`: ends the scan in the graph and writes `scan_runs` (status and summary) and `accounts.last_scan_at`.
 
 The scan is `complete` when every class and exposure are complete, `partial` when rules ran on incomplete input, `failed` when rules did not run, and `skipped` when another scan was running. Evaluator failures are results, not retried exceptions.
+
+Only the running scan that is current in the graph may write (R2-07). `writeChunk`, `applyBatch`, `recordCoverage`, `sweep`, `computeExposure` and `evaluateRules` throw `StaleScanError` for any other scan: one marked failed as stale, one that ended, or one a newer scan took over. Otherwise a stale instance that retries a chunk would mark live nodes as seen by itself, and the newer scan's sweep would tombstone them. The scan treats the refusal as a step result, not a retry: it stops, leaves the graph as it is, and ends its `scan_runs` row `failed` with the reason in `summary.detail`. `finishScan` returns the status the scan ended with; a scan marked failed as stale stays failed. `finishRun` only ends a `running` row, so an instance that runs again after its scan ended keeps the first result.
 
 ## Dispatch
 
@@ -34,9 +36,11 @@ The scan is `complete` when every class and exposure are complete, `partial` whe
 
 ## Entrypoints
 
-`GraphReader` (read-only, for the web Worker): `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account.
+`GraphReader` (read-only, for the web Worker): `listAccounts()` (every account in the index by name, then ID, at most 1,000; it reads only the index), `getScanSummary(accountId)`, `listFindings(accountId, { status, severity, limit, cursor })`, `getFinding(accountId, fingerprint)` with `finding_nodes` and the nodes, `getNeighborhood(accountId, nodeId, { depth: 1 | 2, limit })`. An account that is not in the index answers `null`. Values typed `Untrusted` come from the scanned account.
 
-`Admin`: `addAccount({ id, name, cadenceHours, profile })` and `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running.
+`Admin`: `addAccount({ id, name, cadenceHours, profile })`, `triggerScan(accountId)`, which starts `scan-<accountId>-<yyyymmddhhmm>-manual` unless a scan is running, and `removeAccount(accountId)`.
+
+`removeAccount` deletes the account's `accounts` and `scan_runs` rows, then its whole graph (`AccountGraph.deleteAll`: `ctx.storage.deleteAll()`, then an empty schema again). It returns `{ removed }`, true when the account was in the index, and is idempotent, so a retry finishes a partial removal. With the index rows gone, no new scan starts. A scan that still runs is refused at its next write, and `finishRun` gives it no row back. Full offboarding also needs the broker: the web Worker calls `TokenIntake.remove(accountId)` first, so a running scan gets no more API access, then `Admin.removeAccount(accountId)`.
 
 ## Tests
 
