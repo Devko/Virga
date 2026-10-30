@@ -23,7 +23,7 @@ The core Worker: one `AccountGraph` Durable Object per scanned account, the scan
    - `coverage:<class>`: all chunks ok is `complete`. `NoPermissionError` is `no_permission` without retries. Calls the broker refuses, 404s and invalid output are `error` without retries. Anything else is retried (3 times, waiting out the broker's `retryAfter` on 429) and then `error`, or `partial` if earlier chunks were written. Collection of a class stops at the first failed chunk.
 3. `sweep:<class>` for each `complete` class only.
 4. `exposure`: `AccountGraph.computeExposure` runs the evaluator, replaces `exposure` and records coverage `exposure`.
-5. `rules`: `AccountGraph.evaluateRules` runs the findings lifecycle over `RULES`.
+5. `rules`: `AccountGraph.evaluateRules` runs the findings lifecycle over `RULES` and sums the runs: evaluated, not evaluated and failed rules, hits (decided rows), undecided rows, and opened and resolved findings. Each run is a `rule_runs` row with `hits`, `undecided` and, for a failed run, `error` (graph migration 2).
 6. `finish`: ends the scan in the graph and writes `scan_runs` (status and summary) and `accounts.last_scan_at`.
 
 The scan is `complete` when every class and exposure are complete, `partial` when rules ran on incomplete input, `failed` when rules did not run, and `skipped` when another scan was running. Evaluator failures are results, not retried exceptions.

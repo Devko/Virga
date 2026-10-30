@@ -27,7 +27,10 @@ export interface RulesCounters {
   evaluated: number;
   notEvaluated: number;
   errors: number;
+  /** Decided rows of all rules. */
   hits: number;
+  /** Rows the rules could not decide, for example because exposure is `unknown`. */
+  undecided: number;
   opened: number;
   resolved: number;
   detail?: string;

@@ -375,7 +375,10 @@ describe("evaluateRules: suppression", () => {
 
 describe("evaluateRules: undecided rows", () => {
   const ruleRun = (scanId: string) =>
-    db.query("SELECT status, hits FROM rule_runs WHERE scan_id = ? AND rule_id = 'CF-900'", scanId);
+    db.query(
+      "SELECT status, hits, undecided FROM rule_runs WHERE scan_id = ? AND rule_id = 'CF-900'",
+      scanId,
+    );
 
   it("never opens a finding", async () => {
     await scan(db, "s1", 1000, [{ name: "a", unknown: true }]);
@@ -477,7 +480,7 @@ describe("evaluateRules: undecided rows", () => {
       opened: 0,
       resolved: 1,
     });
-    expect(ruleRun("s2")).toEqual([{ status: "evaluated", hits: 1 }]);
+    expect(ruleRun("s2")).toEqual([{ status: "evaluated", hits: 1, undecided: 2 }]);
     expect(finding()).toMatchObject({ status: "open", last_seen: 1000 });
     expect(finding("CF-900:worker_script:b")).toMatchObject({ status: "open", last_seen: 2000 });
     expect(JSON.parse(finding("CF-900:worker_script:b").evidence).note).toBe("second");
@@ -502,18 +505,55 @@ describe("evaluateRules: rule runs and errors", () => {
     evaluateRules(db, rules, "s1", 1000);
     evaluateRules(db, rules, "s1", 1100);
     expect(
-      db.query("SELECT scan_id, rule_id, status, hits, missing FROM rule_runs ORDER BY rule_id"),
+      db.query(
+        `SELECT scan_id, rule_id, status, hits, undecided, missing, error FROM rule_runs
+         ORDER BY rule_id`,
+      ),
     ).toEqual([
-      { scan_id: "s1", rule_id: "CF-900", status: "evaluated", hits: 2, missing: null },
+      {
+        scan_id: "s1",
+        rule_id: "CF-900",
+        status: "evaluated",
+        hits: 2,
+        undecided: 0,
+        missing: null,
+        error: null,
+      },
       {
         scan_id: "s1",
         rule_id: "CF-901",
         status: "not_evaluated",
         hits: 0,
+        undecided: 0,
         missing: '["exposure"]',
+        error: null,
       },
-      { scan_id: "s1", rule_id: "CF-902", status: "error", hits: 0, missing: null },
+      {
+        scan_id: "s1",
+        rule_id: "CF-902",
+        status: "error",
+        hits: 0,
+        undecided: 0,
+        missing: null,
+        error: "no such table: no_such_table",
+      },
     ]);
+  });
+
+  it("stores the error of a failed run, capped at 500 characters, and clears it on the next run", async () => {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    const long = ruleWith("CF-900", `SELECT * FROM t_${"x".repeat(600)}`);
+    const [run] = evaluateRules(db, [long], "s1", 1000);
+    const stored = () =>
+      db.query<{ status: string; error: string | null }>(
+        "SELECT status, error FROM rule_runs WHERE scan_id = 's1' AND rule_id = 'CF-900'",
+      )[0];
+    expect(run?.error).toMatch(/^no such table: t_x+$/);
+    expect(run?.error).toHaveLength(500);
+    expect(stored()).toEqual({ status: "error", error: run?.error });
+
+    evaluateRules(db, [RULE], "s1", 1100);
+    expect(stored()).toEqual({ status: "evaluated", error: null });
   });
 
   it("keeps going after a rule fails and leaves that rule's findings alone", async () => {

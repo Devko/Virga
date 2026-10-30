@@ -246,6 +246,7 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
         notEvaluated: 0,
         errors: 0,
         hits: 0,
+        undecided: 0,
         opened: 0,
         resolved: 0,
         detail: describe(error),

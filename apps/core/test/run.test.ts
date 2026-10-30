@@ -140,7 +140,13 @@ describe("runScan", () => {
     expect(summary.classes.storage?.detail).toMatch(/NoPermissionError: 403/);
     expect(summary.classes.storage?.swept).toBeUndefined();
     expect(summary.exposure).toEqual({ status: "complete", entries: 0, decisions: {} });
-    expect(summary.rules).toMatchObject({ status: "complete", rules: 2, evaluated: 1, hits: 2 });
+    expect(summary.rules).toMatchObject({
+      status: "complete",
+      rules: 2,
+      evaluated: 1,
+      hits: 2,
+      undecided: 1,
+    });
     expect(h.evaluators.calls).toEqual({ exposure: 1, rules: [h.id("s1")] });
 
     expect(await coverage(h, "s1")).toEqual([

@@ -7,18 +7,15 @@ export interface RuleRunSummary {
   status: "evaluated" | "not_evaluated" | "error";
   /** Decided rows the rule returned, as in `rule_runs.hits`; 0 unless evaluated. */
   hits: number;
-  /**
-   * Undecided rows (`decided = 0`) the rule returned; 0 unless evaluated.
-   * `evaluateRules` always sets it; it is optional for summaries built
-   * elsewhere, such as test doubles.
-   */
-  undecided?: number;
+  /** Undecided rows (`decided = 0`) the rule returned, as in `rule_runs.undecided`; 0 unless evaluated. */
+  undecided: number;
   /** Resource classes or derived tables without complete coverage. */
   missing: string[];
   /** Findings created, or reopened after they were resolved. */
   opened: number;
   /** Open or suppressed findings resolved because the rule no longer returns them. */
   resolved: number;
+  /** Why the run is `error`, at most 500 characters, as in `rule_runs.error`. */
   error?: string;
 }
 
@@ -62,6 +59,7 @@ export interface RuleRunSummary {
  * across decided and undecided rows: a rule that decides a fingerprint on one
  * path and cannot on another returns one decided row. `hits` in `rule_runs`
  * and in the summary counts decided rows only; `undecided` counts the others.
+ * A run that is `error` records its message in `rule_runs.error`.
  *
  * Evidence is every other column, stored by column name as a JSON object in
  * `findings.evidence`. Text that parses as a JSON array (`json_group_array`,
@@ -111,23 +109,28 @@ export function evaluateRules(
     const missing = rule.requires.filter((input) => !complete.has(input));
     const summary = { ruleId: rule.id, hits: 0, undecided: 0, missing, opened: 0, resolved: 0 };
     if (missing.length > 0) {
-      recordRun(db, scanId, rule.id, "not_evaluated", 0, missing);
+      recordRun(db, scanId, { ...summary, status: "not_evaluated" });
       return { ...summary, status: "not_evaluated" };
     }
     try {
       const rows = prepareHits(rule, runRule(db, rule));
       const hits = rows.filter((row) => row.decided).length;
-      const counts = db.transaction(() => {
-        const result = applyHits(db, rule, rows, at);
-        recordRun(db, scanId, rule.id, "evaluated", hits, null);
-        return result;
-      });
       const undecided = rows.length - hits;
-      return { ...summary, status: "evaluated", hits, undecided, ...counts };
+      return db.transaction(() => {
+        const counts = applyHits(db, rule, rows, at);
+        const run: RuleRunSummary = { ...summary, status: "evaluated", hits, undecided, ...counts };
+        recordRun(db, scanId, run);
+        return run;
+      });
     } catch (error) {
-      recordRun(db, scanId, rule.id, "error", 0, null);
       const message = error instanceof Error ? error.message : String(error);
-      return { ...summary, status: "error", error: message.slice(0, MAX_ERROR) };
+      const run: RuleRunSummary = {
+        ...summary,
+        status: "error",
+        error: message.slice(0, MAX_ERROR),
+      };
+      recordRun(db, scanId, run);
+      return run;
     }
   });
 }
@@ -367,23 +370,20 @@ function insightLookup(db: SqlRunner, rule: CompiledRule): (hit: Hit) => string 
   };
 }
 
-function recordRun(
-  db: SqlRunner,
-  scanId: string,
-  ruleId: string,
-  status: RuleRunSummary["status"],
-  hits: number,
-  missing: string[] | null,
-): void {
+function recordRun(db: SqlRunner, scanId: string, run: RuleRunSummary): void {
   db.run(
-    `INSERT INTO rule_runs (scan_id, rule_id, status, hits, missing) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO rule_runs (scan_id, rule_id, status, hits, undecided, missing, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (scan_id, rule_id) DO UPDATE SET
-       status = excluded.status, hits = excluded.hits, missing = excluded.missing`,
+       status = excluded.status, hits = excluded.hits, undecided = excluded.undecided,
+       missing = excluded.missing, error = excluded.error`,
     scanId,
-    ruleId,
-    status,
-    hits,
-    missing ? JSON.stringify(missing) : null,
+    run.ruleId,
+    run.status,
+    run.hits,
+    run.undecided,
+    run.missing.length > 0 ? JSON.stringify(run.missing) : null,
+    run.error ?? null,
   );
 }
 

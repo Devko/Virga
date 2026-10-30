@@ -174,30 +174,38 @@ describe("scan steps in AccountGraph", () => {
   it("counts rule runs and turns a failing lifecycle into a result", async () => {
     const stub = freshGraph();
     await stub.beginScan("s1", "full", 1);
-    const run = (ruleId: string, status: "evaluated" | "not_evaluated" | "error", hits = 0) => ({
+    const run = (
+      ruleId: string,
+      status: "evaluated" | "not_evaluated" | "error",
+      hits = 0,
+      undecided = 0,
+    ) => ({
       ruleId,
       status,
       hits,
+      undecided,
       missing: [],
       opened: hits,
       resolved: status === "evaluated" ? 1 : 0,
     });
     await useEvaluators(stub, {
       rules: () => [
-        run("CF-001", "evaluated", 2),
+        run("CF-001", "evaluated", 2, 1),
         run("CF-002", "not_evaluated"),
         run("CF-003", "error"),
+        run("CF-004", "evaluated", 0, 3),
       ],
     });
     expect(await stub.evaluateRules("s1")).toEqual({
       status: "complete",
-      rules: 3,
-      evaluated: 1,
+      rules: 4,
+      evaluated: 2,
       notEvaluated: 1,
       errors: 1,
       hits: 2,
+      undecided: 4,
       opened: 2,
-      resolved: 1,
+      resolved: 2,
     });
     await useEvaluators(stub, {
       rules: () => {

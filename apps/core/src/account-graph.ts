@@ -178,6 +178,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
       notEvaluated: 0,
       errors: 0,
       hits: 0,
+      undecided: 0,
       opened: 0,
       resolved: 0,
     };
@@ -189,6 +190,7 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
         else if (run.status === "not_evaluated") counters.notEvaluated++;
         else counters.errors++;
         counters.hits += run.hits;
+        counters.undecided += run.undecided;
         counters.opened += run.opened;
         counters.resolved += run.resolved;
       }
