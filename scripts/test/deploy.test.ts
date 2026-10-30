@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { API_VARS, CREDENTIAL_VARS, OVERRIDE_VARS } from "../lib/run.ts";
+import { PROXY_VARS } from "../lib/run.ts";
 import { REPO_ROOT } from "./helpers.ts";
 
 /**
@@ -22,9 +22,10 @@ describe("deploy.ts", () => {
   afterEach(() => rmSync(join(root, "apps"), { recursive: true, force: true }));
 
   const deploy = (args: string[], extra: Record<string, string>) => {
+    // The test's own Cloudflare, Wrangler and proxy settings stay out.
     const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const name of [...CREDENTIAL_VARS, ...OVERRIDE_VARS, ...Object.keys(API_VARS)]) {
-      delete env[name];
+    for (const name of Object.keys(env)) {
+      if (/^(?:CLOUDFLARE|CF|WRANGLER)_/i.test(name) || PROXY_VARS.includes(name)) delete env[name];
     }
     return spawnSync(process.execPath, [join(root, "scripts", "deploy.ts"), ...args], {
       env: { ...env, ...extra },
@@ -86,5 +87,17 @@ describe("deploy.ts", () => {
       expect(result.stderr).toContain(`error: apps/web/${file}: Wrangler would load it`);
       rmSync(join(root, "apps"), { recursive: true, force: true });
     }
+  });
+
+  it("R5-03: names the Cloudflare and Wrangler variables it does not pass to Wrangler", () => {
+    const result = deploy(["--dry-run"], {
+      CLOUDFLARE_API_TOKEN: "the-deploy-token-value",
+      WRANGLER_LOG: "debug",
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
+    });
+    expect(result.stdout).toContain(
+      "Wrangler does not get CLOUDFLARE_API_TOKEN, CLOUDFLARE_INCLUDE_PROCESS_ENV, WRANGLER_LOG",
+    );
+    expect(result.stdout + result.stderr).not.toContain("the-deploy-token-value");
   });
 });

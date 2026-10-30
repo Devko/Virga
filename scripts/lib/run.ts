@@ -94,6 +94,127 @@ const QUIET_VARS = {
   WRANGLER_LOG_SANITIZE: "true",
 };
 
+/**
+ * What Node, Wrangler and the tools Wrangler starts need from the operator's
+ * environment, besides the LC_ locale variables. Wrangler gets these and
+ * nothing else from it (R5-03).
+ */
+const SYSTEM_VARS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LANGUAGE",
+  "TZ",
+  "TERM",
+  "COLORTERM",
+  "NO_COLOR",
+];
+const LOCALE_VAR = /^LC_[A-Z]+$/;
+
+/** The same on Windows, where names have no case. */
+const WINDOWS_VARS = [
+  "SYSTEMROOT",
+  "SYSTEMDRIVE",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "TEMP",
+  "TMP",
+  "USERPROFILE",
+  "USERNAME",
+  "USERDOMAIN",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "PROGRAMW6432",
+  "COMMONPROGRAMFILES",
+  "COMMONPROGRAMFILES(X86)",
+  "COMMONPROGRAMW6432",
+  "COMPUTERNAME",
+  "OS",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
+];
+
+/**
+ * Proxy settings, for operators behind a proxy. Wrangler reads the lowercase
+ * names first. The deploy prints the ones in use (proxyNotice).
+ */
+export const PROXY_VARS = [
+  "https_proxy",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "HTTP_PROXY",
+  "no_proxy",
+  "NO_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+];
+
+/** The tool account. A deploy adds CLOUDFLARE_API_TOKEN. */
+const ACCOUNT_VARS = ["CLOUDFLARE_ACCOUNT_ID"];
+
+type Platform = NodeJS.Platform;
+type Env = Readonly<Record<string, string | undefined>>;
+
+const caseOf = (platform: Platform) => (name: string) =>
+  platform === "win32" ? name.toUpperCase() : name;
+
+/**
+ * Wrangler's environment: the allowlisted variables of `env`, then API_VARS
+ * and QUIET_VARS. Every other Cloudflare or Wrangler setting stays out, so
+ * that the checked config, the pinned API and Wrangler's defaults decide
+ * what is deployed where (R5-03).
+ */
+export function wranglerEnv(
+  env: Env,
+  credentials: RunnerOptions["credentials"],
+  platform: Platform = process.platform,
+): Record<string, string> {
+  const fold = caseOf(platform);
+  const allowed = new Set(
+    [
+      ...SYSTEM_VARS,
+      ...(platform === "win32" ? WINDOWS_VARS : []),
+      ...PROXY_VARS,
+      ...ACCOUNT_VARS,
+      ...(credentials === "token" ? ["CLOUDFLARE_API_TOKEN"] : []),
+    ].map(fold),
+  );
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && (allowed.has(fold(name)) || LOCALE_VAR.test(fold(name)))) {
+      out[name] = value;
+    }
+  }
+  return { ...out, ...QUIET_VARS, ...API_VARS };
+}
+
+const isWranglerSetting = (name: string) => /^(?:CLOUDFLARE|CF|WRANGLER)_/i.test(name);
+
+/**
+ * The Cloudflare and Wrangler variables set in `env` that Wrangler does not
+ * get as set. The deploy names them, so that a setting meant for Wrangler
+ * does not seem to have worked.
+ */
+export function droppedSettings(
+  env: Env,
+  credentials: RunnerOptions["credentials"],
+  platform: Platform = process.platform,
+): string[] {
+  const passed = wranglerEnv(env, credentials, platform);
+  return Object.keys(env)
+    .filter((name) => isWranglerSetting(name) && (env[name] ?? "") !== "")
+    .filter((name) => passed[name] !== env[name])
+    .sort();
+}
+
 /** API variables in `env` that would send the token elsewhere. The deploy refuses to run while one is set. */
 export function apiOverrides(env: Readonly<Record<string, string | undefined>>): string[] {
   const set = (name: string) => (env[name] ?? "") !== "";
@@ -140,22 +261,15 @@ export interface RunnerOptions {
 }
 
 /**
- * The environment of a child process. A build (`pnpm`) runs the app's whole
- * build-time dependency tree and never reaches the API, so it gets no
- * CLOUDFLARE_ or CF_ variable at all (R3-05). Wrangler gets API_VARS set.
+ * The environment of a child process. Wrangler gets wranglerEnv. A build
+ * (`pnpm`) runs the app's whole build-time dependency tree and never reaches
+ * the API, so it gets no CLOUDFLARE_ or CF_ variable at all (R3-05).
  */
 function childEnv(command: Command, credentials: RunnerOptions["credentials"]): NodeJS.ProcessEnv {
+  if (command.bin === "wrangler") return wranglerEnv(process.env, credentials);
   const env: NodeJS.ProcessEnv = { ...process.env, ...QUIET_VARS };
-  for (const name of [...OVERRIDE_VARS, ...OLD_API_VARS]) delete env[name];
-  if (command.bin === "pnpm") {
-    for (const name of Object.keys(env)) {
-      if (isCloudflareVar(name)) delete env[name];
-    }
-    return env;
-  }
-  Object.assign(env, API_VARS);
-  for (const name of CREDENTIAL_VARS) {
-    if (credentials === "none" || name !== "CLOUDFLARE_API_TOKEN") delete env[name];
+  for (const name of Object.keys(env)) {
+    if (isCloudflareVar(name) || OVERRIDE_VARS.includes(name)) delete env[name];
   }
   return env;
 }

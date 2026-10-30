@@ -3,12 +3,15 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  API_VARS,
   apiOverrides,
   configOverrides,
   dotEnvFiles,
+  droppedSettings,
   parseJsonOutput,
   processRunner,
   redact,
+  wranglerEnv,
 } from "../lib/run.ts";
 
 describe("redact", () => {
@@ -72,6 +75,156 @@ describe("apiOverrides", () => {
   });
 });
 
+/** An operator's shell: what Node and Wrangler need, the deploy's own variables, and much else. */
+const SHELL: Record<string, string> = {
+  PATH: "/usr/local/bin:/usr/bin:/bin",
+  HOME: "/home/op",
+  TMPDIR: "/tmp/op",
+  USER: "op",
+  LANG: "en_US.UTF-8",
+  LC_ALL: "en_US.UTF-8",
+  TERM: "xterm-256color",
+  TZ: "Europe/Berlin",
+  https_proxy: "http://proxy.example:3128",
+  HTTPS_PROXY: "http://proxy.example:3128",
+  NO_PROXY: "localhost,.example",
+  NODE_EXTRA_CA_CERTS: "/etc/ssl/proxy-ca.pem",
+  CLOUDFLARE_API_TOKEN: "the-deploy-token-value",
+  CLOUDFLARE_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
+  // Other Cloudflare and Wrangler settings: credentials, other accounts, other
+  // auth hosts, bundling, logs and output files.
+  CLOUDFLARE_API_KEY: "a-global-api-key",
+  CLOUDFLARE_EMAIL: "op@example.com",
+  CF_API_TOKEN: "another-token-value",
+  CF_ACCOUNT_ID: "fedcba9876543210fedcba9876543210",
+  CLOUDFLARE_ACCESS_CLIENT_ID: "access-client",
+  CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
+  CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "true",
+  WRANGLER_AUTH_DOMAIN: "dash.example",
+  WRANGLER_BUILD_CONDITIONS: "development",
+  WRANGLER_LOG: "debug",
+  WRANGLER_LOG_PATH: "/tmp/wrangler.log",
+  WRANGLER_OUTPUT_FILE_PATH: "/tmp/wrangler-output.json",
+  WRANGLER_SEND_METRICS: "true",
+  // Node, libraries and other tools.
+  NODE_PATH: "/opt/node_modules",
+  NODE_ENV: "development",
+  NODE_DEBUG: "http,tls",
+  SSL_CERT_FILE: "/etc/ssl/other.pem",
+  LD_LIBRARY_PATH: "/opt/lib",
+  DEBUG: "*",
+  DOTENV_KEY: "dotenv://:key_0123@dotenv.org/vault/.env.vault?environment=production",
+  SENTRY_DSN: "https://key@sentry.example/1",
+  GITHUB_TOKEN: "ghp_0123456789",
+  AWS_SECRET_ACCESS_KEY: "aws-secret",
+  npm_config_user_agent: "pnpm/10.28.0",
+};
+
+/** What the deploy itself sets for every Wrangler call. */
+const SET_BY_DEPLOY = {
+  ...API_VARS,
+  WRANGLER_SEND_METRICS: "false",
+  WRANGLER_SEND_ERROR_REPORTS: "false",
+  WRANGLER_LOG_SANITIZE: "true",
+};
+
+const pick = (env: Record<string, string>, names: string[]) =>
+  Object.fromEntries(names.map((name) => [name, env[name]]));
+
+describe("wranglerEnv", () => {
+  const PASSED = [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "TZ",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS",
+    "CLOUDFLARE_ACCOUNT_ID",
+  ];
+
+  it("R5-03: passes what Node and Wrangler need, the proxy, the account and the token, nothing else", () => {
+    expect(wranglerEnv(SHELL, "token", "linux")).toEqual({
+      ...pick(SHELL, [...PASSED, "CLOUDFLARE_API_TOKEN"]),
+      ...SET_BY_DEPLOY,
+    });
+  });
+
+  it("R5-03: passes no token in a dry run", () => {
+    expect(wranglerEnv(SHELL, "none", "linux")).toEqual({
+      ...pick(SHELL, PASSED),
+      ...SET_BY_DEPLOY,
+    });
+  });
+
+  it("R5-03: passes the Windows system variables on Windows only, where names have no case", () => {
+    const windows = {
+      Path: "C:\\Windows\\system32;C:\\Program Files\\nodejs",
+      SystemRoot: "C:\\Windows",
+      windir: "C:\\Windows",
+      ComSpec: "C:\\Windows\\system32\\cmd.exe",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      TEMP: "C:\\Users\\op\\AppData\\Local\\Temp",
+      TMP: "C:\\Users\\op\\AppData\\Local\\Temp",
+      USERPROFILE: "C:\\Users\\op",
+      APPDATA: "C:\\Users\\op\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\op\\AppData\\Local",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      Https_Proxy: "http://proxy.example:3128",
+      cloudflare_api_token: "the-deploy-token-value",
+    };
+    const dropped = {
+      PSModulePath: "C:\\x",
+      OneDrive: "C:\\Users\\op\\OneDrive",
+      Wrangler_Log: "debug",
+    };
+    expect(wranglerEnv({ ...windows, ...dropped }, "token", "win32")).toEqual({
+      ...windows,
+      ...SET_BY_DEPLOY,
+    });
+    expect(Object.keys(wranglerEnv(windows, "token", "linux")).sort()).toEqual(
+      Object.keys(SET_BY_DEPLOY).sort(),
+    );
+  });
+});
+
+describe("droppedSettings", () => {
+  it("R5-03: names the Cloudflare and Wrangler variables that Wrangler does not get as set", () => {
+    const dropped = [
+      "CF_ACCOUNT_ID",
+      "CF_API_TOKEN",
+      "CLOUDFLARE_ACCESS_CLIENT_ID",
+      "CLOUDFLARE_API_KEY",
+      "CLOUDFLARE_EMAIL",
+      "CLOUDFLARE_INCLUDE_PROCESS_ENV",
+      "CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV",
+      "WRANGLER_AUTH_DOMAIN",
+      "WRANGLER_BUILD_CONDITIONS",
+      "WRANGLER_LOG",
+      "WRANGLER_LOG_PATH",
+      "WRANGLER_OUTPUT_FILE_PATH",
+      "WRANGLER_SEND_METRICS",
+    ];
+    expect(droppedSettings(SHELL, "token", "linux")).toEqual(dropped);
+    expect(droppedSettings(SHELL, "none", "linux")).toEqual(
+      [...dropped, "CLOUDFLARE_API_TOKEN"].sort(),
+    );
+    // A pinned value the operator set as well is not dropped.
+    expect(
+      droppedSettings(
+        { ...API_VARS, WRANGLER_LOG_SANITIZE: "true", WRANGLER_LOG: "" },
+        "token",
+        "linux",
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("dotEnvFiles", () => {
   it("R5-03: finds the files Wrangler loads into its environment", () => {
     const dir = mkdtempSync(join(tmpdir(), "virga-dotenv-"));
@@ -126,6 +279,11 @@ describe("processRunner", () => {
       ].join("\n"),
     );
     chmodSync(pnpm, 0o755);
+    // A stand-in for Wrangler that lists the names of its environment, one per line.
+    mkdirSync(join(dir, "names", "node_modules", ".bin"), { recursive: true });
+    const names = join(dir, "names", "node_modules", ".bin", "wrangler");
+    writeFileSync(names, ["#!/bin/sh", "env | cut -d= -f1"].join("\n"));
+    chmodSync(names, 0o755);
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -259,6 +417,31 @@ describe("processRunner", () => {
       } finally {
         rmSync(join(dir, name));
       }
+    }
+  });
+
+  it("R5-03: gives Wrangler the allowlisted environment, not the operator's", async () => {
+    try {
+      for (const [name, value] of Object.entries(SHELL)) vi.stubEnv(name, value);
+      const run = processRunner({ credentials: "token", secrets: () => [] });
+      const result = await run({
+        bin: "wrangler",
+        cwd: join(dir, "names"),
+        config: CONFIG,
+        args: [],
+        capture: true,
+      });
+      // The shell adds its own.
+      const names = result.stdout
+        .split("\n")
+        .filter((name) => name !== "" && !/^(?:PWD|OLDPWD|SHLVL|_)$/.test(name));
+      expect(names.sort()).toEqual(Object.keys(wranglerEnv(process.env, "token")).sort());
+      for (const name of ["WRANGLER_LOG", "CF_API_TOKEN", "NODE_PATH", "GITHUB_TOKEN", "DEBUG"]) {
+        expect(names).not.toContain(name);
+      }
+      expect(names).toContain("HTTPS_PROXY");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

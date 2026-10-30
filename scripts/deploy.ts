@@ -5,7 +5,8 @@
 // applies their migrations, checks the master key (D-15), then deploys
 // virga-broker, virga-core and virga-web in that order. Safe to run again.
 // Wrangler always gets the checked config as --config, never a named
-// environment, and loads no .env file.
+// environment, loads no .env file, and gets only allowlisted variables of
+// the operator's environment.
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
@@ -15,7 +16,14 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
 import { loadExports } from "./lib/exports.ts";
-import { API_VARS, apiOverrides, configOverrides, processRunner, redact } from "./lib/run.ts";
+import {
+  API_VARS,
+  apiOverrides,
+  configOverrides,
+  droppedSettings,
+  processRunner,
+  redact,
+} from "./lib/run.ts";
 import {
   build,
   type Context,
@@ -86,11 +94,19 @@ async function main(): Promise<number> {
   }
 
   secrets.push(token);
+  const credentials = dryRun ? "none" : "token";
   const ctx: Context = {
-    run: processRunner({ credentials: dryRun ? "none" : "token", secrets: () => secrets }),
+    run: processRunner({ credentials, secrets: () => secrets }),
     log: (line) => console.log(line),
     todo: [],
   };
+
+  const dropped = droppedSettings(process.env, credentials);
+  if (dropped.length > 0) {
+    ctx.log(
+      `Wrangler does not get ${dropped.join(", ")}: the deploy passes it only the variables in the operator guide`,
+    );
+  }
 
   const workers: WorkerConfig[] = [];
   for (const { app, optional } of WORKERS) {
