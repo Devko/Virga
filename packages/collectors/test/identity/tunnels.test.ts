@@ -1,5 +1,14 @@
 import { envelope } from "@virga/cf-api/testing";
-import { canonicalJson, LIMITS, prepareBatch, sha256 } from "@virga/graph";
+import {
+  applyBatch,
+  beginScan,
+  canonicalJson,
+  LIMITS,
+  migrate,
+  prepareBatch,
+  sha256,
+} from "@virga/graph";
+import { openNodeDatabase } from "@virga/graph/node";
 import { describe, expect, it } from "vitest";
 import {
   accessRequired,
@@ -30,8 +39,10 @@ import {
   expectDeterministic,
   expectNoPermission,
   expectProps,
+  NOW,
   node,
   nodeIds,
+  type Routes,
   run,
   without,
 } from "./helpers.ts";
@@ -55,6 +66,30 @@ const propsBytes = (props: object | undefined) => encoder.encode(canonicalJson(p
 /** The part after the tunnel ID for a pair whose contract ID another pair holds. */
 const pairHash = async (host: string, path: string) =>
   `sha256:${await sha256(JSON.stringify([host, path]))}`;
+
+/** Writes each chunk through the graph's write path, as the scan Workflow does, and reads the rows back. */
+async function written(routes: Routes) {
+  const db = openNodeDatabase();
+  try {
+    migrate(db);
+    beginScan(db, { id: "scan-1", kind: "fixture", at: NOW });
+    const { ctx } = context(routes);
+    for (const unit of await tunnelsCollector.plan(ctx)) {
+      const { nodes, edges } = await tunnelsCollector.collect(ctx, unit);
+      const batch = { scanId: "scan-1", resourceClass: "tunnels", nodes, edges };
+      applyBatch(db, await prepareBatch(batch, NOW));
+    }
+    const rows = db.query<{ id: string; type: string; props: string }>(
+      "SELECT id, type, props FROM nodes ORDER BY id",
+    );
+    return {
+      rows: rows.map((r) => ({ ...r, props: JSON.parse(r.props) as Record<string, unknown> })),
+      edges: db.query<{ id: string }>("SELECT id FROM edges ORDER BY id").map((r) => r.id),
+    };
+  } finally {
+    db.close();
+  }
+}
 
 /** The blog tunnel's hostname nodes, as `ID → props`. */
 async function blogHostnames(ingress: object[]) {
@@ -665,6 +700,209 @@ describe("tunnels collector", () => {
       expect(count).toBe(999);
       expect(truncated).toBe(false);
       expect(ids.every((id) => id.endsWith(".example.com:"))).toBe(true);
+    });
+
+    describe("round 8: an entry point over the graph's props limit", () => {
+      const OVERSIZED = `tunnel ${BLOG}: ingress has an entry point with more than 65536 bytes of props`;
+      const service = "http://localhost:8080";
+      const notFound = { service: "http_status:404" };
+
+      /** A path that gives the node of `hostname` props of exactly `size` bytes. */
+      function pathOf(hostname: string, size: number, fallthrough = false) {
+        const bytes = (path: string) =>
+          propsBytes(hostProps(hostname, path, service, false, fallthrough));
+        // 3 UTF-8 bytes but one UTF-16 unit each: counting characters would undercount.
+        const prefix = `^/${"€".repeat(20_000)}`;
+        const path = `${prefix}${"a".repeat(size - bytes(prefix))}`;
+        expect(bytes(path)).toBe(size);
+        return path;
+      }
+      /** A hostname rule whose node's props are one byte over the limit. */
+      const oversized = (hostname: string) => ({
+        hostname,
+        path: pathOf(hostname, LIMITS.propsBytes + 1),
+        service,
+      });
+      /** Hostname rules whose 16 nodes take exactly the 1 MiB budget. */
+      const fullBudget = () =>
+        Array.from({ length: 16 }, (_, i) => {
+          const hostname = `f${String(i).padStart(2, "0")}.example.com`;
+          return { hostname, path: pathOf(hostname, LIMITS.propsBytes), service };
+        });
+
+      it("round 8: the write path takes the chunk instead of refusing every tunnel in it", async () => {
+        // One node over the limit made prepareBatch refuse the whole chunk, so
+        // no tunnel of the chunk was refreshed.
+        const ingress = [{ hostname: "a.example.com", service }, oversized("big.example.com")];
+        const { rows, edges } = await written(withBlogConfig({ ingress: [...ingress, notFound] }));
+        expect(rows.filter((r) => r.type === "tunnel_hostname").map((r) => r.id)).toEqual(
+          [
+            blogHost("a.example.com"),
+            ...["legacy", "open", "ssh", "wiki"].map((h) => legacyHost(`${h}.example.com`)),
+          ].sort(),
+        );
+        expect(
+          Object.fromEntries(
+            rows.filter((r) => r.type === "tunnel").map((r) => [r.id, r.props.ingress_truncated]),
+          ),
+        ).toEqual({
+          [`tunnel:${BLOG}`]: true,
+          [`tunnel:${LOCAL}`]: false,
+          [`tunnel:${LEGACY}`]: false,
+          [`tunnel:${MESH}`]: false,
+        });
+        expect(edges.filter((id) => id.startsWith("ROUTES_TO:"))).toHaveLength(5);
+      });
+
+      it("round 8: leaves out the node and its ROUTES_TO edge, marks the tunnel and emits later nodes", async () => {
+        const { output, ...result } = await blogIngress([
+          { hostname: "a.example.com", service },
+          oversized("big.example.com"),
+          { hostname: "c.example.com", service },
+          notFound,
+        ]);
+        expect(result).toMatchObject({
+          count: 2,
+          truncated: true,
+          ids: ["a.example.com:", "c.example.com:"],
+          reasons: [OVERSIZED],
+        });
+        expect(JSON.stringify(output)).not.toContain("big.example.com");
+      });
+
+      it("round 8: emits props of exactly 65,536 bytes and leaves out 65,537, as the write path counts them", async () => {
+        const at = { hostname: "at.example.com", path: pathOf("at.example.com", 65_536), service };
+        const over = oversized("over.example.com");
+        const { output, ...result } = await blogIngress([at, over, notFound]);
+        expect(result).toMatchObject({
+          count: 1,
+          truncated: true,
+          ids: [`at.example.com:sha256:${await sha256(at.path)}`],
+          bytes: LIMITS.propsBytes,
+          reasons: [OVERSIZED],
+        });
+        // The write path takes the node at the limit and refuses the one over it.
+        await prepareBatch({ scanId: "s", resourceClass: "tunnels", ...output });
+        const props = hostProps(over.hostname, over.path, service, false, false);
+        const node = { type: "tunnel_hostname" as const, nativeId: "n", name: null, props };
+        await expect(
+          prepareBatch({ scanId: "s", resourceClass: "tunnels", nodes: [node], edges: [] }),
+        ).rejects.toThrow(RangeError);
+      });
+
+      it("round 8: leaves out an oversized via_fallthrough node, with one reason for the tunnel", async () => {
+        // The path gives a.example.com props of exactly the limit; the longer
+        // hostnames go one and two bytes over it.
+        const path = pathOf("a.example.com", LIMITS.propsBytes, true);
+        const { ids, ...result } = await blogIngress([
+          { path, service },
+          { hostname: "a.example.com", service },
+          { hostname: "bb.example.com", service },
+          { hostname: "ccc.example.com", service },
+          notFound,
+        ]);
+        expect(result).toMatchObject({ count: 4, truncated: true, reasons: [OVERSIZED] });
+        expect(ids).toEqual(
+          [
+            `a.example.com:sha256:${await sha256(path)}`,
+            "a.example.com:",
+            "bb.example.com:",
+            "ccc.example.com:",
+          ].sort(),
+        );
+      });
+
+      it("round 8: counts the left-out node toward neither the 1,000-node cap nor the byte budget", async () => {
+        // The cap: 1,000 nodes that fit, before and after the oversized one.
+        const hosts = hostRules(1000);
+        const plain = await blogIngress([...hosts, notFound]);
+        expect(plain).toMatchObject({ count: 1000, truncated: false });
+        for (const ingress of [
+          [oversized("big.example.com"), ...hosts, notFound],
+          [...hosts, oversized("big.example.com"), notFound],
+        ]) {
+          const capped = await blogIngress(ingress);
+          expect(capped).toMatchObject({ count: 1000, truncated: true, reasons: [OVERSIZED] });
+          // The other nodes have the IDs they have without the oversized rule.
+          expect(capped.ids).toEqual(plain.ids);
+        }
+        // The budget: 16 nodes of 65,536 bytes take exactly 1 MiB.
+        const full = fullBudget();
+        const fits = await blogIngress([...full, notFound]);
+        const budget = await blogIngress([oversized("big.example.com"), ...full, notFound]);
+        expect(budget).toMatchObject({
+          count: 16,
+          truncated: true,
+          bytes: 1024 * 1024,
+          reasons: [OVERSIZED],
+        });
+        expect(budget.ids).toEqual(fits.ids);
+      });
+
+      it("round 8: names the cap or the budget and the oversized node when both apply", async () => {
+        const cap = await blogIngress([oversized("big.example.com"), ...hostRules(1001), notFound]);
+        expect(cap).toMatchObject({
+          count: 1000,
+          truncated: true,
+          reasons: [
+            `tunnel ${BLOG}: ingress has more than 1000 entry points and an entry point with more than 65536 bytes of props`,
+          ],
+        });
+        const budget = await blogIngress([
+          oversized("big.example.com"),
+          ...fullBudget(),
+          { hostname: "z.example.com", service },
+          notFound,
+        ]);
+        expect(budget).toMatchObject({
+          count: 16,
+          truncated: true,
+          reasons: [
+            `tunnel ${BLOG}: ingress has more than 1048576 bytes of entry point props and an entry point with more than 65536 bytes of props`,
+          ],
+        });
+      });
+
+      it("round 8: a left-out node holds no ID, so the others have the IDs they have without its rule", async () => {
+        // A crafted pair that meets the left-out node's ID keeps the plain ID;
+        // when the node fits, the pair gets the hashed one (R5-04).
+        const pair = { hostname: "a.example.com", path: "x:", service: "ssh://localhost:22" };
+        const long = `http://localhost:1/${"a".repeat(LIMITS.propsBytes)}`;
+        const over = await blogIngress([{ hostname: "a.example.com:x", service: long }, pair]);
+        const alone = await blogIngress([pair]);
+        expect(alone.ids).toEqual(["a.example.com:x:"]);
+        expect(over).toMatchObject({ count: 1, truncated: true, reasons: [OVERSIZED] });
+        expect(over.ids).toEqual(alone.ids);
+        const fits = await blogIngress([{ hostname: "a.example.com:x", service }, pair]);
+        expect(fits.ids).toEqual(["a.example.com:x:", await pairHash("a.example.com", "x:")]);
+      });
+
+      it("round 8: leaves out at most 1,000 nodes, then emits nothing more", async () => {
+        // A path-only rule over the limit reaches every hostname of the ingress.
+        const path = `^/${"a".repeat(LIMITS.propsBytes)}`;
+        const at = await blogIngress([{ path, service }, ...hostRules(1000), notFound]);
+        expect(at).toMatchObject({ count: 1000, truncated: true, reasons: [OVERSIZED] });
+        const over = await blogIngress([{ path, service }, ...hostRules(1001), notFound]);
+        expect(over).toMatchObject({ count: 0, truncated: true, reasons: [OVERSIZED] });
+      });
+
+      it("round 8: measures a long rule once, not once per hostname", async () => {
+        // Measured per node, these 999 left-out nodes made about 4 GB of JSON.
+        const path = `^/${"a".repeat(2_000_000)}`;
+        const long = `http://localhost:8080/${"b".repeat(2_000_000)}`;
+        const started = Date.now();
+        const { count, truncated, reasons } = await blogIngress([
+          { path, service: long },
+          ...hostRules(999),
+          notFound,
+        ]);
+        expect(Date.now() - started).toBeLessThan(2_000);
+        expect({ count, truncated, reasons }).toEqual({
+          count: 999,
+          truncated: true,
+          reasons: [OVERSIZED],
+        });
+      });
     });
   });
 
