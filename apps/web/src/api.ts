@@ -12,14 +12,15 @@ import {
   isAccountId,
   PROFILES,
   type Profile,
+  type RemoveResult,
   tokenIntake,
 } from "./rpc.ts";
 
 /**
- * JSON API for the SPA under /api. Reads go to core's GraphReader; the two
- * admin actions (onboarding, starting a scan) need an email in ADMIN_EMAILS.
- * Values from scanned accounts pass through as JSON data; the SPA renders
- * them as text.
+ * JSON API for the SPA under /api. Reads go to core's GraphReader; the admin
+ * actions (onboarding, starting a scan, removing an account) need an email
+ * in ADMIN_EMAILS. Values from scanned accounts pass through as JSON data;
+ * the SPA renders them as text.
  */
 
 // GraphReader's limits (apps/core/src/graph/read.ts).
@@ -191,6 +192,43 @@ async function onboard(request: Request, env: Env): Promise<Response> {
   }
 }
 
+// Only `removed` is passed on, rebuilt as a boolean.
+const removedView = (result: RemoveResult | null | undefined): RemoveResult => ({
+  removed: result?.removed === true,
+});
+
+const confirms = (body: unknown, accountId: string) =>
+  typeof body === "object" &&
+  body !== null &&
+  !Array.isArray(body) &&
+  (body as Record<string, unknown>).confirm === accountId;
+
+/**
+ * Offboarding. The broker goes first: without the token a scan that still
+ * runs gets no more API access. When it fails, core is not called, so the
+ * account stays listed and the removal can be repeated; both calls are
+ * idempotent. The body must name the account, so a stray request removes nothing.
+ */
+async function removeAccount(request: Request, env: Env, accountId: string): Promise<Response> {
+  const body = await readJson(request);
+  if (!body.ok) return body.response;
+  if (!confirms(body.value, accountId)) throw new BadRequest("confirmation_required");
+  let token: RemoveResult;
+  try {
+    token = removedView(await tokenIntake(env).remove(accountId));
+  } catch (cause) {
+    logFailure("api: token removal", cause);
+    return json({ error: "token_not_removed", token: null, account: null }, 502);
+  }
+  try {
+    const account = removedView(await coreAdmin(env).removeAccount(accountId));
+    return json({ token, account });
+  } catch (cause) {
+    logFailure("api: account removal", cause);
+    return json({ error: "account_not_removed", token, account: null }, 502);
+  }
+}
+
 async function triggerScan(env: Env, accountId: string): Promise<Response> {
   const result = await coreAdmin(env).triggerScan(accountId);
   if (result.started) return json(result, 202);
@@ -231,7 +269,11 @@ function route(
   }
   switch (view) {
     case undefined:
-      return only("GET", { kind: "read", run: () => reader.getScanSummary(accountId) });
+      if (method === "GET") return { kind: "read", run: () => reader.getScanSummary(accountId) };
+      if (method === "DELETE") {
+        return { kind: "admin", run: () => removeAccount(request, env, accountId) };
+      }
+      return methodNotAllowed("GET, DELETE");
     case "findings":
       return only("GET", {
         kind: "read",

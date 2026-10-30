@@ -5,9 +5,11 @@ import type {
   FindingView,
   Json,
   NodeView,
+  RuleRunStatus,
+  RuleRunView,
   ScanSummaryView,
 } from "../src/rpc.ts";
-import type { IntakeView } from "./api.ts";
+import type { IntakeView, RemovalView } from "./api.ts";
 import { Link, paths } from "./router.tsx";
 import { JsonView, Text, time } from "./text.tsx";
 
@@ -118,7 +120,66 @@ export function SummaryView({ summary }: { summary: ScanSummaryView }) {
           ))}
         </tbody>
       </table>
+      <h2>Rules of the latest scan</h2>
+      <RuleRunsTable runs={graph.ruleRuns} />
     </section>
+  );
+}
+
+const RUN_STATUS: Record<RuleRunStatus, string> = {
+  evaluated: "evaluated",
+  not_evaluated: "not evaluated",
+  error: "failed",
+};
+
+/** Not evaluated and undecided are results of their own, never counted as passes. */
+function ruleTotals(runs: RuleRunView[]): string {
+  const count = (status: RuleRunStatus) => runs.filter((r) => r.status === status).length;
+  const hits = runs.reduce((n, r) => n + r.hits, 0);
+  const undecided = runs.reduce((n, r) => n + r.undecided, 0);
+  return (
+    `${count("evaluated")} evaluated, ${count("not_evaluated")} not evaluated, ` +
+    `${count("error")} failed; ${hits} ${hits === 1 ? "hit" : "hits"}, ${undecided} undecided`
+  );
+}
+
+function RuleRunsTable({ runs }: { runs: RuleRunView[] }) {
+  if (runs.length === 0) return <p className="muted">No rule has run in the latest scan.</p>;
+  return (
+    <>
+      <p>{ruleTotals(runs)}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Rule</th>
+            <th>Status</th>
+            <th>Hits</th>
+            <th>Undecided</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((r) => (
+            <tr key={r.ruleId}>
+              <td className="mono">{r.ruleId}</td>
+              <td className={`rule-run rule-run-${r.status}`}>
+                {RUN_STATUS[r.status] ?? r.status}
+              </td>
+              <td>{r.hits}</td>
+              <td>{r.undecided}</td>
+              <td>
+                {r.status === "error" ? (
+                  // The message can quote values from the scanned account.
+                  <Text value={r.error} max={160} />
+                ) : (
+                  r.missing.length > 0 && `missing: ${r.missing.join(", ")}`
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 
@@ -279,6 +340,38 @@ export function IntakeResult({ intake }: { intake: IntakeView }) {
       {intake.expiresOn && (
         <p>
           Token expires <Text value={intake.expiresOn} />.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What a removal did, step by step; a step that is null failed or did not run. */
+export function RemovalResult({ result }: { result: RemovalView }) {
+  const { token, account } = result;
+  const done = token !== null && account !== null;
+  return (
+    <div className={done ? "notice" : "problem"} role="status">
+      <p>
+        {token === null
+          ? "The broker did not finish removing the token, so the account was kept. Try again: removal is safe to repeat."
+          : token.removed
+            ? "The broker deleted the stored token and cleared the account's rate budget."
+            : "The broker held no token for this account; its rate budget was cleared."}
+      </p>
+      {token !== null && (
+        <p>
+          {account === null
+            ? "The account could not be removed from the index. Try again: removal is safe to repeat."
+            : account.removed
+              ? "The account, its scan history and its graph were deleted."
+              : "The account was not in the index; its graph was cleared."}
+        </p>
+      )}
+      {done && (
+        <p>
+          Virga never writes to a scanned account, so it cannot revoke the token there. Delete it in
+          that account under Manage account, Account API tokens.
         </p>
       )}
     </div>

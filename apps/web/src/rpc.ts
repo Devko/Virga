@@ -79,6 +79,22 @@ export interface CoverageView {
   detail: Untrusted<string> | null;
 }
 
+export type RuleRunStatus = "evaluated" | "not_evaluated" | "error";
+
+/** One rule's run in the latest scan. Not evaluated and undecided are not passes. */
+export interface RuleRunView {
+  ruleId: string;
+  status: RuleRunStatus;
+  /** Decided rows. */
+  hits: number;
+  /** Rows the rule could not decide, e.g. where exposure is `unknown`. */
+  undecided: number;
+  /** Inputs without complete coverage when the rule was not evaluated. */
+  missing: string[];
+  /** Why the run failed; can quote values from the scanned account. */
+  error: Untrusted<string> | null;
+}
+
 export interface GraphSummary {
   scan: {
     id: string;
@@ -91,7 +107,10 @@ export interface GraphSummary {
   nodes: Record<string, number>;
   findings: Record<FindingStatus, Partial<Record<FindingSeverity, number>>>;
   exposure: Record<string, number>;
+  /** Rules of the latest scan per run status. */
   rules: Record<string, number>;
+  /** Each rule's run in the latest scan, by rule ID. */
+  ruleRuns: RuleRunView[];
 }
 
 export interface ScanSummaryView {
@@ -167,9 +186,9 @@ export interface IntakeResult {
   retryable: boolean;
 }
 
-/** Every method answers null for an account that is not in the index. */
+/** Every method but `listAccounts` answers null for an account that is not in the index. */
 export interface GraphReaderRpc {
-  /** Requested from core (contract change): every account in the index. */
+  /** Every account in the index, by name, then ID; at most 1,000. */
   listAccounts(): Promise<AccountRow[]>;
   getScanSummary(accountId: string): Promise<ScanSummaryView | null>;
   listFindings(accountId: string, filters?: FindingFilters): Promise<FindingPage | null>;
@@ -181,13 +200,22 @@ export interface GraphReaderRpc {
   ): Promise<Neighborhood | null>;
 }
 
+/** `removed`: Admin, the account was in the index; TokenIntake, a token was stored. */
+export interface RemoveResult {
+  removed: boolean;
+}
+
 export interface AdminRpc {
   addAccount(input: NewAccount): Promise<AccountRow>;
   triggerScan(accountId: string): Promise<TriggerResult>;
+  /** Deletes the index rows, then the account's graph. Idempotent. */
+  removeAccount(accountId: string): Promise<RemoveResult>;
 }
 
 export interface TokenIntakeRpc {
   store(accountId: string, token: string, profile: Profile): Promise<IntakeResult>;
+  /** Deletes the stored token, then clears the account's rate budget. Idempotent. */
+  remove(accountId: string): Promise<RemoveResult>;
 }
 
 /** Cloudflare account IDs, as core and the broker accept them. */

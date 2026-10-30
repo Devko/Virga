@@ -77,6 +77,21 @@ export function virgaMcpServer(env: Env): McpServer {
   );
 
   server.registerTool(
+    "get_scan_summary",
+    {
+      title: "Get scan summary",
+      description:
+        "One account's latest scan: coverage per resource class, counts of nodes, findings and " +
+        "exposure, and per rule its status, hits (decided rows), undecided rows and error. " +
+        "Unknown is a result: a rule that is not_evaluated, or a row that is undecided, is not " +
+        "a pass.",
+      inputSchema: z.object({ account_id: accountId }),
+      annotations: READ_ONLY,
+    },
+    ({ account_id }) => guarded("get_scan_summary", () => reader.getScanSummary(account_id)),
+  );
+
+  server.registerTool(
     "list_findings",
     {
       title: "List findings",

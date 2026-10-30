@@ -10,7 +10,7 @@ The web Worker (D-06): the SPA, a JSON API under `/api` and an MCP server at `/m
 | --- | --- |
 | `ACCESS_TEAM_DOMAIN` | `https://<team-name>.cloudflareaccess.com` |
 | `ACCESS_AUD` | The Application Audience (AUD) tag of the Access application |
-| `ADMIN_EMAILS` | Comma-separated emails that may onboard accounts and start scans |
+| `ADMIN_EMAILS` | Comma-separated emails that may onboard and remove accounts and start scans |
 | `REQUIRE_ACCESS_CONTEXT` | `"false"` (see below) |
 
 Until `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` hold real values, every request answers 403.
@@ -44,28 +44,32 @@ The identity comes from the token: `email` for users, `common_name` (the client 
 | --- | --- |
 | `GET /api/me` | `{ email, serviceToken, admin }` |
 | `GET /api/accounts` | Accounts in the index (`GraphReader.listAccounts`) |
-| `GET /api/accounts/{id}` | Scan summary: account, latest run, coverage, counts |
+| `GET /api/accounts/{id}` | Scan summary: account, latest run, coverage, counts, and per rule of the latest scan its status, hits, undecided rows and error (`graph.ruleRuns`) |
 | `GET /api/accounts/{id}/findings?status=&severity=&limit=&cursor=` | One page of findings; `status` and `severity` repeat; `limit` 1 to 200 |
 | `GET /api/accounts/{id}/finding?fingerprint=` | Finding detail with subjects and nodes |
 | `GET /api/accounts/{id}/neighborhood?node=&depth=&limit=` | Graph around a node; `depth` 1 or 2, `limit` 1 to 500 (default 100) |
 | `POST /api/accounts` | Admin: onboarding, body `{ accountId, token, profile, name?, cadenceHours? }` |
 | `POST /api/accounts/{id}/scan` | Admin: start a scan now |
+| `DELETE /api/accounts/{id}` | Admin: remove the account (offboarding), body `{ confirm: "<id>" }` |
 
 An account that is not in the index answers 404; a failed RPC answers 502 `upstream_error` without detail. Responses are JSON with `Cache-Control: no-store`.
 
 Onboarding calls `TokenIntake.store` first and `Admin.addAccount` only when the broker stored the token. The response rebuilds the broker's result field by field and replaces any occurrence of the submitted token with `[redacted]`. The token is not logged, not echoed and not kept: errors are logged by name only.
 
-POST requests need `Content-Type: application/json`, an `Origin` equal to the Worker's own origin, and no `Sec-Fetch-Site` other than `same-origin`. Bodies are capped at 16 KB.
+Removal (offboarding) needs the body `{ "confirm": "<account ID>" }`, so a request that names no account removes nothing (400 `confirmation_required`). It calls `TokenIntake.remove` first, which deletes the stored token and clears the account's rate budget, so a scan that still runs gets no more API access. Then it calls `Admin.removeAccount`, which deletes the index rows and the account's graph. The answer reports both: `{ token: { removed }, account: { removed } }`, where `removed` is false when there was nothing left to delete. When the broker fails, core is not called: 502 `token_not_removed`. When core fails, the answer is 502 `account_not_removed` with the token result. Both calls are idempotent, so the same request finishes a partial removal. Virga never writes to a scanned account, so the account owner still revokes the token there.
+
+POST and DELETE requests need `Content-Type: application/json`, an `Origin` equal to the Worker's own origin, and no `Sec-Fetch-Site` other than `same-origin`. Bodies are capped at 16 KB.
 
 Every response carries `Content-Security-Policy` (`default-src 'none'`, scripts, styles, images and fonts from `'self'`, `frame-ancestors 'none'`, `base-uri 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, COOP and CORP `same-origin`, and HSTS.
 
 ## MCP
 
-`/mcp` serves a stateless MCP server (`createMcpHandler` from `agents/mcp/server`, one server per request) with four read-only tools:
+`/mcp` serves a stateless MCP server (`createMcpHandler` from `agents/mcp/server`, one server per request) with five read-only tools:
 
 | Tool | Input |
 | --- | --- |
 | `list_accounts` | none |
+| `get_scan_summary` | `account_id`; the summary of `GET /api/accounts/{id}`, with per-rule hits, undecided rows and errors |
 | `list_findings` | `account_id`, `status[]`, `severity[]`, `limit` (1 to 50, default 20), `cursor` |
 | `get_finding` | `account_id`, `fingerprint` |
 | `get_neighborhood` | `account_id`, `node_id`, `depth` (1 or 2), `limit` (1 to 100, default 40) |
@@ -76,13 +80,12 @@ MCP clients reach the Worker through Access like everyone else, for example with
 
 ## SPA
 
-React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage and findings (filters, paging), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding for admins. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
+React and Vite under `spa/`, built to `dist/client`: accounts, account summary with coverage, the rules of the latest scan (hits, undecided rows, not evaluated with the missing inputs, and the error of a failed rule as untrusted text) and findings (filters, paging), finding detail with evidence and the graph neighborhood (Cytoscape, loaded on that page only), and onboarding and account removal for admins. Removal sits at the bottom of the account page behind a confirmation: the admin types the account ID, and the result says what each step removed and that the token still has to be revoked in the scanned account. Every string from a scanned account is React text: no `dangerouslySetInnerHTML`, and control and bidirectional formatting characters are replaced before display. Graph labels are canvas text. The build has no inline scripts or styles; Cytoscape's injected container style is in `styles.css` instead.
 
 ## Known limits (v1)
 
 - No per-account access control: every identity that passes Access sees every account. Admin is a flat email list.
 - `ctx.access` is not available to a Worker with static assets (above).
-- `GraphReader.listAccounts` is a requested change to core; until it exists, `GET /api/accounts` and `list_accounts` fail with 502.
 - Worker-level Access does not support WebSockets; the MCP handler uses HTTP only.
 - The RPC types in `src/rpc.ts` mirror core and the broker by hand, because service bindings to other Workers are typed only as `Service`.
 

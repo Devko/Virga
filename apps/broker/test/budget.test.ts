@@ -144,4 +144,35 @@ describe("rate budget", () => {
     );
     expect(rows).toHaveLength(1);
   });
+
+  it("clear deletes the stored budget and starts again like a new account", async () => {
+    const stub = env.RATE_BUDGET.get(env.RATE_BUDGET.newUniqueId());
+    await stub.acquire("graphql");
+    await stub.report("rest", { status: 429, retryAfter: 300 });
+    expect(await stub.acquire("rest")).toMatchObject({ ok: false, reason: "blocked" });
+
+    await stub.clear();
+    expect(await storedRows(stub)).toEqual({});
+    expect(await stub.acquire("rest")).toEqual({ ok: true });
+    expect(await storedRows(stub)).toEqual({ budget: 1, grants: 1 });
+  });
 });
+
+/** Rows per table of a budget object, leaving out empty tables. */
+function storedRows(stub: DurableObjectStub<RateBudget>) {
+  return runInDurableObject(stub, (_: RateBudget, state) => {
+    const counts: Record<string, number> = {};
+    const tables = state.storage.sql
+      .exec<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
+      )
+      .toArray();
+    for (const { name } of tables) {
+      const n = state.storage.sql
+        .exec<{ n: number }>(`SELECT count(*) AS n FROM "${name}"`)
+        .one().n;
+      if (n > 0) counts[name] = n;
+    }
+    return counts;
+  });
+}

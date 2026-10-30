@@ -1,6 +1,7 @@
-import { createExecutionContext } from "cloudflare:test";
+import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { RateBudget } from "../src/rate-budget.ts";
 import { TokenIntake } from "../src/token-intake.ts";
 import { getEntry } from "../src/vault.ts";
 import {
@@ -197,4 +198,52 @@ describe("TokenIntake.recheck and remove", () => {
     expect(await intake.remove(ACCOUNT_ID)).toEqual({ removed: false });
     expect((await intake.recheck(ACCOUNT_ID)).reasons.map((r) => r.code)).toEqual(["not_found"]);
   });
+
+  it("clears the account's rate budget with the token, and only that account's", async () => {
+    const budget = budgetOf(ACCOUNT_ID);
+    const other = budgetOf(UNRELATED_ACCOUNT);
+    await other.report("rest", { status: 429, retryAfter: 300 });
+    await budget.report("rest", { status: 429, retryAfter: 300 });
+    // The store in beforeEach used the budget: grants and the reported quota.
+    expect((await budgetRows(ACCOUNT_ID)).grants).toBeGreaterThan(0);
+
+    expect(await intake.remove(ACCOUNT_ID)).toEqual({ removed: true });
+    expect(await budgetRows(ACCOUNT_ID)).toEqual({ grants: 0, budget: 0 });
+    expect(await budget.acquire("rest")).toEqual({ ok: true });
+    expect(await other.acquire("rest")).toMatchObject({ ok: false, reason: "blocked" });
+
+    // A retry after a partial failure still clears the budget.
+    await budget.report("rest", { status: 429, retryAfter: 300 });
+    expect(await intake.remove(ACCOUNT_ID)).toEqual({ removed: false });
+    expect(await budget.acquire("rest")).toEqual({ ok: true });
+    await intake.remove(UNRELATED_ACCOUNT);
+  });
+
+  it("leaves every budget alone for an invalid account ID", async () => {
+    await budgetOf(ACCOUNT_ID).report("rest", { status: 429, retryAfter: 300 });
+    expect(await intake.remove("ACCOUNT")).toEqual({ removed: false });
+    expect(await budgetOf(ACCOUNT_ID).acquire("rest")).toMatchObject({ ok: false });
+    expect(await getEntry(env.VAULT, ACCOUNT_ID)).not.toBeNull();
+    await intake.remove(ACCOUNT_ID);
+  });
 });
+
+const UNRELATED_ACCOUNT = "fedcba9876543210fedcba9876543210";
+
+const budgetOf = (accountId: string) => env.RATE_BUDGET.get(env.RATE_BUDGET.idFromName(accountId));
+
+/** Row counts of the ledger tables, or zeros once the tables are gone. */
+function budgetRows(accountId: string) {
+  return runInDurableObject(budgetOf(accountId), (_: RateBudget, state) => {
+    const sql = state.storage.sql;
+    const tables = new Set(
+      sql
+        .exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .toArray()
+        .map((t) => t.name),
+    );
+    const count = (table: string) =>
+      tables.has(table) ? sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n : 0;
+    return { grants: count("grants"), budget: count("budget") };
+  });
+}

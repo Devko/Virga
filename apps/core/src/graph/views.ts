@@ -36,6 +36,22 @@ export interface CoverageView {
   detail: Untrusted<string> | null;
 }
 
+export type RuleRunStatus = "evaluated" | "not_evaluated" | "error";
+
+/** One rule's run in a scan (`rule_runs`). */
+export interface RuleRunView {
+  ruleId: string;
+  status: RuleRunStatus;
+  /** Decided rows; 0 unless evaluated. */
+  hits: number;
+  /** Rows the rule could not decide, e.g. where exposure is `unknown`; 0 unless evaluated. */
+  undecided: number;
+  /** Inputs without complete coverage when the rule was not evaluated. */
+  missing: string[];
+  /** Why the run failed, at most 500 characters. It can quote values from the scanned account. */
+  error: Untrusted<string> | null;
+}
+
 export interface GraphSummary {
   /** The most recent scan in the graph, running or finished. */
   scan: {
@@ -54,6 +70,11 @@ export interface GraphSummary {
   exposure: Record<string, number>;
   /** Rules of the latest scan per run status. */
   rules: Record<string, number>;
+  /**
+   * Each rule's run in the latest scan, by rule ID. A rule that is not
+   * evaluated, and an undecided row, is not a pass.
+   */
+  ruleRuns: RuleRunView[];
 }
 
 export interface FindingFilters {

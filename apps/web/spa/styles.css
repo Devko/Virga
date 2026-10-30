@@ -123,6 +123,25 @@ th {
   padding-left: 0.75rem;
 }
 
+button.danger {
+  color: var(--problem);
+  border: 1px solid var(--problem);
+  background: none;
+  cursor: pointer;
+}
+
+button.danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+form.confirm {
+  max-width: 40rem;
+  margin-top: 2rem;
+  padding: 0 1rem 1rem;
+  border: 1px solid var(--problem);
+}
+
 .title-row,
 .actions {
   display: flex;
@@ -183,7 +202,9 @@ th {
 
 .coverage-no_permission,
 .coverage-partial,
-.coverage-error {
+.coverage-error,
+.rule-run-not_evaluated,
+.rule-run-error {
   color: var(--problem);
 }
 

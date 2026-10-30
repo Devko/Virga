@@ -24,7 +24,7 @@
     "ACCESS_TEAM_DOMAIN": "https://<team-name>.cloudflareaccess.com",
     // Application Audience (AUD) tag of the Access application in front of this Worker.
     "ACCESS_AUD": "<ACCESS_AUD>",
-    // Comma-separated emails that may onboard accounts and start scans.
+    // Comma-separated emails that may onboard and remove accounts and start scans.
     "ADMIN_EMAILS": "",
     // Workers with static assets do not receive ctx.access (Workers docs,
     // "ctx.access limitations"), so the signed Access JWT is the check that

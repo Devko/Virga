@@ -10,7 +10,7 @@ import {
   type Profile,
   type TriggerResult,
 } from "../src/rpc.ts";
-import { ApiError, api, type IntakeView, type Me } from "./api.ts";
+import { ApiError, api, type IntakeView, type Me, type RemovalView } from "./api.ts";
 import { Pending, Problem, useLoad } from "./load.tsx";
 import { Link, paths } from "./router.tsx";
 import { Text } from "./text.tsx";
@@ -20,6 +20,7 @@ import {
   FindingsTable,
   IntakeResult,
   NodeDetails,
+  RemovalResult,
   SummaryView,
 } from "./views.tsx";
 
@@ -165,8 +166,96 @@ function FindingsSection({ accountId }: { accountId: string }) {
   );
 }
 
+/**
+ * Offboarding for admins, behind a confirmation: the account ID has to be
+ * typed, and the API checks it again. A failed step can be repeated here.
+ */
+function RemoveAccount({
+  accountId,
+  onRemoved,
+}: {
+  accountId: string;
+  onRemoved: (result: RemovalView) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [state, setState] = useState<{ busy: boolean; result?: RemovalView; error?: Error }>({
+    busy: false,
+  });
+
+  if (!open) {
+    return (
+      <div className="actions">
+        <button type="button" className="danger" onClick={() => setOpen(true)}>
+          Remove account…
+        </button>
+      </div>
+    );
+  }
+
+  const remove = async (event: FormEvent) => {
+    event.preventDefault();
+    setState({ busy: true });
+    try {
+      onRemoved(await api.remove(accountId));
+    } catch (error) {
+      const body = error instanceof ApiError ? (error.body as RemovalView | null) : null;
+      if (body && "token" in body) setState({ busy: false, result: body });
+      else setState({ busy: false, error: error instanceof Error ? error : new Error("failed") });
+    }
+  };
+  const cancel = () => {
+    setOpen(false);
+    setTyped("");
+    setState({ busy: false });
+  };
+
+  return (
+    <form className="confirm" onSubmit={remove} autoComplete="off">
+      <h2>Remove account</h2>
+      <p>
+        This deletes the stored token and the account's rate budget in the broker, then the account,
+        its scan history, findings and graph in Virga. It cannot be undone; to scan the account
+        again, onboard it again with a new token.
+      </p>
+      <label>
+        Type the account ID to confirm
+        <input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value.trim().toLowerCase())}
+          spellCheck={false}
+          className="mono"
+        />
+      </label>
+      <div className="actions">
+        <button type="submit" className="danger" disabled={typed !== accountId || state.busy}>
+          {state.busy ? "Removing…" : "Remove account"}
+        </button>
+        <button type="button" onClick={cancel} disabled={state.busy}>
+          Cancel
+        </button>
+      </div>
+      {state.result && <RemovalResult result={state.result} />}
+      {state.error && <Problem error={state.error} />}
+    </form>
+  );
+}
+
 export function AccountPage({ accountId, me }: { accountId: string; me: Me | undefined }) {
   const summary = useLoad(() => api.summary(accountId), [accountId]);
+  const [removed, setRemoved] = useState<{ accountId: string; result: RemovalView } | null>(null);
+  if (removed?.accountId === accountId) {
+    return (
+      <>
+        <p>
+          <Link to={paths.accounts()}>← Accounts</Link>
+        </p>
+        <h1>Account removed</h1>
+        <p className="mono">{accountId}</p>
+        <RemovalResult result={removed.result} />
+      </>
+    );
+  }
   return (
     <>
       <p>
@@ -175,6 +264,12 @@ export function AccountPage({ accountId, me }: { accountId: string; me: Me | und
       <Pending loaded={summary}>{(data) => <SummaryView summary={data} />}</Pending>
       {me?.admin && summary.data && <ScanButton accountId={accountId} onStarted={summary.reload} />}
       <FindingsSection accountId={accountId} />
+      {me?.admin && summary.data && (
+        <RemoveAccount
+          accountId={accountId}
+          onRemoved={(result) => setRemoved({ accountId, result })}
+        />
+      )}
     </>
   );
 }

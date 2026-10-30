@@ -40,9 +40,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-const post = <T>(path: string, body: unknown) =>
+// A JSON body even where none is needed: the API's CSRF check requires one.
+const send = <T>(method: "POST" | "DELETE", path: string, body: unknown) =>
   request<T>(path, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -64,6 +65,12 @@ export interface IntakeView {
   permissionGroups: string[];
   reasons: { code: string; message: string }[];
   warnings: { code: string; message: string }[];
+}
+
+/** Answer of DELETE /api/accounts/{id}; null where that step failed or did not run. */
+export interface RemovalView {
+  token: { removed: boolean } | null;
+  account: { removed: boolean } | null;
 }
 
 export interface OnboardingInput {
@@ -98,7 +105,8 @@ export const api = {
     request<Neighborhood>(
       `${account(id)}/neighborhood?${new URLSearchParams({ node, depth: String(depth), limit: "150" })}`,
     ),
-  scan: (id: string) => post<TriggerResult>(`${account(id)}/scan`, {}),
+  scan: (id: string) => send<TriggerResult>("POST", `${account(id)}/scan`, {}),
   onboard: (input: OnboardingInput) =>
-    post<{ account: AccountRow; intake: IntakeView }>("/api/accounts", input),
+    send<{ account: AccountRow; intake: IntakeView }>("POST", "/api/accounts", input),
+  remove: (id: string) => send<RemovalView>("DELETE", account(id), { confirm: id }),
 };

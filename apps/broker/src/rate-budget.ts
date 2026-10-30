@@ -10,7 +10,7 @@ import type { BrokerEnv } from "./env.ts";
 
 /** Rate budget Durable Object, one per account (named by account ID). */
 export class RateBudget extends DurableObject<BrokerEnv> {
-  readonly ledger: BudgetLedger;
+  ledger: BudgetLedger;
 
   constructor(ctx: DurableObjectState, env: BrokerEnv) {
     super(ctx, env);
@@ -25,5 +25,17 @@ export class RateBudget extends DurableObject<BrokerEnv> {
   report(kind: BudgetKind, report: BudgetReport): void {
     if (!isBudgetKind(kind)) throw new TypeError("unknown budget kind");
     this.ledger.report(kind, report, Date.now());
+  }
+
+  /**
+   * Deletes the account's budget, for offboarding (TokenIntake.remove). The
+   * ledger's tables are created again, empty, so a request still in flight
+   * or an account that is onboarded again starts like a new account.
+   */
+  async clear(): Promise<void> {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.deleteAll();
+      this.ledger = new BudgetLedger(this.ctx.storage.sql);
+    });
   }
 }
