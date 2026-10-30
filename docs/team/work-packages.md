@@ -176,6 +176,17 @@ From the [round 9 verification](../reviews/2026-10-30-verification-round-9.md), 
 
 Round 10 status (2026-10-30): all seven packages are merged, and the [round 10 verification](../reviews/2026-10-30-verification-round-10.md) (one reviewer) confirms R9-01 to R9-06, L-1, L-2, H-2 to H-4 and the round 9 hardening items as fixed, and H-1 as partly fixed. It found R10-01 (medium: the gate does not see the root `.pnpmfile.cjs`, whose hook can point pnpm at an undated lockfile) and R10-02 to R10-04 (low: `package.yaml` with `pnpm.executionEnv`, the workflow guard read by indent and raw text, tsconfig `paths` past the L-2 checks). From round 10 on, packages run on Sonnet or Opus by risk: Opus for security-critical design work and every review, Sonnet for docs and well-specified packages.
 
+## Packages for phase 1, round 11
+
+From the [round 10 verification](../reviews/2026-10-30-verification-round-10.md). All three packages touch security-critical checks, so all three run on Opus.
+
+| WP | Model | Scope | Owns | Done when |
+| --- | --- | --- | --- | --- |
+| `supply-chain-5` | Opus | R10-01 (`.pnpmfile.cjs` and `.pnpmfile.mjs` refused anywhere); R10-02 (`package.yaml` and `package.json5` refused); R10-03 (the workflow guard parses YAML, for `ci.yml` and the guide's example); `.npmrc` messages print only known keys; a fresh-checkout mode that refuses any `node_modules` in the release-age job (lead) | `scripts/check-release-age.ts`, its test, `scripts/test/guide.test.ts`, a new shared test helper, `CONTRIBUTING.md`, `.github/workflows/**` | Tests per finding with the review's inputs; the real checkout passes |
+| `deploy-5` | Opus | R10-04 (tsconfig `paths` and `baseUrl`): every tsconfig and workspace `package.json` that esbuild can read for a bundle is recorded before the builds and compared before each Wrangler call; the guide's L-2 text | `scripts/**` except the gate, its test and `guide.test.ts`; `docs/operator/**` | The review's tsconfig case stops the deploy before Wrangler; the dry run passes |
+| `hardening-11` | Opus | Broker: a delete or mark after a recheck matches the token it checked, not only its ID; identity: lone surrogates refused on both sides (`isWellFormed`) | `apps/broker/**`, `apps/web/src/auth.ts` and its tests, `apps/core/src/audit.ts` and its tests | Tests per item |
+| `review-11` | Opus | Read-only review of the round 11 changes | none (report only) | A report per finding: fixed or not, with evidence |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
