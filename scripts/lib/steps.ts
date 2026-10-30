@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkerConfig } from "./config.ts";
 import {
@@ -233,11 +234,16 @@ export async function checkMasterKey(ctx: Context, broker: WorkerConfig, setup: 
   }
 }
 
-/** Settings the web Worker reads (operator guide, Access for the UI). */
+/**
+ * Settings the web Worker reads (operator guide, Access for the UI). The only
+ * values the deploy takes from its environment and uploads (R3-04).
+ */
 export const WEB_SETTINGS = ["ACCESS_TEAM_DOMAIN", "ACCESS_AUD", "ADMIN_EMAILS"] as const;
 
+const isWebSetting = (name: string) => (WEB_SETTINGS as readonly string[]).includes(name);
+
 export interface SettingsPlan {
-  /** Values from the environment, uploaded as secrets with the deploy. */
+  /** Web settings from the environment, uploaded as secrets with the deploy. */
   upload: Record<string, string>;
   /** Names that must already be secrets on the Worker. */
   expected: string[];
@@ -247,7 +253,10 @@ export interface SettingsPlan {
 
 /**
  * Decides where each web setting comes from: a var in the config, a value in
- * the deploy environment (uploaded as a secret), or an existing secret.
+ * the deploy environment (uploaded as a secret), or an existing secret. Other
+ * names in secrets.required are never read from the environment, so a name
+ * added there cannot copy the deploy token or any other variable into the
+ * internet-facing Worker; they must already be secrets.
  */
 export function planWebSettings(
   web: WorkerConfig,
@@ -262,7 +271,7 @@ export function planWebSettings(
       }
       continue;
     }
-    const value = env[name];
+    const value = isWebSetting(name) ? env[name] : undefined;
     if (value !== undefined && value.trim() !== "") plan.upload[name] = value.trim();
     else plan.expected.push(name);
   }
@@ -272,6 +281,13 @@ export function planWebSettings(
 const putHint = (names: readonly string[]) =>
   names.map((n) => `npx wrangler secret put ${n}   (in apps/web)`).join("\n  ");
 
+function missingHint(names: readonly string[]) {
+  const settings = names.filter(isWebSetting);
+  return settings.length > 0
+    ? `Set ${settings.join(", ")} as environment variables of the deploy, or create the secrets:\n  ${putHint(names)}`
+    : `Create the secrets, then run the deploy again:\n  ${putHint(names)}`;
+}
+
 /** Before the web deploy: fail early where Wrangler would refuse the deploy anyway. */
 export async function checkWebSettings(ctx: Context, web: WorkerConfig, plan: SettingsPlan) {
   const mandatory = plan.expected.filter((n) => web.requiredSecrets.includes(n));
@@ -280,9 +296,7 @@ export async function checkWebSettings(ctx: Context, web: WorkerConfig, plan: Se
   const missing = mandatory.filter((n) => !existing?.includes(n));
   if (missing.length === 0) return;
   throw new DeployError(
-    existing === null
-      ? `${web.name} does not exist yet and requires the secrets ${missing.join(", ")}. Set them as environment variables for the first deploy`
-      : `${web.name} requires the secrets ${missing.join(", ")}. Set them as environment variables, or:\n  ${putHint(missing)}`,
+    `${web.name} ${existing === null ? "does not exist yet and " : ""}requires the secrets ${missing.join(", ")}. ${missingHint(missing)}`,
   );
 }
 
@@ -295,6 +309,32 @@ export async function reportWebSettings(ctx: Context, web: WorkerConfig, plan: S
     ctx.todo.push(
       `${web.name} still needs ${missing.join(", ")} (operator guide, "Access for the UI"):\n  ${putHint(missing)}`,
     );
+  }
+}
+
+/**
+ * Writes the values to a private temporary file for `wrangler deploy
+ * --secrets-file` and removes it afterwards. No file without values, and
+ * nothing but web settings in it.
+ */
+export async function withSecretsFile(
+  values: Record<string, string>,
+  fn: (path: string | undefined) => Promise<void>,
+) {
+  const other = Object.keys(values).filter((name) => !isWebSetting(name));
+  if (other.length > 0) {
+    throw new DeployError(
+      `refusing to upload ${other.join(", ")}; the deploy uploads only ${WEB_SETTINGS.join(", ")}`,
+    );
+  }
+  if (Object.keys(values).length === 0) return fn(undefined);
+  const dir = mkdtempSync(join(tmpdir(), "virga-deploy-"));
+  try {
+    const path = join(dir, "secrets.json");
+    writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
+    await fn(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

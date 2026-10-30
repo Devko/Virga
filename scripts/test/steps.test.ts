@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,6 +23,7 @@ import {
   ensureDatabases,
   planWebSettings,
   reportWebSettings,
+  withSecretsFile,
 } from "../lib/steps.ts";
 import { worker } from "./helpers.ts";
 
@@ -204,6 +213,39 @@ describe("web settings", () => {
       expected: ["ACCESS_TEAM_DOMAIN", "EXTRA"],
       placeholders: [],
     });
+  });
+
+  it("R3-04: never uploads the deploy token, even when secrets.required names it", () => {
+    const plan = planWebSettings(web({ requiredSecrets: ["CLOUDFLARE_API_TOKEN"] }), {
+      CLOUDFLARE_API_TOKEN: "cfat_0123456789abcdefghij",
+      ACCESS_AUD: "aud-tag",
+    });
+    expect(plan.upload).toEqual({ ACCESS_AUD: "aud-tag" });
+  });
+
+  it("R3-04: uploads only the web settings; other required secrets must already exist", async () => {
+    const config = web({ requiredSecrets: ["EXTRA"] });
+    const plan = planWebSettings(config, { EXTRA: "from-the-shell" });
+    expect(plan.upload).toEqual({});
+    expect(plan.expected).toContain("EXTRA");
+    const { ctx } = fakeContext({ "secret list --format json": ok("[]") });
+    await expect(checkWebSettings(ctx, config, plan)).rejects.toThrow(
+      /requires the secrets EXTRA. Create the secrets, then run the deploy again:\n {2}npx wrangler secret put EXTRA/,
+    );
+  });
+
+  it("R3-04: writes only web settings into a private secrets file and removes it", async () => {
+    let path = "";
+    await withSecretsFile({ ACCESS_AUD: "aud-tag" }, async (p) => {
+      path = p ?? "";
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ ACCESS_AUD: "aud-tag" });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+    expect(existsSync(path)).toBe(false);
+    await withSecretsFile({}, async (p) => expect(p).toBeUndefined());
+    await expect(
+      withSecretsFile({ CLOUDFLARE_API_TOKEN: "cfat_0123456789abcdefghij" }, async () => {}),
+    ).rejects.toThrow(/refusing to upload CLOUDFLARE_API_TOKEN/);
   });
 
   it("flags placeholder vars", () => {

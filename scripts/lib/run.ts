@@ -46,6 +46,12 @@ export const CREDENTIAL_VARS = [
   "CF_EMAIL",
 ];
 
+/**
+ * Names of the deploy's own Cloudflare settings and credentials. They never
+ * become Worker secrets.
+ */
+export const isCloudflareVar = (name: string) => /^(?:CLOUDFLARE|CF)_/i.test(name);
+
 const TOKEN_PATTERN = /\b(?:cfat|cfut|cfk|cfoat)_[A-Za-z0-9_-]{8,}/g;
 
 /** Wrangler flags that pick another config or a named environment; only the runner sets --config. */

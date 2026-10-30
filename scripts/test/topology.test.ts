@@ -274,6 +274,18 @@ describe("checkTopology", () => {
     ]);
   });
 
+  it("R3-04: refuses Cloudflare credentials in secrets.required", () => {
+    const issues = check(
+      broker(),
+      core(),
+      web({ requiredSecrets: ["CLOUDFLARE_API_TOKEN", "CF_API_KEY", "ACCESS_AUD"] }),
+    );
+    expect(errors(issues)).toEqual([
+      expect.stringContaining("secrets.required names CLOUDFLARE_API_TOKEN"),
+      expect.stringContaining("secrets.required names CF_API_KEY"),
+    ]);
+  });
+
   it("R3-03: refuses named environments, which the deploy never checks", () => {
     const issues = check(broker({ hasEnvironments: true }), core());
     expect(errors(issues)).toEqual([

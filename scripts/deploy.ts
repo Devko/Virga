@@ -9,9 +9,6 @@
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
 // passes no credentials to Wrangler and changes nothing.
 // See docs/operator/guide.md.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
@@ -30,6 +27,7 @@ import {
   planWebSettings,
   reportWebSettings,
   WEB_SETTINGS,
+  withSecretsFile,
 } from "./lib/steps.ts";
 import { checkTopology, WORKERS } from "./lib/topology.ts";
 
@@ -136,25 +134,6 @@ async function main(): Promise<number> {
   ctx.log(dryRun ? "Dry run complete." : "Deploy complete.");
   for (const item of ctx.todo) console.log(`ACTION: ${item}`);
   return 0;
-}
-
-/**
- * Writes the values to a private temporary file for `wrangler deploy
- * --secrets-file` and removes it afterwards. No file without values.
- */
-async function withSecretsFile(
-  values: Record<string, string>,
-  fn: (path: string | undefined) => Promise<void>,
-) {
-  if (Object.keys(values).length === 0) return fn(undefined);
-  const dir = mkdtempSync(join(tmpdir(), "virga-deploy-"));
-  try {
-    const path = join(dir, "secrets.json");
-    writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
-    await fn(path);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 try {

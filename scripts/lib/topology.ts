@@ -1,5 +1,6 @@
 import type { WorkerConfig } from "./config.ts";
 import type { ModuleExports } from "./exports.ts";
+import { isCloudflareVar } from "./run.ts";
 
 export interface Issue {
   level: "error" | "warning";
@@ -124,6 +125,13 @@ export function checkTopology(workers: readonly WorkerConfig[], exportsOf: Expor
       if (worker.workersDev !== false) error(`${at}: workers_dev must be false`);
       if (worker.previewUrls !== false) error(`${at}: preview_urls must be false`);
       if (worker.hasRoutes) error(`${at}: ${worker.name} must have no routes`);
+    }
+    for (const name of worker.requiredSecrets) {
+      if (isCloudflareVar(name)) {
+        error(
+          `${at}: secrets.required names ${name}; Cloudflare credentials are never Worker secrets`,
+        );
+      }
     }
     if (worker.hasEnvironments) {
       error(
