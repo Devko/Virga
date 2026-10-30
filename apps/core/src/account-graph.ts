@@ -221,7 +221,8 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
   }
 
   /**
-   * Deletes the account's whole graph, for offboarding. The object is
+   * Deletes the account's whole graph, for offboarding (Admin.removeAccount
+   * calls it after marking the index row and before deleting it). The object is
    * migrated again, so it stays an empty, valid graph: a scan that still runs
    * is refused like any scan that is not current, and an account that is
    * added again starts from nothing. The `removed` marker in meta makes

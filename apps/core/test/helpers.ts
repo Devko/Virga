@@ -132,6 +132,62 @@ export async function runningScanRow(accountId: string, startedAt: number) {
     .run();
 }
 
+/**
+ * ACCOUNT_GRAPH whose stubs run `hook` before `deleteAll`, to make the
+ * deletion fail (the hook throws) or to do something just before it.
+ */
+export function graphsWith(hook: () => Promise<void>): Env["ACCOUNT_GRAPH"] {
+  const graphs = env.ACCOUNT_GRAPH;
+  return {
+    idFromName: (name: string) => graphs.idFromName(name),
+    get(id: DurableObjectId) {
+      const stub = graphs.get(id);
+      return {
+        async deleteAll() {
+          await hook();
+          return stub.deleteAll();
+        },
+        clearRemoved: () => stub.clearRemoved(),
+      };
+    },
+  } as unknown as Env["ACCOUNT_GRAPH"];
+}
+
+/**
+ * The index, except that `hook` runs before every statement whose SQL
+ * matches `match`, alone or in a batch: to make it fail (the hook throws) or
+ * to do something just before it.
+ */
+export function indexWith(match: RegExp, hook: () => Promise<void>): D1Database {
+  const db = env.INDEX;
+  const real = new WeakMap<object, D1PreparedStatement>();
+  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
+    const hooked =
+      (method: "run" | "first" | "all" | "raw") =>
+      async (...args: unknown[]) => {
+        await hook();
+        return (statement[method] as (...a: unknown[]) => Promise<unknown>).apply(statement, args);
+      };
+    const wrapped = {
+      bind: (...values: unknown[]) => wrap(statement.bind(...values)),
+      run: hooked("run"),
+      first: hooked("first"),
+      all: hooked("all"),
+      raw: hooked("raw"),
+    } as unknown as D1PreparedStatement;
+    real.set(wrapped, statement);
+    return wrapped;
+  };
+  return {
+    prepare: (query: string) => (match.test(query) ? wrap(db.prepare(query)) : db.prepare(query)),
+    async batch(statements: D1PreparedStatement[]) {
+      if (statements.some((s) => real.has(s))) await hook();
+      return db.batch(statements.map((s) => real.get(s) ?? s));
+    },
+    exec: (query: string) => db.exec(query),
+  } as unknown as D1Database;
+}
+
 /** Every account due at `at`, following the pages. */
 export async function allDue(at: number): Promise<string[]> {
   const out: string[] = [];

@@ -38,7 +38,7 @@ export interface RulesCounters {
 
 /**
  * `running`: another scan of the account runs. `removed`: the account was
- * removed (Admin.removeAccount) and not added again.
+ * removed or is being removed (Admin.removeAccount) and not added again.
  */
 export type BeginResult =
   | { started: true }
@@ -111,8 +111,8 @@ export interface ScanSummary {
   /** Set when status is `skipped` because another scan of the account runs. */
   running?: string;
   /**
-   * Why the scan was skipped or stopped: the account is not in the index, or
-   * the scan is no longer the running scan of the account.
+   * Why the scan was skipped or stopped: the account is not in the index or
+   * is being removed, or the scan is no longer the running scan of the account.
    */
   detail?: string;
 }
@@ -131,9 +131,12 @@ export interface ScanRunEnd extends ScanRunStart {
 
 /** The scan's reads and writes of the account index (D1). */
 export interface ScanIndex {
-  /** Whether the account is in the index. A removed account is not scanned (R4-03). */
+  /**
+   * Whether the account is in the index and not being removed. A removed
+   * account, or one being removed, is not scanned (R4-03, R5-08).
+   */
   hasAccount(accountId: string): Promise<boolean>;
-  /** Adds the scan's running row, but only while the account is in the index. */
+  /** Adds the scan's running row, but only while hasAccount would be true. */
   beginRun(run: ScanRunStart): Promise<void>;
   finishRun(run: ScanRunEnd): Promise<void>;
 }

@@ -3,6 +3,7 @@ import {
   type AccountRow,
   deleteAccount,
   getAccount,
+  markRemoving,
   type NewAccount,
   runningScan,
   upsertAccount,
@@ -11,10 +12,32 @@ import { assertAccountId, manualScanInstanceId } from "./scan/ids.ts";
 
 export type TriggerResult =
   | { started: true; id: string }
-  | { started: false; reason: "unknown_account" | "running" | "exists"; id: string | null };
+  | {
+      started: false;
+      reason: "unknown_account" | "removing" | "running" | "exists";
+      id: string | null;
+    };
 
 /** `removed` says whether the account was in the index. */
 export type RemoveResult = { removed: boolean };
+
+// Module functions, not methods: every method of an entrypoint is callable over RPC.
+
+const graphOf = (env: Env, accountId: string) =>
+  env.ACCOUNT_GRAPH.get(env.ACCOUNT_GRAPH.idFromName(accountId));
+
+/**
+ * Removes the account in an order that never hides an account whose graph
+ * is left (R5-08): mark the index row `removing`, delete the graph, then
+ * delete the index rows. A step that fails leaves the account listed as
+ * `removing`, and running the removal again finishes it.
+ */
+async function remove(env: Env, accountId: string): Promise<boolean> {
+  const listed = await markRemoving(env.INDEX, accountId, Date.now());
+  await graphOf(env, accountId).deleteAll();
+  await deleteAccount(env.INDEX, accountId);
+  return listed;
+}
 
 /**
  * Account administration for the web Worker: register an account in the
@@ -28,18 +51,17 @@ export class Admin extends WorkerEntrypoint<Env> {
    */
   async addAccount(input: NewAccount): Promise<AccountRow> {
     const account = await upsertAccount(this.env.INDEX, input, Date.now());
-    const graphs = this.env.ACCOUNT_GRAPH;
-    await graphs.get(graphs.idFromName(account.id)).clearRemoved();
+    await graphOf(this.env, account.id).clearRemoved();
     return account;
   }
 
-  /** Starts a scan now unless one is running. */
+  /** Starts a scan now unless the account is unknown or being removed, or a scan is running. */
   async triggerScan(accountId: string): Promise<TriggerResult> {
     assertAccountId(accountId);
     const now = Date.now();
-    if (!(await getAccount(this.env.INDEX, accountId))) {
-      return { started: false, reason: "unknown_account", id: null };
-    }
+    const account = await getAccount(this.env.INDEX, accountId);
+    if (!account) return { started: false, reason: "unknown_account", id: null };
+    if (account.status === "removing") return { started: false, reason: "removing", id: null };
     const running = await runningScan(this.env.INDEX, accountId, now);
     if (running) return { started: false, reason: "running", id: running };
 
@@ -52,20 +74,22 @@ export class Admin extends WorkerEntrypoint<Env> {
   }
 
   /**
-   * Removes the account: its rows in the index (`accounts`, `scan_runs`),
-   * then its whole graph. Without the index rows the dispatcher no longer
-   * picks the account, and a scan instance that begins later, for example
-   * one that was queued, stops at its begin step without writing. The
-   * emptied graph refuses to begin a scan until addAccount (R4-03). A scan
-   * that still runs is refused at its next write. Idempotent, so a retry
-   * after a partial failure finishes the job. The token stays in the broker
-   * until TokenIntake.remove deletes it.
+   * Removes the account: marks its index row `removing`, deletes its whole
+   * graph, then its rows in the index (`accounts`, `scan_runs`). Until the
+   * last step the account stays listed as `removing`, so a removal that
+   * fails part way never hides an account whose graph is left (R5-08).
+   *
+   * From the first step on, the dispatcher and triggerScan start no scan of
+   * the account, and a scan instance that begins later, for example one that
+   * was queued, stops at its begin step without writing. The emptied graph
+   * also refuses to begin a scan until addAccount (R4-03). A scan that still
+   * runs is refused at its next write after the graph is deleted, and gets
+   * no index row back. Idempotent, so a retry after a partial failure
+   * finishes the job. The token stays in the broker until TokenIntake.remove
+   * deletes it.
    */
   async removeAccount(accountId: string): Promise<RemoveResult> {
     assertAccountId(accountId);
-    const removed = await deleteAccount(this.env.INDEX, accountId);
-    const graphs = this.env.ACCOUNT_GRAPH;
-    await graphs.get(graphs.idFromName(accountId)).deleteAll();
-    return { removed };
+    return { removed: await remove(this.env, accountId) };
   }
 }

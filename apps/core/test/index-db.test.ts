@@ -2,10 +2,12 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   d1ScanIndex,
+  deleteAccount,
   dueAccounts,
   getAccount,
   latestRun,
   listAccounts,
+  markRemoving,
   runningScan,
   upsertAccount,
 } from "../src/index-db.ts";
@@ -92,6 +94,42 @@ describe("scan runs", () => {
       summary,
     });
     expect(await lastScanAt(accountId)).toBe(AT);
+  });
+});
+
+describe("removal marker", () => {
+  it("R5-08: an account being removed stays listed as removing, is never due and gets no scan run", async () => {
+    const accountId = await indexAccount();
+    const index = d1ScanIndex(env.INDEX);
+    expect(await index.hasAccount(accountId)).toBe(true);
+    expect(await allDue(AT)).toContain(accountId);
+
+    expect(await markRemoving(env.INDEX, accountId, AT)).toBe(true);
+    // A repeat keeps the time the removal began.
+    expect(await markRemoving(env.INDEX, accountId, AT + HOUR)).toBe(true);
+    expect(await markRemoving(env.INDEX, newAccountId(), AT)).toBe(false);
+
+    expect(await getAccount(env.INDEX, accountId)).toMatchObject({ status: "removing" });
+    expect((await listAccounts(env.INDEX)).find((a) => a.id === accountId)).toMatchObject({
+      status: "removing",
+    });
+    expect(
+      await env.INDEX.prepare("SELECT removing_at FROM accounts WHERE id = ?")
+        .bind(accountId)
+        .first(),
+    ).toEqual({ removing_at: AT });
+    expect(await allDue(AT)).not.toContain(accountId);
+    expect(await index.hasAccount(accountId)).toBe(false);
+    const id = `scan-${accountId}-2026102907`;
+    await index.beginRun({ id, accountId, startedAt: AT });
+    expect(await latestRun(env.INDEX, accountId)).toBeNull();
+
+    // Updating the account does not end the removal.
+    await upsertAccount(env.INDEX, { id: accountId, name: "Example" }, AT);
+    expect(await getAccount(env.INDEX, accountId)).toMatchObject({ status: "removing" });
+
+    expect(await deleteAccount(env.INDEX, accountId)).toBe(true);
+    expect(await getAccount(env.INDEX, accountId)).toBeNull();
   });
 });
 

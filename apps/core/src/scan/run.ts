@@ -127,8 +127,9 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
   };
 
   // An instance created before Admin.removeAccount, or a begin step retried
-  // after it, must not scan the account again (R4-03). The graph refuses too,
-  // in case the removal lands between the two calls.
+  // after it, must not scan the account again (R4-03), nor may one that
+  // begins while the removal is under way (R5-08). The graph refuses too
+  // once it is deleted, in case the removal lands between the two calls.
   const begin = await step.do("begin", STORE_STEP, async (): Promise<BeginResult> => {
     if (!(await index.hasAccount(accountId))) return { started: false, removed: true };
     const result = await graph().beginScan(scanId, "full", now);
@@ -138,7 +139,11 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
   if (!begin.started) {
     return "running" in begin
       ? { ...summary, status: "skipped", running: begin.running }
-      : { ...summary, status: "skipped", detail: `account ${accountId} is not in the index` };
+      : {
+          ...summary,
+          status: "skipped",
+          detail: `account ${accountId} is not in the index or is being removed`,
+        };
   }
 
   const context = (): CollectorContext => ({
