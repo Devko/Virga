@@ -131,6 +131,12 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
 
+  packages/vulns:
+    dependencies:
+      '@virga/graph':
+        specifier: workspace:*
+        version: link:../graph
+
   spikes/s03-do-sqlite:
     dependencies:
       '@virga/graph':

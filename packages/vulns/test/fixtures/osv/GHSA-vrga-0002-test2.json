@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.6.0",
+  "id": "GHSA-vrga-0002-test2",
+  "modified": "2026-10-02T12:00:00Z",
+  "aliases": ["CVE-2099-0002"],
+  "summary": "Hand-written test record: request smuggling in @virga-test/lib, two release lines",
+  "severity": [
+    {
+      "type": "CVSS_V4",
+      "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
+    }
+  ],
+  "affected": [
+    {
+      "package": { "ecosystem": "npm", "name": "@virga-test/lib" },
+      "ranges": [
+        {
+          "type": "ECOSYSTEM",
+          "events": [
+            { "introduced": "1.0.0" },
+            { "fixed": "1.4.2" },
+            { "introduced": "2.0.0-beta.1" },
+            { "fixed": "2.1.0" }
+          ]
+        }
+      ]
+    }
+  ],
+  "database_specific": { "severity": "HIGH" }
+}

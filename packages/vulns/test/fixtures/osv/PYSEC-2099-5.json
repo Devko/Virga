@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.6.0",
+  "id": "PYSEC-2099-5",
+  "modified": "2026-10-05T12:00:00Z",
+  "summary": "Hand-written test record: a PyPI package only",
+  "affected": [
+    {
+      "package": { "ecosystem": "PyPI", "name": "virga-fixture-a" },
+      "ranges": [{ "type": "ECOSYSTEM", "events": [{ "introduced": "0" }] }],
+      "versions": ["1.0", "1.1"]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.6.0",
+  "id": "GHSA-vrga-0003-test3",
+  "modified": "2026-10-03T12:00:00Z",
+  "summary": "Hand-written test record: only a CVSS v4 vector, no database severity",
+  "severity": [
+    {
+      "type": "CVSS_V4",
+      "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    }
+  ],
+  "affected": [
+    {
+      "package": { "ecosystem": "npm", "name": "virga-fixture-b" },
+      "ranges": [
+        { "type": "SEMVER", "events": [{ "introduced": "0" }, { "last_affected": "2.3.4" }] }
+      ]
+    }
+  ]
+}

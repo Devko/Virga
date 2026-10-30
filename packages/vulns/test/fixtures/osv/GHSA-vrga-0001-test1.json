@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.6.0",
+  "id": "GHSA-vrga-0001-test1",
+  "modified": "2026-10-01T12:00:00Z",
+  "published": "2026-09-30T08:00:00Z",
+  "aliases": ["CVE-2099-0001"],
+  "summary": "Hand-written test record: prototype pollution in virga-fixture-a",
+  "details": "Not a real advisory. Written for the Virga tests from the OSV schema.",
+  "severity": [{ "type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" }],
+  "affected": [
+    {
+      "package": {
+        "ecosystem": "npm",
+        "name": "virga-fixture-a",
+        "purl": "pkg:npm/virga-fixture-a"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "0" }, { "fixed": "4.17.21" }]
+        }
+      ],
+      "versions": ["4.17.19", "4.17.20"],
+      "database_specific": { "source": "https://example.test/advisories/GHSA-vrga-0001-test1" }
+    }
+  ],
+  "references": [{ "type": "WEB", "url": "https://example.test/advisories/GHSA-vrga-0001-test1" }],
+  "database_specific": {
+    "cwe_ids": ["CWE-1321"],
+    "severity": "CRITICAL",
+    "github_reviewed": true
+  }
+}

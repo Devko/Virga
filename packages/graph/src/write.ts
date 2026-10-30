@@ -358,6 +358,11 @@ export interface VulnRow {
   source: string;
 }
 
+/**
+ * Writes rows as given, status included, with `first_seen = at` for new
+ * ones. For rule fixtures and tests; a rematch goes through
+ * {@link applyVulnRematch}, which keeps ignored rows and records coverage.
+ */
 export function upsertVulns(db: SqlRunner, rows: readonly VulnRow[], at = Date.now()): void {
   const data = rows.map((r) => ({
     package_id: r.packageId,
@@ -385,6 +390,185 @@ export function upsertVulns(db: SqlRunner, rows: readonly VulnRow[], at = Date.n
       );
     }
   });
+}
+
+export type VulnStatus = "open" | "fixed" | "ignored";
+
+/** A whole `vulns` row, as a rematch reads and writes it. */
+export interface VulnRecord {
+  /** Node ID of the package: `package:<purl>`. */
+  packageId: string;
+  vulnId: string;
+  aliases: string[];
+  severityRank: 0 | 1 | 2 | 3 | 4;
+  kev: boolean;
+  fixedIn: string | null;
+  status: VulnStatus;
+  source: string;
+  firstSeen: number;
+}
+
+/**
+ * The result of a rematch: the rows to write for one source, and whether the
+ * `vulns` input is complete (no unknown match, every package parsed). The
+ * producer is `rematch` in `@virga/vulns`.
+ */
+export interface VulnRematch {
+  source: string;
+  rows: readonly VulnRecord[];
+  complete: boolean;
+  /** Why it is not complete, as counts. Untrusted text never belongs here. */
+  detail: string | null;
+}
+
+/** Limits for `vulns` rows; advisory IDs follow the OSV ID format. */
+export const VULN_LIMITS = {
+  vulnId: 128,
+  aliases: 100,
+  fixedIn: 256,
+  detail: 1000,
+} as const;
+
+const VULN_ID = /^[a-zA-Z0-9:_.-]+$/;
+const VULN_SOURCE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const VULN_STATUSES = new Set<string>(["open", "fixed", "ignored"]);
+const PACKAGE_PREFIX = "package:";
+
+const isVulnId = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= VULN_LIMITS.vulnId && VULN_ID.test(value);
+
+/** Checks one row; messages name the row by index, because its IDs are untrusted. */
+function checkVulnRecord(row: VulnRecord, index: number, source: string): void {
+  const fail = (field: string): never => {
+    throw new RangeError(`vulns row ${index}: invalid ${field}`);
+  };
+  if (
+    typeof row.packageId !== "string" ||
+    !row.packageId.startsWith(PACKAGE_PREFIX) ||
+    row.packageId.length > PACKAGE_PREFIX.length + LIMITS.nativeId
+  ) {
+    fail("packageId");
+  }
+  if (!isVulnId(row.vulnId)) fail("vulnId");
+  if (!Array.isArray(row.aliases) || row.aliases.length > VULN_LIMITS.aliases) fail("aliases");
+  if (!row.aliases.every(isVulnId)) fail("alias");
+  if (!Number.isInteger(row.severityRank) || row.severityRank < 0 || row.severityRank > 4) {
+    fail("severityRank");
+  }
+  if (typeof row.kev !== "boolean") fail("kev");
+  if (
+    row.fixedIn !== null &&
+    (typeof row.fixedIn !== "string" || row.fixedIn.length > VULN_LIMITS.fixedIn)
+  ) {
+    fail("fixedIn");
+  }
+  if (!VULN_STATUSES.has(row.status)) fail("status");
+  if (row.source !== source) fail("source");
+  if (!Number.isSafeInteger(row.firstSeen) || row.firstSeen < 0) fail("firstSeen");
+}
+
+/**
+ * Applies a rematch in one transaction: upserts its rows and records the
+ * `vulns` coverage of the scan, `complete` or `partial` with the detail, so
+ * a rule that requires `vulns` is `not_evaluated` while a match is unknown.
+ *
+ * Every row is checked first; an invalid row or a key that occurs twice
+ * throws before anything is written. On a key that exists, `first_seen`
+ * stays as it is and an `ignored` status is kept, whatever the row says;
+ * every other column is replaced. Rows are never deleted.
+ */
+export function applyVulnRematch(
+  db: SqlRunner,
+  scanId: string,
+  rematch: VulnRematch,
+): { written: number; complete: boolean } {
+  if (typeof rematch.source !== "string" || !VULN_SOURCE.test(rematch.source)) {
+    throw new RangeError("vulns rematch: invalid source");
+  }
+  const keys = new Map<string, Set<string>>();
+  for (const [index, row] of rematch.rows.entries()) {
+    checkVulnRecord(row, index, rematch.source);
+    const vulnIds = keys.get(row.packageId) ?? new Set<string>();
+    if (vulnIds.has(row.vulnId)) throw new RangeError(`vulns row ${index}: key occurs twice`);
+    vulnIds.add(row.vulnId);
+    keys.set(row.packageId, vulnIds);
+  }
+  const complete = rematch.complete === true;
+  const detail = complete ? null : (rematch.detail ?? "not complete").slice(0, VULN_LIMITS.detail);
+  const data = rematch.rows.map((r) => ({
+    package_id: r.packageId,
+    vuln_id: r.vulnId,
+    aliases: JSON.stringify(r.aliases),
+    severity_rank: r.severityRank,
+    kev: r.kev ? 1 : 0,
+    fixed_in: r.fixedIn,
+    status: r.status,
+    source: r.source,
+    first_seen: r.firstSeen,
+  }));
+  db.transaction(() => {
+    for (const json of jsonChunks(data)) {
+      db.run(
+        `INSERT INTO vulns (package_id, vuln_id, aliases, severity_rank, kev, fixed_in, status, source, first_seen)
+         SELECT j.value ->> '$.package_id', j.value ->> '$.vuln_id', j.value ->> '$.aliases',
+                j.value ->> '$.severity_rank', j.value ->> '$.kev', j.value ->> '$.fixed_in',
+                j.value ->> '$.status', j.value ->> '$.source', j.value ->> '$.first_seen'
+         FROM json_each(?) AS j WHERE true
+         ON CONFLICT (package_id, vuln_id) DO UPDATE SET
+           aliases = excluded.aliases, severity_rank = excluded.severity_rank, kev = excluded.kev,
+           fixed_in = excluded.fixed_in, source = excluded.source,
+           status = CASE WHEN vulns.status = 'ignored' THEN 'ignored' ELSE excluded.status END`,
+        json,
+      );
+    }
+    recordCoverage(db, {
+      scanId,
+      resourceClass: "vulns",
+      status: complete ? "complete" : "partial",
+      detail,
+    });
+  });
+  return { written: data.length, complete };
+}
+
+interface VulnSqlRow extends Record<string, string | number | null> {
+  package_id: string;
+  vuln_id: string;
+  aliases: string;
+  severity_rank: number;
+  kev: number;
+  fixed_in: string | null;
+  status: string;
+  source: string;
+  first_seen: number;
+}
+
+function parseAliases(json: string): string[] {
+  try {
+    const value: unknown = JSON.parse(json);
+    return Array.isArray(value) && value.every((a) => typeof a === "string") ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Reads the `vulns` rows, of one source or all, ordered by package and vuln ID. */
+export function listVulns(db: SqlRunner, source?: string): VulnRecord[] {
+  const where = source === undefined ? "" : "WHERE source = ?";
+  const sql = `SELECT package_id, vuln_id, aliases, severity_rank, kev, fixed_in, status, source, first_seen
+     FROM vulns ${where} ORDER BY package_id, vuln_id`;
+  const rows = source === undefined ? db.query<VulnSqlRow>(sql) : db.query<VulnSqlRow>(sql, source);
+  return rows.map((r) => ({
+    packageId: r.package_id,
+    vulnId: r.vuln_id,
+    aliases: parseAliases(r.aliases),
+    severityRank: r.severity_rank as VulnRecord["severityRank"],
+    kev: r.kev === 1,
+    fixedIn: r.fixed_in,
+    status: r.status as VulnStatus,
+    source: r.source,
+    firstSeen: r.first_seen,
+  }));
 }
 
 export interface SignalRow {

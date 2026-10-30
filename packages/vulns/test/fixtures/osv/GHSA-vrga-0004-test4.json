@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.6.0",
+  "id": "GHSA-vrga-0004-test4",
+  "modified": "2026-10-04T12:00:00Z",
+  "withdrawn": "2026-10-04T12:00:00Z",
+  "summary": "Hand-written test record: withdrawn, it was a false report",
+  "severity": [{ "type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" }],
+  "affected": [
+    {
+      "package": { "ecosystem": "npm", "name": "virga-fixture-a" },
+      "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "0" }] }]
+    }
+  ]
+}
