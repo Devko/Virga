@@ -339,6 +339,92 @@ describe("settings are always set back (R8 hardening, R6-02)", () => {
   });
 });
 
+describe("the guard compares settings with fixed defaults (H-3, R6-02)", () => {
+  const DEFAULTS = {
+    ignore_check_constraints: 0,
+    recursive_triggers: 0,
+    reverse_unordered_selects: 0,
+    legacy_alter_table: 0,
+    defer_foreign_keys: 0,
+    case_sensitive_like: 0,
+  };
+
+  it("H-3: a fresh graph object holds the defaults the guard expects", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      expect(settings(db)).toEqual(DEFAULTS);
+    });
+  });
+
+  it.each([
+    "ignore_check_constraints",
+    "recursive_triggers",
+    "reverse_unordered_selects",
+    "legacy_alter_table",
+    "defer_foreign_keys",
+    "case_sensitive_like",
+  ])(
+    "H-3: %s stuck on the connection before a read fails it closed without running it, and is set back",
+    async (name) => {
+      await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+        const db = fromDurableObjectStorage(durable.storage);
+        await seed(db);
+        // As if an earlier statement had left it set, outside any guard.
+        durable.storage.sql.exec(`PRAGMA ${name} = 1`);
+        expect(settings(db)).toEqual({ ...DEFAULTS, [name]: 1 });
+        let ran = false;
+        const read = () =>
+          guardRead(db, () => {
+            ran = true;
+            return { rows: [], rowsWritten: 0 };
+          });
+        expect(read).toThrow(ReadOnlyError);
+        expect(ran).toBe(false);
+        expect(settings(db)).toEqual(DEFAULTS);
+        // Set back, so the next run passes.
+        expect(read()).toEqual([]);
+        expect(ran).toBe(true);
+      });
+    },
+  );
+
+  it("H-3: a rule run on a connection with a stuck setting ends error and changes no finding", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      durable.storage.sql.exec("PRAGMA reverse_unordered_selects = 1");
+      const before = { ...state(db), settings: DEFAULTS };
+      const [run] = evaluateRules(db, [rule(NO_HIT)], "s1", 2000);
+      expect(run).toMatchObject({ status: "error", opened: 0, resolved: 0 });
+      expect(run?.error).toMatch(
+        /^the setting reverse_unordered_selects was not at its default before a read-only query/,
+      );
+      expect(state(db)).toEqual(before);
+      // The next run, on the defaults again, resolves the finding.
+      expect(evaluateRules(db, [rule(NO_HIT)], "s1", 3000)[0]).toMatchObject({
+        status: "evaluated",
+        resolved: 1,
+      });
+    });
+  });
+
+  it("H-3: a setting stuck on the connection can no longer become the baseline of a read that keeps it", async () => {
+    await runInDurableObject(freshGraph(), async (_graph: AccountGraph, durable) => {
+      const db = fromDurableObjectStorage(durable.storage);
+      await seed(db);
+      durable.storage.sql.exec("PRAGMA case_sensitive_like = 1");
+      // Before H-3 the guard took the stuck value as its baseline, passed the
+      // read and set it back to 1, so `LIKE` stayed case sensitive for later runs.
+      expect(() => db.queryReadOnly(`${HIT_A} WHERE 'a' LIKE 'A'`)).toThrow(
+        /the setting case_sensitive_like was not at its default/,
+      );
+      expect(db.query("SELECT 'a' LIKE 'A' AS ci")).toEqual([{ ci: 1 }]);
+      expect(db.queryReadOnly(`${HIT_A} WHERE 'a' LIKE 'A'`)).toHaveLength(1);
+    });
+  });
+});
+
 /**
  * The platform facts decision 0006 relies on. If a workerd upgrade changes
  * one, re-check the guard in packages/graph/src/sql.ts.
