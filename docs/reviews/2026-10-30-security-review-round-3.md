@@ -2,17 +2,17 @@
 
 - Date: 2026-10-30
 - Scope: what round 2 added (`apps/web`, `scripts/`, the `access-v2` and `undecided` changes), at commit d8480b1
-- Status: all findings fixed in round 4 of the [work packages](../team/work-packages.md) by `fix-tunnels`, `fix-deploy` and `fix-lifecycle`; `review-4` verifies them in round 5
+- Status: fixes landed in round 4 of the [work packages](../team/work-packages.md) (`fix-tunnels`, `fix-deploy`, `fix-lifecycle`). The [round 5 verification](2026-10-30-verification-round-5.md) confirms R3-01 and R3-04 to R3-06 and rates R3-02, R3-03 and R3-07 as partly fixed. The rest of R3-07 was fixed in round 5; the rest of R3-02 and R3-03 continues as R5-03 to R5-05 in round 6.
 
-| Finding | Fixed by | Test |
-| --- | --- | --- |
-| R3-01 | `fix-tunnels` | `packages/collectors/test/identity/tunnels.test.ts` (two R3-01 tests); end to end: the R3-01 cases in `apps/core/test/e2e/account.ts`, run by `apps/core/test/e2e/scan.test.ts` |
-| R3-02 | `fix-tunnels` | `packages/collectors/test/identity/tunnels.test.ts` (four R3-02 tests); `packages/exposure/test/evaluate.test.ts` (three R3-02 cases); end to end: `apps/core/test/e2e/scan.test.ts` (R3-02) and the R3-02 cases in `apps/core/test/e2e/account.ts` |
-| R3-03 | `fix-deploy` | R3-03 tests in `scripts/test/config.test.ts` (configs next to and above the app), `run.test.ts` (`--config`, no named environment), `deploy.test.ts` (`CLOUDFLARE_ENV`, no `--env`), `topology.test.ts` (no `env` blocks) and `steps.test.ts` (the checked config in every Wrangler call) |
-| R3-04 | `fix-deploy` | `scripts/test/steps.test.ts` (three R3-04 tests), `scripts/test/topology.test.ts` (credentials in `secrets.required`) |
-| R3-05 | `fix-deploy` | `scripts/test/run.test.ts` (R3-05: builds run without any `CLOUDFLARE_` or `CF_` variable) |
-| R3-06 | `fix-deploy` | `scripts/test/topology.test.ts` (one owner per `database_id`), `scripts/test/steps.test.ts` (three R3-06 tests) |
-| R3-07 | `fix-lifecycle` | `packages/rules/test/evaluate.test.ts` (R3-07: an undecided row ends an expired suppression) |
+| Finding | Fixed by | Test | Verification (round 5) |
+| --- | --- | --- | --- |
+| R3-01 | `fix-tunnels` | `packages/collectors/test/identity/tunnels.test.ts` (two R3-01 tests); end to end: the R3-01 cases in `apps/core/test/e2e/account.ts`, run by `apps/core/test/e2e/scan.test.ts` | fixed |
+| R3-02 | `fix-tunnels` | `packages/collectors/test/identity/tunnels.test.ts` (four R3-02 tests); `packages/exposure/test/evaluate.test.ts` (three R3-02 cases); end to end: `apps/core/test/e2e/scan.test.ts` (R3-02) and the R3-02 cases in `apps/core/test/e2e/account.ts` | partly fixed: a path-only rule whose native ID exceeds 512 characters is dropped without a signal, and a native ID collision drops a node; follow-ups R5-05 and R5-04 (round 6, `tunnels-limits`). The fall-through expansion also grows quadratically (new finding R5-06) |
+| R3-03 | `fix-deploy` | R3-03 tests in `scripts/test/config.test.ts` (configs next to and above the app), `run.test.ts` (`--config`, no named environment), `deploy.test.ts` (`CLOUDFLARE_ENV`, no `--env`), `topology.test.ts` (no `env` blocks) and `steps.test.ts` (the checked config in every Wrangler call) | partly fixed: Wrangler still loads `CLOUDFLARE_ENV` and `WRANGLER_CI_OVERRIDE_NAME` from `apps/<app>/.env` and `.env.local`; follow-up R5-03 (round 6, `deploy-hardening`) |
+| R3-04 | `fix-deploy` | `scripts/test/steps.test.ts` (three R3-04 tests), `scripts/test/topology.test.ts` (credentials in `secrets.required`) | fixed |
+| R3-05 | `fix-deploy` | `scripts/test/run.test.ts` (R3-05: builds run without any `CLOUDFLARE_` or `CF_` variable) | fixed; a close variant through a committed `build.command` is the new finding R5-02 (round 6, `deploy-hardening`) |
+| R3-06 | `fix-deploy` | `scripts/test/topology.test.ts` (one owner per `database_id`), `scripts/test/steps.test.ts` (three R3-06 tests) | fixed |
+| R3-07 | `fix-lifecycle` | `packages/rules/test/evaluate.test.ts` (R3-07: an undecided row ends an expired suppression) | partly fixed: while the rule is `not_evaluated`, `GraphReader` showed the finding as suppressed, and data-model.md was out of date. Both fixed in round 5: reads show a suppression past its date as open (`fix-core-3`, `apps/core/test/graph-reader.test.ts`, R3-07 tests), and `docs` updated data-model.md |
 
 Related changes:
 

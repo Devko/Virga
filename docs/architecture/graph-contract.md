@@ -127,10 +127,10 @@ Emitted only when the script has `preview_urls: true`.
 | --- | --- | --- |
 | `bucket` | string | |
 | `kind` | string | `r2_dev` or `custom` |
-| `enabled` | boolean \| null | `null` when the API omits the field or sends another type (custom domains) |
+| `enabled` | boolean \| null | `null` when the API omits the field or sends another type |
 | `zone_id` | string \| null | |
 
-Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point; review R4-02 proposes emitting it with `enabled: null` instead.
+Custom domains are emitted whatever their state. The managed `r2.dev` domain is emitted only when the API says `enabled: true`, so an unreadable flag drops the entry point. Round 6 changes that (R4-02): the `r2.dev` domain is emitted unless the API says it is disabled, with `enabled` `null` when that cannot be read. CF-021 version 3 and the exposure evaluator already treat any `enabled` other than `false` as possibly public, for custom and `r2.dev` domains: CF-021 returns an undecided row, and the evaluator decides the domain `unknown`.
 
 `d1_database` — native ID: database UUID; name: database name. Props: `created_at` (string \| null).
 
@@ -258,7 +258,7 @@ Known limits of the per-rule model, and which way each errs:
 - Hostnames that reach the tunnel only through DNS are not known to the collector, so rules without a hostname yield no node for them. This can hide an entry point.
 - A wildcard hostname rule (`*.example.com`) that comes before an exact hostname is not treated as shadowing it. The exact host's node may then show the later rule's `access_required`, which errs toward `access`; the wildcard rule's own node still reports its exposure.
 - A fall-through node's path also covers paths that an earlier hostname rule with a path takes. This errs toward exposure.
-- `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point. This was already true before round 4.
+- Until the collector follows the ID form above (round 6), `<hostname><path>` has no separator, so pairs such as (`a.example.co`, `m`) and (`a.example.com`, `""`) share an ID. The first rule keeps it and the other yields no node, which can hide an entry point (R5-04). This was already true before round 4.
 
 ### tokens
 
@@ -271,7 +271,15 @@ Known limits of the per-rule model, and which way each errs:
 | `expires_on` | string \| null | `null` means no expiry |
 | `not_before` | string \| null | |
 | `policies` | `Policy[]` | `{ effect, permission_groups: { id, name }[], resources: Record<string, string> }`. Nested resource maps from the API (`account -> resource -> value`) are flattened to their inner entries |
-| `ip_condition` | `{ in, not_in }` \| null | Arrays of CIDRs |
+| `ip_condition` | `{ in, not_in }` \| null | Arrays of CIDRs in canonical form (below); `null` when the token has no IP condition |
+
+`ip_condition` entries are canonical, so a rule sees one spelling per range (review R4-06):
+
+- IPv4 as a dotted quad; IPv6 as RFC 5952 text (lower case, no leading zeros, the longest run of two or more zero groups as `::`, the first of equal runs); IPv4-mapped IPv6 as `::ffff:a.b.c.d`; the prefix length in decimal.
+- Host bits and a missing prefix are kept.
+- Each list is deduplicated and sorted.
+- An entry that does not parse is kept as given, trimmed and cut to 64 characters with a trailing `…`. An entry that is not a string becomes `""`. Neither limits anything.
+- The original spellings are not stored. CF-003 parses every spelling itself, so it needs no raw field.
 
 Signal: `last_used_on` (epoch ms, `null` when never used).
 
@@ -365,10 +373,14 @@ Input: live entry point nodes, Access apps and policies, Worker-level Access tar
      - Any IP include with prefix length 0 (`0.0.0.0/0`, `::/0`) makes the policy `public`, even next to credential includes.
      - Every other include → `unknown`: `everyone`, `ip`, `geo`, `other`, identity selectors, `device_posture`, a missing group, or an empty or unreadable include.
    - Otherwise → `access`, including an app without any allow, bypass or Service Auth policy (deny by default). CF-010 judges how broad the allowed audience is, not the evaluator.
-4. **Origin-enforced Access.** A `tunnel_hostname` with `access_required: true` is never `public`. cloudflared rejects requests to that rule without a valid Access application token. Access issues one only after an Allow or Service Auth policy admits the request; Bypass enforces nothing.
-   - Where the Access evaluation alone yields `public` (no app, a Bypass, a public override), the row is `access` with confidence at most 1, and `reason_id` is set to the tunnel hostname, because the audience tags that cloudflared checks are not collected.
-   - Exception: a `public` decision from a Service Auth policy that includes `0.0.0.0/0` or `::/0` stays `public`. Service Auth issues the Access token, so cloudflared accepts these requests.
+4. **Origin-enforced Access.** A `tunnel_hostname` with `access_required: true` is never `public` just because Access lets a request through without a token. cloudflared rejects requests without a valid Access application token. Access issues one only after an Allow or Service Auth policy admits the request; Bypass and public overrides enforce nothing.
+   - Where the Access evaluation alone yields `public` (no app, a Bypass, a public override), the deciding app's policies that may give a token without a login decide, whichever policy the Access evaluation names (review R4-01):
+     - If any Service Auth policy of that app includes `0.0.0.0/0` or `::/0`, the row stays `public`, with that policy as `reason_id`. This also holds on a path that a public override exempts from Access, because a token of the app is valid there too.
+     - Otherwise, a Service Auth policy that is `unknown`, an `ALLOWS` edge to a missing policy, or a policy with an unsupported action makes the row `unknown`.
+     - Otherwise the row is `access` with confidence at most 1, and `reason_id` is the tunnel hostname, because the audience tags that cloudflared checks are not collected.
+   - Where apps tie on a destination, or host and path precedence select different apps that agree, the app whose token exposes most decides: one with a Service Auth policy for every address first, then one with an undecided policy.
    - `access`, `service_auth` and `unknown` rows stay as they are, and missing `access` coverage still makes the entry point `unknown`.
+   - The evaluator does not model require and exclude rules or the exact order of Bypass and Service Auth policies, so it errs toward `public` ([decision 0003](../decisions/0003-bypass-and-service-auth-exposure.md)).
 5. **No matching app** → `public`. This also holds for a wildcard entry point (for example `*.<project>.pages.dev` or a `*.zone` route), with confidence 2: the decision does not depend on which hosts exist under the wildcard.
 6. **Unsupported input** → `unknown`.
    - That covers a target of kind `other`, a target without the shape above (for example without `overrides`), a hostname target whose host has a port or a wildcard other than a leading `*.`, a wildcard the evaluator cannot place, and missing coverage for `access` while the entry point exists.
@@ -408,6 +420,10 @@ What the scan records, and what rules and the evaluator may rely on:
 - **Sweep** runs only for `complete` classes. A sweep never moves the current scan. The write path refuses the sweep of a scan that is not current.
 - **Only the current scan writes.** Writes from a scan marked failed as stale, from one that ended, or from one a newer scan took over are refused (`StaleScanError`). That scan stops and ends `failed`, with the reason in `summary.detail`.
 - **Exposure:** the exposure step records coverage `exposure` as `complete` or `error`. A rule that reads `exposure` must also list `access` in `requires`, because exposure without Access data is not a decision.
+- **Inputs a rule reads** (reviews R4-04, R4-05). The rule compiler derives them from the tables the rule's program reads (`EXPLAIN`, root pages mapped through `sqlite_schema`):
+  - reading `exposure` needs `exposure` and `access` in `requires`, `vulns` needs `vulns`, and `insights` needs `insights`; a rule that lacks one fails the build;
+  - a rule's statement may not write: `OpenWrite`, `Clear`, schema or virtual table changes and write transactions are refused.
+- **A removed account is not scanned** (R4-03). A scan whose begin step runs after `Admin.removeAccount` is `skipped` and writes nothing. The emptied graph refuses to begin a scan until the account is added again.
 - **Rules** run after the exposure step, each in its own call. A rule whose `requires` are not all `complete` is `not_evaluated` and changes no finding.
 - **Undecided.** Where the exposure that decides a rule is `unknown`, or a value it needs could not be read (for example `plain_text_vars` entries with `looks_secret` `null` in CF-024), the rule returns an undecided row (`decided = 0`). An undecided row is not a hit and changes no finding, except that a suppression past its end returns to open (R3-07).
 - **`rule_runs`** records hits (decided rows), undecided rows, and for a failed run its error message (at most 500 characters).
