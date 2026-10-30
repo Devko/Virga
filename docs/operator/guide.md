@@ -39,7 +39,7 @@ Every read from a scanned account goes through the broker, which allows only rea
 
 **A workstation or CI runner** with:
 
-- Node.js 22.18 or later. The scripts run as TypeScript without a build step, and Node 22 strips types by default from 22.18.
+- Node.js 22.18 or later. The scripts run as TypeScript without a build step, and Node 22 strips types by default from 22.18. CI and the [deploy workflow](#deploy-from-ci) run the exact version in `.nvmrc` (22.23.3), which, like every dependency, was released at least 14 days before it was pinned; run the same version on a workstation.
 - pnpm through corepack, and a checkout of this repository.
 - Linux or macOS. The deploy script runs each app's own Wrangler, the package in `apps/<app>/node_modules/wrangler`, with the Node that runs the script.
 - Network access to `registry.npmjs.org` for the release-age check.
@@ -50,7 +50,7 @@ corepack enable
 pnpm install --frozen-lockfile
 ```
 
-The first command is the release-age check ([CONTRIBUTING.md](../../CONTRIBUTING.md)): every version in `pnpm-lock.yaml` and the pnpm version that `package.json` pins must have been published at least 14 days ago, with the integrity the registry publishes. It runs on Node alone and imports nothing from `node_modules`. Run it before anything installs or starts the checkout's pnpm, and not as `pnpm check:release-age`: that runs the pnpm the commit pins before the check has dated it. `--frozen-lockfile` installs exactly what the check dated, or nothing.
+The first command is the release-age check ([CONTRIBUTING.md](../../CONTRIBUTING.md)): every version in `pnpm-lock.yaml` and the pnpm version that `package.json` pins must have been published at least 14 days ago, with the integrity the registry publishes. It runs on Node alone and imports nothing from `node_modules`. Run it before anything installs or starts the checkout's pnpm, and not as `pnpm check:release-age`: that runs the pnpm the commit pins before the check has dated it. `--frozen-lockfile` installs exactly what the check dated, or nothing. It also refuses settings in the root `.npmrc` other than `save-exact=true` and `engine-strict=true`, any `.npmrc` below the root, and any `pnpm` field or `resolutions` in `package.json` ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
 
 ## The deploy token
 
@@ -256,7 +256,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
 
-- **`release-age` first.** `pnpm/action-setup` installs the pnpm that `package.json` names, and `pnpm install` installs the packages that the builds and Wrangler run beside the token. Both jobs check out the commit the workflow runs for, so the deploy job installs only what the check dated. Keep `needs: release-age` on every job that installs or deploys; `scripts/test/guide.test.ts` checks this example for it.
+- **`release-age` first.** `pnpm/action-setup` installs the pnpm that `package.json` names, and `pnpm install` installs the packages that the builds and Wrangler run beside the token. Both jobs check out the commit the workflow runs for, so the deploy job installs only what the check dated. Keep `needs: release-age` on every job that installs or deploys. Never set `continue-on-error` in the `release-age` job or its steps, and never give a job that needs it an `if:` with `always()`, `failure()` or `cancelled()`: GitHub would then run the job although the check failed (H-1). `scripts/test/guide.test.ts` checks this example for both.
 - **No cache.** Neither job sets `cache:` on `setup-node` or restores a pnpm store.
 - **The generated rules.** The deploy itself compiles `rules/` and refuses `packages/rules/src/*.gen.ts` that are not the compiler's output (step 6), so the workflow needs no `pnpm rules:check`.
 - **Deploy branch.** Restrict the environment to the branch you deploy, and protect that branch so that only reviewed commits that passed CI reach it.
@@ -314,6 +314,8 @@ The onboarding write check ([`apps/broker/src/write-check.ts`](../../apps/broker
 - it can read its own policies, which needs **Account API Tokens Read**.
 
 For the inventory profile, groups that read code or data (Workers Scripts Read, D1 Read, Workers KV Storage Read, Workers R2 Storage Read, Pages Read and every `Content Read` group) are accepted with a warning.
+
+The broker runs the same check again before it uses a token whose last passed check is 24 hours old, so a token changed after onboarding (a write group, a longer TTL, another account's resources) is caught at the next scan. A token that fails is deleted: the scan records `no_permission` for every class, and the broker logs `token failed its recheck and was deleted` with the account ID and the reason codes. Create a new read-only token and onboard the account again. If the check gets no answer from Cloudflare (an outage, a rate limit), the token is kept, the scan's calls fail and its classes end `error`, and the next scan tries again ([broker README](../../apps/broker/README.md#recheck-before-use-tm-04)).
 
 ### Create the token
 
@@ -407,7 +409,7 @@ Every API call Virga makes in a scanned account appears in its Audit Logs v2, wh
 - **Action type** `view`. Virga creates no `create`, `update` or `delete` entries. If you ever see one from Virga's token, revoke the token at once and report it: it would mean the token could write and the broker's allowlist was bypassed.
 - **Actor** type `account` (an account API token), with the token's ID and name.
 - **Request:** method `GET` and the path, for example `/accounts/<id>/workers/workers` or `/zones/<zone_id>/dns_records`.
-- **Onboarding** adds two entries: the token verifying itself and reading its own details.
+- **Onboarding** adds two entries: the token verifying itself and reading its own details. The same two appear again at most once a day, when the broker rechecks the token before a scan uses it.
 - **Volume:** one entry per call: a listing per product plus a few calls per zone, Worker, Access app, tunnel and R2 bucket, on every scan (daily by default, D-09).
 - **GraphQL:** the traffic query is a `POST` to `/graphql`. Whether it is logged as a `view` action is not documented: **verify (S-06)**.
 
@@ -502,7 +504,8 @@ What stays behind:
 | `apps/<app>/.corepack.env: corepack would load it …` | Remove the file. Corepack loads it into the environment of pnpm commands in that directory, where it can allow a pnpm from any URL or another registry. Settings for corepack belong in your own environment. Before the builds, the file is in your checkout; after them, a build created it |
 | `apps/<app>/package.json names packageManager; corepack would run pnpm commands in apps/<app> with that package manager …` (or `devEngines.packageManager`) | Remove the field. Only the root `package.json` names the package manager, and the release-age check dates only that pin. Before the builds, the field is in your checkout; after them, a build added it |
 | `apps/<app>/package.json cannot be read: …` | The file is not JSON. Restore it from git |
-| `apps/<app>/.npmrc: pnpm reads it for every command run in apps/<app> …` | Remove the file; put pnpm settings in the root `.npmrc`. With `use-node-version` and `node-mirror:release`, pnpm would download a Node from that mirror and run the build with it. Before the builds, the file is in your checkout; after them, a build created it |
+| `apps/<app>/.npmrc: pnpm reads it for every command run in apps/<app> …` | Remove the file. pnpm settings belong in the root `.npmrc`, where the release-age check allows only `save-exact=true` and `engine-strict=true`. With `use-node-version` and `node-mirror:release`, pnpm would download a Node from that mirror and run the build with it. Before the builds, the file is in your checkout; after them, a build created it |
+| `error: .npmrc line <n>: …` or `error: apps/<app>/.npmrc: only the root may hold .npmrc …` from `node scripts/check-release-age.ts` | The root `.npmrc` holds a setting other than `save-exact=true` and `engine-strict=true`, or a directory below the root holds an `.npmrc`, where `lockfile-dir` would install from a lockfile the check never dated and `use-node-version` with `node-mirror` would download and run a Node.js runtime (R9-01, R9-02). Remove it unless you added it yourself; to add a setting, extend the check first |
 | `packages/rules/src/rules.gen.ts is not what the rule compiler makes of rules/ …` (or `fixtures.gen.ts`) | Run `pnpm rules:build` and review the diff in `packages/rules/src/*.gen.ts` before you commit it: a change there that no change in `rules/` explains, such as a statement after a rule's SQL, was made by hand or by a tool. If `git status` shows a change there that you did not make, a build or another process wrote it: treat the checkout as compromised |
 | `the rules in rules/ fail the rule compiler …` | A rule or fixture fails. `pnpm rules:check` shows the same errors; fix the rule or fixture, run `pnpm rules:build` and commit both |
 | `…/packages/rules/src/rules.gen.ts changed after the deploy checked it; refusing to run Wrangler` (or `fixtures.gen.ts`) | A generated rule module changed between the check in step 6 and a Wrangler call, for example from a process a build left running. Find what changed it, then run the deploy again |
@@ -552,4 +555,5 @@ What stays behind:
 | `tunnels` is `partial` with every chunk done and the detail `truncated (…)` | A remotely managed tunnel's ingress yields more than 1,000 entry points, or more than 1 MiB of their props: rules without a hostname are expanded per hostname ([decision 0005](../decisions/0005-truncated-collection-coverage.md)). CF-004, CF-010 and CF-011 stay `not evaluated`, and the tunnels' earlier entry points and findings are kept, until the ingress fits. Reduce the rules without a hostname, or split the tunnel |
 | Scans pause and continue later | The rate budget: 1,200 REST requests per 5 minutes per token, shared with everything else that uses the same token. The broker keeps a margin and waits instead of risking the 5-minute block |
 | A scan stays `running` | A scan running longer than 12 hours counts as hung and is replaced by the next one (decision 0002) |
+| Every class is `no_permission` from one scan on, and the broker logs `token failed its recheck and was deleted` | The token was changed after onboarding and failed the recheck; the log lists the reason codes (for example `not_read_only`, `expiry_too_far`). Create a read-only token and onboard again |
 | Nothing is scanned | The account is `paused`, or the token was removed. Check the index row and onboard again |

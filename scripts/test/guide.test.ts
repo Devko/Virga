@@ -69,6 +69,35 @@ const ungated = (workflow: string) =>
     .filter(([, job]) => !needs(job).includes("release-age"))
     .map(([name]) => name);
 
+/**
+ * Ways a workflow runs a gated job although the check failed (H-1):
+ * continue-on-error in the release-age job or its steps, and a job-level
+ * `if:` of a job that installs or deploys with a status function, which
+ * GitHub evaluates without case.
+ */
+function bypasses(workflow: string): string[] {
+  const found: string[] = [];
+  for (const [name, job] of jobs(workflow)) {
+    if (name === "release-age") {
+      if (/\bcontinue-on-error\s*:/.test(job)) found.push(`${name}: continue-on-error`);
+      continue;
+    }
+    if (!INSTALLS.test(job) && !DEPLOYS.test(job)) continue;
+    // The job-level if, with the lines of a block scalar after it.
+    const lines = job.split("\n");
+    const at = lines.findIndex((line) => /^ {4}if:/.test(line));
+    if (at === -1) continue;
+    const condition = [lines[at] ?? ""];
+    for (const line of lines.slice(at + 1)) {
+      if (!/^ {5,}\S/.test(line)) break;
+      condition.push(line);
+    }
+    if (/\b(?:always|failure|cancelled)\s*\(/i.test(condition.join("\n")))
+      found.push(`${name}: if`);
+  }
+  return found;
+}
+
 describe('operator guide, "Deploy from CI"', () => {
   const workflow = blocks(section("### Deploy from CI"), "yaml")[0] ?? "";
 
@@ -116,6 +145,52 @@ describe('operator guide, "Deploy from CI"', () => {
       "",
     ].join("\n");
     expect(ungated(`\n${synthetic}`)).toEqual(["deploy-only", "cached"]);
+  });
+
+  it("H-1: neither lets the check fail nor runs the deploy job when it failed", () => {
+    expect(bypasses(workflow)).toEqual([]);
+    const deploy = jobs(workflow).get("deploy") ?? "";
+    expect(deploy).not.toMatch(/^ {4}if:/m);
+    expect(jobs(workflow).get("release-age")).not.toMatch(/continue-on-error/);
+  });
+
+  it("H-1: finds continue-on-error in the check and a status function in a gated job's if", () => {
+    const withCheck = (job: string) =>
+      workflow.replace("      - run: node scripts/check-release-age.ts\n", job);
+    expect(
+      bypasses(
+        withCheck(
+          "      - run: node scripts/check-release-age.ts\n        continue-on-error: true\n",
+        ),
+      ),
+    ).toEqual(["release-age: continue-on-error"]);
+    expect(
+      bypasses(
+        workflow.replace("  release-age:\n", "  release-age:\n    continue-on-error: true\n"),
+      ),
+    ).toEqual(["release-age: continue-on-error"]);
+    /** A GitHub expression, `${{ body }}`. */
+    const expression = (body: string) => `$\{{ ${body} }}`;
+    for (const condition of [
+      "always()",
+      expression("always()"),
+      expression("ALWAYS() && true"),
+      "Failure()",
+      expression("cancelled ()"),
+      "|\n      success() ||\n      failure()",
+    ]) {
+      const changed = workflow.replace(
+        "    needs: release-age\n",
+        `    needs: release-age\n    if: ${condition}\n`,
+      );
+      expect(bypasses(changed), condition).toEqual(["deploy: if"]);
+    }
+    // success() and other conditions run the job only when the check passed.
+    const passing = workflow.replace(
+      "    needs: release-age\n",
+      `    needs: release-age\n    if: ${expression("success() && github.ref == 'refs/heads/main'")}\n`,
+    );
+    expect(bypasses(passing)).toEqual([]);
   });
 
   it("R8-04: the deploy job restores no package cache", () => {
