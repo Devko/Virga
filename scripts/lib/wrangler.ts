@@ -264,5 +264,5 @@ export function wranglerChanges(
 export function describeChanges(appDir: string, changes: readonly string[]): string | null {
   if (changes.length === 0) return null;
   const more = changes.length > SHOWN ? ` and ${changes.length - SHOWN} more` : "";
-  return `the Wrangler of ${appDir} changed after the deploy recorded it before the builds: ${changes.slice(0, SHOWN).join(", ")}${more}. Something wrote to the files Wrangler runs, which the deploy refuses to run with or without the token. Reinstall with pnpm install --frozen-lockfile and find what changed them, starting with the build scripts`;
+  return `the Wrangler of ${appDir} changed after the deploy recorded it before the builds: ${changes.slice(0, SHOWN).join(", ")}${more}. The deploy does not run a Wrangler it has not recorded. Unless you changed these yourself, find what wrote them, starting with the build scripts, and deploy from a fresh clone (operator guide, Troubleshooting)`;
 }
