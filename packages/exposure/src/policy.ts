@@ -5,6 +5,11 @@ export interface Verdict {
   decision: ExposureDecision;
   reasonId: string | null;
   reason: string;
+  /**
+   * Access admits these requests with an application token, as Service Auth
+   * does without a login, so an origin that checks the token lets them in too.
+   */
+  token?: boolean;
 }
 
 const MAX_GROUP_DEPTH = 8;
@@ -152,7 +157,8 @@ function bypassVerdict(id: string, policy: GraphNode, graph: GraphInput): Ranked
 function serviceAuthVerdict(id: string, policy: GraphNode, graph: GraphInput): Ranked | null {
   const include = readInclude(policy.props.include, graph);
   if (include.anyAddress) {
-    return ranked(PUBLIC, "public", id, "Service Auth policy includes every IP address");
+    const open = ranked(PUBLIC, "public", id, "Service Auth policy includes every IP address");
+    return { ...open, verdict: { ...open.verdict, token: true } };
   }
   if (include.unresolved) {
     return undecided(id, "Service Auth policy refers to an unknown Access group");

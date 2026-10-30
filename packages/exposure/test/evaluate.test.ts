@@ -507,6 +507,24 @@ const cases: Case[] = [
     ],
   },
   {
+    name: "Service Auth for every address issues the Access token a tunnel requires, so it stays public",
+    build: (g) => {
+      const required = { accessRequired: true };
+      g.tunnelHostname("any.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("office.example.com", "", "http://localhost:8080", required);
+      g.tunnelHostname("both.example.com", "", "http://localhost:8080", required);
+      g.app("any", [host("any.example.com")], [g.policy("any", "non_identity", [ANY_V4])]);
+      g.app("office", [host("office.example.com")], [g.policy("office", "bypass", [OFFICE])]);
+      bypassApp(g, "both-1", [host("both.example.com")]);
+      g.app("both-2", [host("both.example.com")], [g.policy("both", "non_identity", [ANY_V6])]);
+    },
+    expect: [
+      [TH("any.example.com"), "/", "public", 2, POLICY("any")],
+      [TH("both.example.com"), "/", "public", 2, POLICY("both")],
+      [TH("office.example.com"), "/", "access", 1, TH("office.example.com")],
+    ],
+  },
+  {
     name: "a tunnel hostname that requires an Access token stays unknown where Access is undecided",
     build: (g) => {
       g.tunnelHostname("ssh.example.com", "", "ssh://localhost:22", { accessRequired: true });

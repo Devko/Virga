@@ -319,6 +319,13 @@ function overrideVerdict(app: App, overrides: Override[], label: PathSet): Verdi
   };
 }
 
+/**
+ * The verdict that speaks for candidates whose decisions agree. One that
+ * comes with an Access token does, so an origin check cannot hide it.
+ */
+const agreed = (verdicts: Verdict[]): Verdict | undefined =>
+  verdicts.find((v) => v.token) ?? verdicts[0];
+
 function ranked<T>(items: T[], primary: (t: T) => number, secondary: (t: T) => number): T[] {
   const sorted = [...items].sort((a, b) => primary(b) - primary(a) || secondary(b) - secondary(a));
   const first = sorted[0];
@@ -351,7 +358,7 @@ function decideHostname(
   const verdicts = [...hostFirst, ...pathFirst].map((c) =>
     overrideVerdict(c.app, c.target.overrides, label),
   );
-  const [winner] = verdicts;
+  const winner = agreed(verdicts);
   const top = hostFirst[0];
   if (!winner || !top) return null;
   if (verdicts.some((v) => v.decision !== winner.decision)) {
@@ -393,7 +400,7 @@ function decideWorker(
     const first = group[0];
     if (!first) continue;
     const verdicts = group.map((c) => overrideVerdict(c.app, c.target.overrides, label));
-    const [winner] = verdicts;
+    const winner = agreed(verdicts);
     if (!winner) continue;
     if (verdicts.some((v) => v.decision !== winner.decision)) {
       return unknown(first.app.node.id, "Worker-level Access applications disagree");
@@ -413,15 +420,16 @@ function decideWorker(
  * cloudflared validates the Access token of every request to a tunnel
  * hostname with `access_required` and rejects requests without one. Access
  * issues that token only when an Allow or Service Auth policy admits the
- * request; Bypass enforces nothing. Such a hostname is therefore never
- * `public`: where Access alone would leave it public, it is `access`, decided
- * by the tunnel hostname. The audience tags cloudflared checks are not
- * collected, so the decision has at most medium confidence. `access`,
- * `service_auth` and `unknown` stay as they are.
+ * request; Bypass enforces nothing. Where Access alone would leave such a
+ * hostname public without a token, it is `access`, decided by the tunnel
+ * hostname. The audience tags cloudflared checks are not collected, so the
+ * decision has at most medium confidence. A Service Auth policy that admits
+ * everyone issues the token, so that stays `public`; `access`, `service_auth`
+ * and `unknown` stay as they are.
  * developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
  */
 function withOriginAccess(result: Result, entryId: string): Result {
-  if (result.decision !== "public") return result;
+  if (result.decision !== "public" || result.token) return result;
   return {
     decision: "access",
     confidence: Math.min(result.confidence, 1) as Confidence,
