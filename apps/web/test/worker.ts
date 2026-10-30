@@ -17,6 +17,8 @@ import {
   findings,
   hugeNeighborhood,
   neighborhood,
+  REMOVING_ACCOUNT,
+  removingSummary,
   summary,
   TOKEN_REMOVAL_FAILS,
 } from "./fixtures.ts";
@@ -41,6 +43,7 @@ export class StubGraphReader extends WorkerEntrypoint<Env> implements GraphReade
 
   async getScanSummary(accountId: string) {
     record("getScanSummary", [accountId]);
+    if (accountId === REMOVING_ACCOUNT) return removingSummary;
     return known(accountId) ? summary : null;
   }
 
@@ -84,6 +87,9 @@ export class StubAdmin extends WorkerEntrypoint<Env> implements AdminRpc {
 
   async triggerScan(accountId: string) {
     record("triggerScan", [accountId]);
+    if (accountId === REMOVING_ACCOUNT) {
+      return { started: false as const, reason: "removing" as const, id: null };
+    }
     if (!known(accountId))
       return { started: false as const, reason: "unknown_account" as const, id: null };
     return { started: true as const, id: `scan-${accountId}-202610290715-manual` };
@@ -92,7 +98,7 @@ export class StubAdmin extends WorkerEntrypoint<Env> implements AdminRpc {
   async removeAccount(accountId: string) {
     record("removeAccount", [accountId]);
     if (accountId === ACCOUNT_REMOVAL_FAILS) throw new Error("index unavailable");
-    return { removed: known(accountId) };
+    return { removed: known(accountId) || accountId === REMOVING_ACCOUNT };
   }
 }
 

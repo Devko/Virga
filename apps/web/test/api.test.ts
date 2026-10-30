@@ -6,6 +6,8 @@ import {
   detail,
   MARKUP,
   neighborhood,
+  REMOVING_ACCOUNT,
+  removingSummary,
   summary,
   UNKNOWN_ACCOUNT,
 } from "./fixtures.ts";
@@ -47,6 +49,14 @@ describe("read API", () => {
     expect(await unknown.json()).toEqual({ error: "not_found" });
     expect((await get("/api/accounts/not-an-account-id")).status).toBe(404);
     expect(calls.map((c) => c.method)).toEqual(["getScanSummary", "getScanSummary"]);
+  });
+
+  it("passes the status `removing` through in the list and the summary (R5-08)", async () => {
+    const list = (await (await get("/api/accounts")).json()) as typeof accounts;
+    expect(list.find((a) => a.id === REMOVING_ACCOUNT)?.status).toBe("removing");
+    const response = await get(`/api/accounts/${REMOVING_ACCOUNT}`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(removingSummary);
   });
 
   it("passes finding filters and the cursor through, and validates them", async () => {
@@ -130,6 +140,16 @@ describe("admin API", () => {
     });
     const unknown = await call(`/api/accounts/${UNKNOWN_ACCOUNT}/scan`, { token: admin, body: {} });
     expect(unknown.status).toBe(404);
+  });
+
+  it("answers 409 with reason `removing` for an account being removed (R5-08)", async () => {
+    const response = await call(`/api/accounts/${REMOVING_ACCOUNT}/scan`, {
+      token: admin,
+      body: {},
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ started: false, reason: "removing", id: null });
+    expect(calls).toEqual([{ method: "triggerScan", args: [REMOVING_ACCOUNT] }]);
   });
 
   it("refuses a non-admin", async () => {
