@@ -21,11 +21,12 @@ The goal is the `vulns` input of CF-001 (and later CF-005): which package nodes 
 
 The reader follows [OSV schema 1.9.2](https://ossf.github.io/osv-schema/) (`OSV_SCHEMA_VERSION`). A record that declares a `schema_version` other than `1.x.y` is rejected.
 
-Advisory data is untrusted. `readOsvRecord` reads only what matching needs and checks it strictly; a record that breaks the schema or a limit is rejected as a whole, with a reason, and never used in part. Reasons hold a path and fixed words (`affected[2].ranges[0].events: no introduced event`), never text from the record. `summary`, `details`, `references` and `credits` are not read.
+Advisory data is untrusted. `readOsvRecord` reads only what matching needs and checks it strictly; a record that breaks the schema or a limit is rejected as a whole, with a reason, and never used in part. Reasons hold a path or an offset and fixed words (`affected[2].ranges[0].events: no introduced event`, `duplicate key at offset 812`), never text from the record. `summary`, `details`, `references` and `credits` are not read.
 
 | Field | Rule |
 | --- | --- |
 | Record | At most 4 MiB of UTF-8, checked before parsing; a JSON object |
+| Keys | No key twice in one object, at any depth, read or not; keys compare as JSON decodes them (R9 hardening). `JSON.parse` keeps the last value, so a second, empty `affected` would read as a record without npm entries, and its rows would become `fixed`. The rejection keeps the ID unless `id` is the repeated key |
 | `id` | Required; `^[a-zA-Z0-9:_.-]+$`, at most 128 characters. Without a readable ID the rejection has `id: null` |
 | `modified` | Required string, at most 64 characters |
 | `withdrawn` | Optional string. A valid withdrawn record matches nothing |
@@ -77,7 +78,7 @@ An unknown rank is never written as 0: CF-001 would read 0 as harmless. The matc
 
 ## KEV
 
-`readKevCatalog` reads the [CISA catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) strictly: at most 32 MiB and 100,000 entries; `catalogVersion` and `dateReleased` (strings, at most 64 characters) for provenance; `count`, which must equal the number of entries, so a cut file is caught; and every `cveID`, which must match the schema's `^CVE-[0-9]{4}-[0-9]{4,19}$`. Other fields are not read. Any violation rejects the catalog.
+`readKevCatalog` reads the [CISA catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) strictly: at most 32 MiB and 100,000 entries; `catalogVersion` and `dateReleased` (strings, at most 64 characters) for provenance; `count`, which must equal the number of entries, so a cut file is caught; and every `cveID`, which must match the schema's `^CVE-[0-9]{4}-[0-9]{4,19}$`. Other fields are not read. A key twice in one object rejects the catalog as it rejects an OSV record: a second `count` and `vulnerabilities` would otherwise replace the first. Any violation rejects the catalog.
 
 A match has `kev = 1` when the advisory ID or any alias is in the catalog. Without a catalog (`kev: null`), new rows get `kev = 0`, existing rows keep their flag, and the result is not complete.
 

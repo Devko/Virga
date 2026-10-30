@@ -213,6 +213,24 @@ describe("rematch", () => {
     expect(result.detail).toBe("rejected advisories: 1");
   });
 
+  it("R9 hardening, duplicate keys: keeps the rows of a record with a second, empty affected", () => {
+    const own = fixture("osv/GHSA-vrga-0001-test1.json");
+    const doubled = own.replace(/\}\s*$/, ', "affected": []}');
+    const others = osvFixtures().filter((text) => text !== own);
+    const withDoubled = readOsvFeed([...others, doubled]);
+    expect(withDoubled.rejected).toEqual([
+      {
+        id: "GHSA-vrga-0001-test1",
+        reason: expect.stringMatching(/^duplicate key at offset \d+$/),
+      },
+    ]);
+    const gone = row(A, "GHSA-vrga-gone-0000");
+    const result = run([A], [ROW_A, gone], { feed: withDoubled });
+    expect(result.rows).toEqual([{ ...gone, status: "fixed" }]);
+    expect(result.complete).toBe(false);
+    expect(result.detail).toBe("rejected advisories: 1");
+  });
+
   it("after a rejection without ID, fixes only rows whose advisory it read", () => {
     const withUnknown = readOsvFeed([...osvFixtures(), "not json"]);
     const existing = [

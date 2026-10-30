@@ -170,11 +170,17 @@ function readNpmEntry(entry: JsonObject, path: string, topSeverity: boolean): Np
  * are read, and those are checked against the schema and the limits; any
  * violation rejects the whole record with a reason. Entries of ecosystems
  * other than `npm` are counted, and only their `package.ecosystem` is
- * checked. Reasons hold paths and fixed words, never text from the record.
+ * checked. A key that occurs twice in one object, anywhere in the record,
+ * rejects it; the rejection keeps the ID unless the `id` key is the one
+ * repeated. Reasons hold paths, offsets and fixed words, never text from
+ * the record.
  */
 export function readOsvRecord(text: string): OsvRecordResult {
   const parsed = parseObject(text, L.recordBytes);
-  if (!parsed.ok) return { status: "rejected", id: null, reason: parsed.reason };
+  if (!parsed.ok) {
+    const id = parsed.unique === undefined ? undefined : own(parsed.unique, "id");
+    return { status: "rejected", id: isId(id) ? id : null, reason: parsed.reason };
+  }
   const record = parsed.value;
   const id = own(record, "id");
   if (id === undefined || id === null) {
