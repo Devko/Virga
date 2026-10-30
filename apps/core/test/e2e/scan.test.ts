@@ -34,8 +34,10 @@ import {
 // A full scan of a fake account: the real collectors over fixtureTransport,
 // the real scan orchestration (runScan), and an AccountGraph Durable Object
 // running the real exposure evaluator and findings lifecycle over all rules.
-// Three scans: the seeded account, the same account unchanged, and the
-// account with r2.dev turned off on one bucket.
+// Five scans: the seeded account, the same account unchanged, the account
+// whose r2.dev flag cannot be read on one bucket, the account with r2.dev
+// turned off on that bucket, and the account with one tunnel's ingress grown
+// past 1,000 entry points.
 //
 // A case marked `mismatch` in account.ts fails because two packages disagree
 // on the graph contract; it runs as `it.fails` until the mismatch is fixed.
@@ -89,6 +91,7 @@ let stub: GraphStub;
 let state: AccountState;
 let first: Snapshot;
 let second: Snapshot;
+let unreadable: Snapshot;
 let third: Snapshot;
 let fourth: Snapshot;
 
@@ -176,6 +179,8 @@ beforeAll(async () => {
 
   first = await scan("seeded", NOW);
   second = await scan("unchanged", NOW + DAY);
+  state.publicAssetsR2Dev = null;
+  unreadable = await scan("r2-dev-unreadable", NOW + DAY + DAY / 2);
   state.publicAssetsR2Dev = false;
   third = await scan("r2-dev-off", NOW + 2 * DAY);
   state.edgeIngressFlood = true;
@@ -192,7 +197,7 @@ describe("every scan", () => {
   });
 
   it("only reads, and only paths that the fake account serves", () => {
-    for (const s of [first, second, third, fourth]) {
+    for (const s of [first, second, unreadable, third, fourth]) {
       expect(s.calls.length, s.scanId).toBeGreaterThan(0);
       for (const call of s.calls) expect(call).toMatch(/^(GET \/|POST \/graphql$)/);
       expect(s.calls).toContain("POST /graphql");
@@ -219,7 +224,7 @@ describe("every scan", () => {
       );
       stored.push(...rows.map((r) => r.text ?? ""));
     }
-    const steps = [first, second, third, fourth].map((s) => s.stepResults).join("\n");
+    const steps = [first, second, unreadable, third, fourth].map((s) => s.stepResults).join("\n");
     for (const secret of SECRET_VALUES) {
       expect(stored.filter((text) => text.includes(secret))).toEqual([]);
       expect(steps.includes(secret)).toBe(false);
@@ -446,6 +451,36 @@ describe("second scan of the unchanged account", () => {
     expect(second.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
     expect(second.findings).toEqual(first.findings);
     expect(second.ruleRuns).toEqual(first.ruleRuns);
+  });
+});
+
+describe("scan after the r2.dev flag of public-assets can no longer be read", () => {
+  const fingerprint = "CF-021:r2_bucket:public-assets";
+  const entry = `r2_public_domain:${R2_DEV_HOST}`;
+
+  it("R4-02: keeps the r2.dev entry point and decides it unknown", () => {
+    expect(unreadable.summary.classes.storage).toMatchObject({ status: "complete", changed: 1 });
+    expect(unreadable.exposure.filter((r) => r.entry_id === entry)).toEqual([
+      {
+        entry_id: entry,
+        path_prefix: "/",
+        decision: "unknown",
+        confidence: 0,
+        reason_id: null,
+        reason: expect.any(String),
+      },
+    ]);
+  });
+
+  it("R4-02: leaves the open CF-021 finding open as undecided", () => {
+    expect(unreadable.ruleRuns.find((r) => r.rule_id === "CF-021")).toMatchObject({
+      status: "evaluated",
+      hits: 0,
+      undecided: 1,
+    });
+    expect(unreadable.summary.rules).toMatchObject({ opened: 0, resolved: 0 });
+    expect(byFingerprint(unreadable, fingerprint)).toMatchObject({ status: "open" });
+    expect(unreadable.findings).toEqual(second.findings);
   });
 });
 

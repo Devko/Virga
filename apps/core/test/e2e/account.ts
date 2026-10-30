@@ -131,8 +131,11 @@ export const LONG_PATH_SHA256 = "995d65c317155455d894ec05327bc8d4eb8e91efedf35a0
 
 /** What tests may change between scans. */
 export interface AccountState {
-  /** CF-021: the managed r2.dev domain of `public-assets` is enabled. */
-  publicAssetsR2Dev: boolean;
+  /**
+   * CF-021: the managed r2.dev domain of `public-assets` is enabled; null
+   * when the API leaves the flag out (R4-02).
+   */
+  publicAssetsR2Dev: boolean | null;
   /** R5-06: the edge tunnel's ingress has 1,000 more hostname rules. */
   edgeIngressFlood: boolean;
 }
@@ -822,7 +825,7 @@ export function fakeAccount(
     [`${base}/r2/buckets/public-assets/domains/managed`]: envelope({
       bucketId: R2_PUBLIC_ID,
       domain: R2_DEV_HOST,
-      enabled: state.publicAssetsR2Dev,
+      ...(state.publicAssetsR2Dev === null ? {} : { enabled: state.publicAssetsR2Dev }),
     }),
     [`${base}/r2/buckets/public-assets/domains/custom`]: envelope({ domains: [] }),
     [`${base}/r2/buckets/private-data/domains/managed`]: envelope({

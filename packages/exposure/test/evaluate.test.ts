@@ -143,6 +143,17 @@ const cases: Case[] = [
     expect: [["r2_public_domain:cdn.example.com", "/", "unknown", 0, null]],
   },
   {
+    name: "R4-02: an r2.dev domain whose enabled flag could not be read is unknown, not public or absent",
+    build: (g) => {
+      g.r2Domain("pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev", "b1", "r2_dev", null);
+      // Access never covers r2.dev, and an app for the host changes nothing.
+      allowApp(g, "r2", [host("pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev")]);
+    },
+    expect: [
+      ["r2_public_domain:pub-6f1c2a9b0d7e4f3a8b5c1d2e3f4a5b6c.r2.dev", "/", "unknown", 0, null],
+    ],
+  },
+  {
     name: "stale workers.dev and preview nodes of a script that turned them off are skipped",
     build: (g) => workerEntries(g, { workers_dev: false, preview_urls: false }),
     expect: [

@@ -224,12 +224,14 @@ async function collectBucketDomains(
   const bucketId = nodeId("r2_bucket", bucket);
   const managed = await unlessGone(ctx.api.get<CfManagedDomain>(`${base}/managed`));
   const managedHost = str(managed?.domain)?.toLowerCase();
-  // The r2.dev domain always exists; it is an entry point only while enabled.
-  if (managedHost && managed?.enabled === true) {
+  // The r2.dev domain always exists; it is an entry point unless disabled. A
+  // flag that is not a boolean is unknown, not off (review R4-02).
+  const managedEnabled = bool(managed?.enabled);
+  if (managedHost && managedEnabled !== false) {
     const id = g.node("r2_public_domain", managedHost, managedHost, {
       bucket,
       kind: "r2_dev",
-      enabled: true,
+      enabled: managedEnabled,
       zone_id: null,
     });
     g.edge("ROUTES_TO", id, bucketId);
