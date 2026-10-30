@@ -12,6 +12,7 @@
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
 // passes no credentials to Wrangler and changes nothing.
 // See docs/operator/guide.md.
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ConfigError, checkAppDir, readWorkerConfig, type WorkerConfig } from "./lib/config.ts";
@@ -23,6 +24,7 @@ import {
   droppedSettings,
   processRunner,
   proxyNotice,
+  RefusedError,
   redact,
   UNSAFE_VARS,
   unsafeVars,
@@ -43,6 +45,7 @@ import {
   withSecretsFile,
 } from "./lib/steps.ts";
 import { checkTopology, WORKERS } from "./lib/topology.ts";
+import { recordWranglers, WranglerError } from "./lib/wrangler.ts";
 
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 
@@ -106,21 +109,22 @@ async function main(): Promise<number> {
 
   secrets.push(token);
   const credentials = dryRun ? "none" : "token";
-  const ctx: Context = {
-    run: processRunner({ credentials, secrets: () => secrets }),
-    log: (line) => console.log(line),
-    todo: [],
-  };
-
-  for (const line of proxyNotice(process.env)) ctx.log(line);
+  for (const line of proxyNotice(process.env)) console.log(line);
   const dropped = droppedSettings(process.env, credentials);
   if (dropped.length > 0) {
-    ctx.log(
+    console.log(
       `Wrangler does not get ${dropped.join(", ")}: the deploy passes it only the variables in the operator guide`,
     );
   }
 
-  for (const { app } of WORKERS) checkAppDir(root, app);
+  const present = WORKERS.filter(({ app }) => checkAppDir(root, app) !== null);
+  const wranglers = recordWranglers(present.map(({ app }) => join(root, "apps", app)));
+  const ctx: Context = {
+    run: processRunner({ credentials, secrets: () => secrets, wranglers }),
+    log: (line) => console.log(line),
+    todo: [],
+  };
+
   const workers: WorkerConfig[] = [];
   for (const { app, optional } of WORKERS) {
     const config = readWorkerConfig(root, app);
@@ -177,7 +181,12 @@ async function main(): Promise<number> {
 try {
   process.exitCode = await main();
 } catch (error) {
-  if (error instanceof DeployError || error instanceof ConfigError) {
+  if (
+    error instanceof DeployError ||
+    error instanceof ConfigError ||
+    error instanceof RefusedError ||
+    error instanceof WranglerError
+  ) {
     console.error(`error: ${redact(error.message, secrets)}`);
   } else {
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);

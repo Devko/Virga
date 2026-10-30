@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { devNull } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { describeChanges, type WranglerInstall, wranglerChanges } from "./wrangler.ts";
 
 interface BaseCommand {
   /** The Worker's directory. */
@@ -20,6 +22,8 @@ export interface WranglerCommand extends BaseCommand {
    * directory above `cwd` before the app's own wrangler.jsonc (R3-03).
    */
   config: string;
+  /** sha256 of the bytes the script checked; Wrangler gets the file only while it holds them (R6-01). */
+  configSha256: string;
 }
 
 /** Runs a package script. */
@@ -36,6 +40,12 @@ export interface Result {
 }
 
 export type Runner = (command: Command) => Promise<Result>;
+
+/** A command the runner refuses to start, with the reason. */
+export class RefusedError extends Error {}
+
+export const sha256 = (data: string | Uint8Array) =>
+  createHash("sha256").update(data).digest("hex");
 
 /** Credentials Wrangler reads from the environment. A dry run passes none of them on. */
 export const CREDENTIAL_VARS = [
@@ -326,6 +336,8 @@ export interface RunnerOptions {
   credentials: "none" | "token";
   /** Values that must never be printed, such as the API token. */
   secrets: () => readonly string[];
+  /** The Wrangler of each app directory, recorded before the builds (R6-01). */
+  wranglers: ReadonlyMap<string, WranglerInstall>;
   print?: (stream: "stdout" | "stderr", line: string) => void;
 }
 
@@ -344,11 +356,45 @@ function childEnv(command: Command, credentials: RunnerOptions["credentials"]): 
 }
 
 /**
+ * Why Wrangler may not run `command` now, or null. It gets the config only
+ * while the file holds the bytes the script checked, and runs only while
+ * every file recorded before the builds is unchanged: a build, or a process
+ * a build left running, may have rewritten either (R6-01).
+ */
+function wranglerProblem(command: WranglerCommand, options: RunnerOptions): string | null {
+  const chooser = command.args.find((arg) => CHOOSERS.test(arg));
+  if (chooser !== undefined)
+    return `wrangler argument ${chooser} chooses the config or environment`;
+  if (!isAbsolute(command.config)) {
+    return `wrangler --config needs an absolute path, not ${command.config}`;
+  }
+  const install = options.wranglers.get(command.cwd);
+  if (install === undefined) {
+    return `${command.cwd}: no Wrangler was recorded for it before the builds; run pnpm install first`;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(command.config);
+  } catch (error) {
+    return `${command.config} cannot be read: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (sha256(bytes) !== command.configSha256) {
+    return `${command.config} changed after the deploy checked it; refusing to pass it to Wrangler. Find what changed it, then run the deploy again`;
+  }
+  const dotEnv = dotEnvFiles(command.cwd);
+  if (dotEnv.length > 0) return dotEnv.map(dotEnvProblem).join("\n");
+  return describeChanges(command.cwd, wranglerChanges(install));
+}
+
+/**
  * Runs commands with stdin closed, so Wrangler never prompts and never writes
  * resource IDs back into a config. Wrangler gets the checked config and loads
  * no .env file: --env-file names the null device in place of its defaults
  * (4.151.0 has no flag that turns loading off), and the runner refuses a
- * directory that holds one (R5-03). All output passes through `redact`.
+ * directory that holds one (R5-03). Wrangler is the bin file of the package
+ * recorded before the builds, run with this Node: never a node_modules/.bin
+ * shim, a shell script that any build can append to (R6-01). All output
+ * passes through `redact`.
  */
 export function processRunner(options: RunnerOptions): Runner {
   const print =
@@ -359,26 +405,14 @@ export function processRunner(options: RunnerOptions): Runner {
       let file = "pnpm";
       let args = command.args;
       if (command.bin === "wrangler") {
-        file = join(command.cwd, "node_modules", ".bin", "wrangler");
-        const chooser = command.args.find((arg) => CHOOSERS.test(arg));
-        if (chooser !== undefined) {
-          reject(new Error(`wrangler argument ${chooser} chooses the config or environment`));
+        const problem = wranglerProblem(command, options);
+        const bin = options.wranglers.get(command.cwd)?.bin;
+        if (problem !== null || bin === undefined) {
+          reject(new RefusedError(problem ?? `${command.cwd}: no Wrangler was recorded`));
           return;
         }
-        if (!isAbsolute(command.config)) {
-          reject(new Error(`wrangler --config needs an absolute path, not ${command.config}`));
-          return;
-        }
-        if (!existsSync(file)) {
-          reject(new Error(`${file} not found; run pnpm install first`));
-          return;
-        }
-        const dotEnv = dotEnvFiles(command.cwd);
-        if (dotEnv.length > 0) {
-          reject(new Error(dotEnv.map(dotEnvProblem).join("\n")));
-          return;
-        }
-        args = [...command.args, "--config", command.config, "--env-file", devNull];
+        file = process.execPath;
+        args = [bin, ...command.args, "--config", command.config, "--env-file", devNull];
       }
       const child = spawn(file, args, {
         cwd: command.cwd,

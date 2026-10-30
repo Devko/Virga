@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
-import { dotEnvFiles, dotEnvProblem } from "./run.ts";
+import { dotEnvFiles, dotEnvProblem, sha256 } from "./run.ts";
 
 export interface ServiceBinding {
   binding: string;
@@ -40,6 +40,8 @@ export interface WorkerConfig {
   app: string;
   dir: string;
   configPath: string;
+  /** sha256 of the config's bytes as the script read and checked them (R6-01). */
+  configSha256: string;
   /** Config path relative to the repository root, for messages. */
   displayPath: string;
   name: string;
@@ -188,7 +190,10 @@ export function checkAppDir(root: string, app: string): string | null {
   return configPath;
 }
 
-/** Reads apps/<app>/wrangler.jsonc. Returns null when the app or its config does not exist. */
+/**
+ * Reads apps/<app>/wrangler.jsonc, and records the sha256 of the bytes it
+ * checked. Returns null when the app or its config does not exist.
+ */
 export function readWorkerConfig(root: string, app: string): WorkerConfig | null {
   const dir = join(root, "apps", app);
   const configPath = findConfigFile(dir);
@@ -196,12 +201,17 @@ export function readWorkerConfig(root: string, app: string): WorkerConfig | null
   const where = relative(root, configPath);
   checkSurroundings(root, app, configPath);
   let raw: unknown;
+  let bytes: Buffer;
   try {
-    raw = parseJsonc(readFileSync(configPath, "utf8"));
+    bytes = readFileSync(configPath);
+    raw = parseJsonc(bytes.toString("utf8"));
   } catch (error) {
     throw new ConfigError(`${where}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const config = parseWorkerConfig(raw, { app, dir, configPath, where });
+  const config = {
+    ...parseWorkerConfig(raw, { app, dir, configPath, where }),
+    configSha256: sha256(bytes),
+  };
   const assets = assetsDirectoryProblem(config);
   if (assets !== null) throw new ConfigError(`${where}: ${assets}`);
   return config;
@@ -304,7 +314,10 @@ interface Source {
 }
 
 /** Validates the fields the checks rely on and collects every problem before failing. */
-export function parseWorkerConfig(raw: unknown, source: Source): WorkerConfig {
+export function parseWorkerConfig(
+  raw: unknown,
+  source: Source,
+): Omit<WorkerConfig, "configSha256"> {
   const problems: string[] = [];
   const fail = (message: string) => problems.push(message);
   if (!isRecord(raw)) throw new ConfigError(`${source.where}: the configuration is not an object`);

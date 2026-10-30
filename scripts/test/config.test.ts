@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -205,6 +206,14 @@ describe("readWorkerConfig", () => {
     app({});
     expect(assets("./dist/client")).toBeNull();
     expect(readWorkerConfig(REPO_ROOT, "web")?.assetsDirectory).toBe("./dist/client");
+  });
+
+  it("R6-01: records the sha256 of the bytes it checked", () => {
+    const text = `{ "name": "virga-web" } // ü\n`;
+    app({ "wrangler.jsonc": text });
+    expect(readWorkerConfig(root, "web")?.configSha256).toBe(
+      createHash("sha256").update(text, "utf8").digest("hex"),
+    );
   });
 });
 

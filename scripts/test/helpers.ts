@@ -1,3 +1,5 @@
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig } from "../lib/config.ts";
 
@@ -15,6 +17,7 @@ export function worker(app: string, overrides: Partial<WorkerConfig> = {}): Work
     app,
     dir: `/repo/apps/${app}`,
     configPath: `/repo/apps/${app}/wrangler.jsonc`,
+    configSha256: "0".repeat(64),
     displayPath: `apps/${app}/wrangler.jsonc`,
     name: NAMES[app] ?? app,
     main: "src/index.ts",
@@ -33,4 +36,87 @@ export function worker(app: string, overrides: Partial<WorkerConfig> = {}): Work
     requiredSecrets: [],
     ...overrides,
   };
+}
+
+export function put(path: string, text: string, mode = 0o644) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+  chmodSync(path, mode);
+}
+
+export interface FakeWrangler {
+  /** node_modules/.pnpm/wrangler@4.151.0/node_modules/wrangler */
+  wrangler: string;
+  /** Its bin file, bin/wrangler.js. */
+  bin: string;
+  /** A dependency, esbuild, linked next to the package as pnpm links it. */
+  esbuild: string;
+  /** esbuild's optional platform package. */
+  platform: string;
+  /** apps/<app>/node_modules/.bin/wrangler of each app, which prints `shim ran`. */
+  shims: string[];
+}
+
+/**
+ * A stand-in Wrangler installed the way pnpm installs it under `root`, linked
+ * from each of `appDirs`. `bin` is the source of its bin file. Its shims in
+ * node_modules/.bin print `shim ran`; the deploy never runs them.
+ */
+export function fakeWrangler(root: string, appDirs: readonly string[], bin: string): FakeWrangler {
+  const store = join(root, "node_modules", ".pnpm");
+  const wrangler = join(store, "wrangler@4.151.0", "node_modules", "wrangler");
+  const esbuild = join(store, "esbuild@0.28.2", "node_modules", "esbuild");
+  const platform = join(
+    store,
+    "@esbuild+linux-x64@0.28.2",
+    "node_modules",
+    "@esbuild",
+    "linux-x64",
+  );
+  put(
+    join(wrangler, "package.json"),
+    JSON.stringify({
+      name: "wrangler",
+      version: "4.151.0",
+      bin: { wrangler: "./bin/wrangler.js", wrangler2: "./bin/wrangler.js" },
+      main: "wrangler-dist/cli.js",
+      dependencies: { esbuild: "0.28.2" },
+      optionalDependencies: { fsevents: "2.3.3" },
+    }),
+  );
+  put(join(wrangler, "bin", "wrangler.js"), bin, 0o755);
+  put(join(wrangler, "wrangler-dist", "cli.js"), "module.exports = {};\n");
+  // pnpm's shims for the package's own dependencies: never loaded by Wrangler.
+  put(join(wrangler, "node_modules", ".bin", "esbuild"), "#!/bin/sh\n", 0o755);
+  symlinkSync(
+    join("..", "..", "esbuild@0.28.2", "node_modules", "esbuild"),
+    join(store, "wrangler@4.151.0", "node_modules", "esbuild"),
+  );
+  put(
+    join(esbuild, "package.json"),
+    JSON.stringify({
+      name: "esbuild",
+      version: "0.28.2",
+      main: "lib/main.js",
+      optionalDependencies: { "@esbuild/linux-x64": "0.28.2", "@esbuild/darwin-arm64": "0.28.2" },
+    }),
+  );
+  put(join(esbuild, "lib", "main.js"), "module.exports = {};\n");
+  put(
+    join(platform, "package.json"),
+    JSON.stringify({ name: "@esbuild/linux-x64", version: "0.28.2" }),
+  );
+  put(join(platform, "bin", "esbuild"), "a binary", 0o755);
+  mkdirSync(join(store, "esbuild@0.28.2", "node_modules", "@esbuild"), { recursive: true });
+  symlinkSync(platform, join(store, "esbuild@0.28.2", "node_modules", "@esbuild", "linux-x64"));
+  const shims: string[] = [];
+  for (const appDir of appDirs) {
+    mkdirSync(join(appDir, "node_modules", ".bin"), { recursive: true });
+    symlinkSync(wrangler, join(appDir, "node_modules", "wrangler"));
+    const shim = join(appDir, "node_modules", ".bin", "wrangler");
+    put(shim, '#!/bin/sh\necho "shim ran"\n', 0o755);
+    put(join(appDir, "node_modules", ".bin", "vite"), "#!/bin/sh\n", 0o755);
+    shims.push(shim);
+  }
+  return { wrangler, bin: join(wrangler, "bin", "wrangler.js"), esbuild, platform, shims };
 }

@@ -31,11 +31,15 @@ function json(stdout: string, command: string): unknown {
   }
 }
 
-/** A Wrangler call on the config the script checked, never one Wrangler finds itself. */
+/**
+ * A Wrangler call on the config the script checked, never one Wrangler finds
+ * itself, and only while the file holds the bytes that were checked (R6-01).
+ */
 const wrangler = (worker: WorkerConfig, args: string[], capture = false): WranglerCommand => ({
   bin: "wrangler",
   cwd: worker.dir,
   config: worker.configPath,
+  configSha256: worker.configSha256,
   args,
   capture,
 });
