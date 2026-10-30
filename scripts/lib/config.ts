@@ -203,9 +203,21 @@ function corepackProblems(app: string, dir: string): string[] {
 }
 
 /**
+ * Why pnpm would read settings of the app's own for a command run in
+ * apps/<app>, or null. The deploy's builds are such commands: `pnpm --dir
+ * apps/<app>` reads apps/<app>/.npmrc too, and `use-node-version` with
+ * `node-mirror:release` makes pnpm download a Node from any URL and run the
+ * build with it, as a child of the deploy (R9-02).
+ */
+function npmrcProblem(app: string, dir: string): string | null {
+  if (!existsSync(join(dir, ".npmrc"))) return null;
+  return `apps/${app}/.npmrc: pnpm reads it for every command run in apps/${app}, the deploy's builds included, and it can make pnpm download and run another Node (use-node-version, node-mirror) or install from another registry or lockfile. Remove it; pnpm settings belong in the root .npmrc`;
+}
+
+/**
  * The checks of apps/<app> that need no parsed config: one Wrangler config,
  * none above the app, no .env file, no symlink outside node_modules, and no
- * package manager of its own. Wrangler bundles, migrates and uploads what a
+ * package manager or pnpm settings of its own. Wrangler bundles, migrates and uploads what a
  * link points to, and Vite copies it, from wherever that is. The deploy runs
  * these before the builds and again after them (R6-01). Returns the config's
  * path, or null when the app has none.
@@ -230,8 +242,8 @@ export function checkAppDir(root: string, app: string): string | null {
       `apps/${app} holds symlinks outside node_modules: ${list.join(", ")}${more}. Wrangler and Vite read what a link points to, wherever that is, into the bundle, the migrations and the assets. Replace each link with the file`,
     );
   }
-  const corepack = corepackProblems(app, dir);
-  if (corepack.length > 0) throw new ConfigError(corepack.join("\n"));
+  const pnpm = [...corepackProblems(app, dir), npmrcProblem(app, dir) ?? []].flat();
+  if (pnpm.length > 0) throw new ConfigError(pnpm.join("\n"));
   return configPath;
 }
 

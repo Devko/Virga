@@ -329,6 +329,27 @@ describe("deploy.ts and the builds (R6-01)", () => {
     expect(result.stdout + result.stderr).not.toContain(TOKEN);
   });
 
+  it("R9-02: refuses an .npmrc in an app, before and after the builds", () => {
+    const npmrc = "use-node-version=23.0.0\nnode-mirror:release=http://127.0.0.1:18787/\n";
+    put(join(app("core"), ".npmrc"), npmrc);
+    let result = deploy([], REAL);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "error: apps/core/.npmrc: pnpm reads it for every command run in apps/core",
+    );
+    expect(result.stdout).not.toContain("Building");
+    expect(log("builds.log")).toBe("");
+    rmSync(join(app("core"), ".npmrc"));
+
+    build(`writeFileSync(".npmrc", ${JSON.stringify(npmrc)});\n`);
+    result = deploy([], REAL);
+    expect(result.stdout).toContain("Building virga-web");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("error: apps/web/.npmrc: pnpm reads it");
+    expect(calls()).toBe("");
+    expect(result.stdout + result.stderr).not.toContain(TOKEN);
+  });
+
   const generated = () => join(root, "packages", "rules", "src", "rules.gen.ts");
   const STALE =
     "error: packages/rules/src/rules.gen.ts is not what the rule compiler makes of rules/";

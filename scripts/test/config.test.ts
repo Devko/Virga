@@ -300,6 +300,24 @@ describe("checkAppDir", () => {
     expect(problem()).toMatch(/^apps\/web\/package\.json cannot be read: /);
   });
 
+  it("R9-02: refuses an .npmrc in the app directory, which can make pnpm fetch and run another Node", () => {
+    checkout();
+    writeFileSync(
+      web(".npmrc"),
+      "use-node-version=23.0.0\nnode-mirror:release=http://127.0.0.1:18787/download/release/\n",
+    );
+    expect(problem()).toBe(
+      "apps/web/.npmrc: pnpm reads it for every command run in apps/web, the deploy's builds included, and it can make pnpm download and run another Node (use-node-version, node-mirror) or install from another registry or lockfile. Remove it; pnpm settings belong in the root .npmrc",
+    );
+    // With a .corepack.env as well, both are named.
+    writeFileSync(web(".corepack.env"), "COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1\n");
+    expect(
+      problem()
+        ?.split("\n")
+        .map((line) => line.split(":")[0]),
+    ).toEqual(["apps/web/.corepack.env", "apps/web/.npmrc"]);
+  });
+
   it("R6-01: runs the checks of readWorkerConfig that need no parsed config", () => {
     checkout();
     writeFileSync(web(".env"), "CLOUDFLARE_API_BASE_URL=http://127.0.0.1:18787\n");
