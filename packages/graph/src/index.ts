@@ -3,7 +3,10 @@ export { migrate, schemaVersion } from "./migrate.ts";
 export { MIGRATIONS, type Migration, SCHEMA_VERSION } from "./schema.ts";
 export {
   type DurableObjectStorageLike,
+  type Executed,
   fromDurableObjectStorage,
+  guardRead,
+  ReadOnlyError,
   type Row,
   type SqlRunner,
   type SqlValue,

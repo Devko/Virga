@@ -786,3 +786,65 @@ describe("evaluateRules: evidence", () => {
     expect(finding().insight_id).toBeNull();
   });
 });
+
+describe("evaluateRules: a rule run only reads (R6-02)", () => {
+  /** Output columns of a hit on Worker a, so a run that is not refused would evaluate. */
+  const HIT_A =
+    "'CF-900' AS rule_id, 'CF-900:worker_script:a' AS fingerprint, 'high' AS severity, 'worker_script:a' AS subject_id";
+  const meta = () => db.query("SELECT key, value FROM meta ORDER BY key");
+  const setting = (name: string) => db.query(`PRAGMA ${name}`)[0]?.[name];
+  const tables = () =>
+    db
+      .query<{ name: string }>("SELECT name FROM sqlite_schema ORDER BY name")
+      .map((row) => row.name);
+
+  /** Opens the finding of Worker a in scan s1 at 1000. */
+  async function openA() {
+    await scan(db, "s1", 1000, [{ name: "a" }]);
+    expect(evaluateRules(db, [RULE], "s1", 1000)[0]).toMatchObject({ opened: 1 });
+  }
+
+  it.each([
+    ["an UPDATE", `UPDATE meta SET value = 'forged' WHERE key = 'current_scan' RETURNING ${HIT_A}`],
+    ["an INSERT", `INSERT INTO meta (key, value) VALUES ('planted', 'x') RETURNING ${HIT_A}`],
+    ["a DELETE", `DELETE FROM findings RETURNING ${HIT_A}`],
+    ["a schema change", "CREATE TABLE planted (x)"],
+    [
+      "a trigger",
+      "CREATE TRIGGER planted AFTER UPDATE ON findings BEGIN DELETE FROM finding_nodes; END",
+    ],
+  ])(
+    "R6-02: ends a run that writes with %s as error, rolled back, changing no finding",
+    async (_, sql) => {
+      await openA();
+      const before = { meta: meta(), tables: tables(), finding: finding() };
+      const [run] = evaluateRules(db, [ruleWith("CF-900", sql)], "s1", 2000);
+      expect(run).toMatchObject({ status: "error", hits: 0, opened: 0, resolved: 0 });
+      expect(run?.error).toMatch(/^a read-only query changed (rows|the schema)/);
+      expect({ meta: meta(), tables: tables(), finding: finding() }).toEqual(before);
+    },
+  );
+
+  it("R6-02: sets back a connection setting a rule run changed, which a rollback would keep", async () => {
+    await openA();
+    const [run] = evaluateRules(
+      db,
+      [ruleWith("CF-900", "PRAGMA ignore_check_constraints = 1")],
+      "s1",
+      2000,
+    );
+    expect(run?.status).toBe("error");
+    expect(run?.error).toContain("the setting ignore_check_constraints");
+    expect(setting("ignore_check_constraints")).toBe(0);
+    expect(finding()).toMatchObject({ status: "open", last_seen: 1000 });
+  });
+
+  it("R6-02: refuses a statement tail, which Node SQLite skips and Durable Object SQL runs", async () => {
+    await openA();
+    const sql = `SELECT ${HIT_A} FROM (SELECT 1) AS [z--]; UPDATE meta SET value = 'forged' WHERE key = 'current_scan'`;
+    const [run] = evaluateRules(db, [ruleWith("CF-900", sql)], "s1", 2000);
+    expect(run?.status).toBe("error");
+    expect(run?.error).toMatch(/more than one statement/);
+    expect(finding()).toMatchObject({ status: "open", last_seen: 1000 });
+  });
+});

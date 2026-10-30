@@ -2,8 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import {
   applyBatch,
   beginScan,
+  guardRead,
   migrate,
   prepareBatch,
+  type Row,
   recordCoverage,
   replaceExposure,
   type SqlRunner,
@@ -31,8 +33,16 @@ function countingRunner(storage: DurableObjectStorage, counter: Counted): SqlRun
     counter.rowsWritten += cursor.rowsWritten;
     return rows;
   };
-  return {
+  const runner: SqlRunner = {
     query: (sql, ...params) => exec(sql, params) as never,
+    queryReadOnly: (sql, ...params) =>
+      guardRead(runner, () => {
+        const cursor = storage.sql.exec(sql, ...params);
+        const rows = cursor.toArray() as Row[];
+        counter.rowsRead += cursor.rowsRead;
+        counter.rowsWritten += cursor.rowsWritten;
+        return { rows, rowsWritten: cursor.rowsWritten };
+      }) as never,
     run: (sql, ...params) => {
       exec(sql, params);
     },
@@ -41,6 +51,7 @@ function countingRunner(storage: DurableObjectStorage, counter: Counted): SqlRun
     },
     transaction: (fn) => storage.transactionSync(fn),
   };
+  return runner;
 }
 
 export class SpikeGraph extends DurableObject<Env> {

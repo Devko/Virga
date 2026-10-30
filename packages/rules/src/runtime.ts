@@ -1,7 +1,11 @@
 import type { SqlRunner, SqlValue } from "@virga/graph";
 import type { CompiledRule, RuleHit } from "./types.ts";
 
-/** Runs a compiled rule. `overrides` replace parameter defaults by name. */
+/**
+ * Runs a compiled rule. `overrides` replace parameter defaults by name. The
+ * rule only reads: a statement that writes, which Durable Object SQL would
+ * run even after the compiled one, throws and is rolled back (R6-02).
+ */
 export function runRule(
   db: SqlRunner,
   rule: CompiledRule,
@@ -13,5 +17,5 @@ export function runRule(
     if (value === undefined) throw new Error(`${rule.id}: missing parameter ${name}`);
     return value;
   });
-  return db.query<RuleHit>(rule.sql, ...bindings);
+  return db.queryReadOnly<RuleHit>(rule.sql, ...bindings);
 }

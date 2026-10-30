@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Row, SqlRunner, SqlValue } from "./sql.ts";
+import { guardRead, ReadOnlyError, type Row, type SqlRunner, type SqlValue } from "./sql.ts";
 
 export interface NodeSqlRunner extends SqlRunner {
   /** Output column names of a statement, without running it. */
@@ -31,9 +31,19 @@ export function openNodeDatabase(path = ":memory:"): NodeSqlRunner {
     const rest = sql.slice(first.length);
     return rest.slice(BLANK.exec(rest)?.[0].length ?? 0);
   };
-  return {
+  const runner: NodeSqlRunner = {
     query: <T extends Row>(sql: string, ...params: SqlValue[]) =>
       db.prepare(sql).all(...(params as never[])) as T[],
+    // Node SQLite would skip a tail that Durable Object SQL runs (R6-02). A
+    // flag pragma acts when it is prepared, so `sql` is prepared, by `tail`
+    // too, only inside the guard.
+    queryReadOnly: <T extends Row>(sql: string, ...params: SqlValue[]) =>
+      guardRead(runner, () => {
+        if (tail(sql) !== "") {
+          throw new ReadOnlyError("a read-only query holds more than one statement");
+        }
+        return { rows: db.prepare(sql).all(...(params as never[])) as Row[], rowsWritten: 0 };
+      }) as T[],
     run: (sql, ...params) => {
       db.prepare(sql).run(...(params as never[]));
     },
@@ -61,4 +71,5 @@ export function openNodeDatabase(path = ":memory:"): NodeSqlRunner {
     tail,
     close: () => db.close(),
   };
+  return runner;
 }
