@@ -1,6 +1,6 @@
 # Operator guide
 
-Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date. Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
+Status: phase 1, written 2026-10-29 against Wrangler 4.151.0 and the Cloudflare docs of that date; deploy checks updated 2026-10-30 (R3-03 to R3-06 of the [round 3 security review](../reviews/2026-10-30-security-review-round-3.md)). Items marked **verify** are documented inconsistently or not at all and still need a check in a real account (spikes S-05, S-06 and S-08 in the [implementation plan](../implementation-plan.md#phase-0-decisions-and-spikes)).
 
 Virga is an independent project. It is not affiliated with or endorsed by Cloudflare (D-01).
 
@@ -94,7 +94,7 @@ The deploy script refuses to deploy while the key is missing: the placeholder `s
 
 ### Optional settings
 
-- **D1 location or jurisdiction.** The script creates missing databases with Wrangler's defaults. For a location hint or a jurisdiction, create them yourself first, for example `npx wrangler d1 create virga-vault --jurisdiction eu` in `apps/broker`. The script finds databases by name.
+- **D1 location or jurisdiction.** The script creates missing databases with Wrangler's defaults. For a location hint or a jurisdiction, create them yourself first, for example `npx wrangler d1 create virga-vault --jurisdiction eu` in `apps/broker`. The script finds databases by name. If you add a `database_id` to a config, it must be the ID of the database that `database_name` names: Wrangler binds and migrates by ID.
 - **Web settings.** `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS`; see [Access for the UI](#access-for-the-ui).
 
 ### Run the deploy
@@ -108,29 +108,35 @@ node scripts/deploy.ts
 
 The script:
 
-1. Reads `apps/broker`, `apps/core` and `apps/web` (`wrangler.jsonc`; `apps/web` may be missing, then it deploys broker and core only).
-2. Checks the configs against each other and stops on any error:
+1. Refuses to run while `CLOUDFLARE_ENV` or `WRANGLER_CI_OVERRIDE_NAME` is set: with them, Wrangler would deploy a named environment or under another Worker name, not the configuration the script checked. The script itself takes no option but `--dry-run`.
+2. Reads `apps/broker`, `apps/core` and `apps/web` (`wrangler.jsonc` or `wrangler.json`; `apps/web` may be missing, then it deploys broker and core only). It stops if an app has more than one of `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`, or if any of them sits in a directory above an app, up to the filesystem root, including the repository root and your home directory: Wrangler run in an app directory without `--config` takes the first `wrangler.json` above it before the app's own config.
+3. Checks the configs against each other and stops on any error:
    - each Worker has its expected name (`virga-broker`, `virga-core`, `virga-web`);
    - every service binding names an entrypoint that the target's main module exports, and is one the [topology](../implementation-plan.md#deployment-topology-proposal) allows: core binds `virga-broker#ApiCaller`; web binds `virga-broker#TokenIntake`, `virga-core#GraphReader` and `virga-core#Admin`, and never `ApiCaller`;
    - bindings follow the deploy order broker, core, web;
    - broker and core have `workers_dev` and `preview_urls` off and no routes;
-   - only the broker binds Secrets Store, each D1 database belongs to one Worker (D-08), and the web Worker binds no D1 database and no Durable Object;
-   - Durable Object and Workflow classes are exported.
-3. Lists the D1 databases of the account and creates `virga-vault` and `virga-index` if they are missing, then applies their migrations (`wrangler d1 migrations apply --remote`).
-4. Checks the master key.
-5. Checks the web settings, if `apps/web` declares required secrets.
-6. Runs each app's `build` script, if it has one, and deploys `virga-broker`, `virga-core` and `virga-web`, in this order.
-7. Prints what is still to do as `ACTION:` lines.
+   - only the broker binds Secrets Store, each D1 database belongs to one Worker by `database_name` and by `database_id` (D-08), and the web Worker binds no D1 database and no Durable Object;
+   - Durable Object and Workflow classes are exported;
+   - no config has named environments (`env` blocks), and no `secrets.required` lists a `CLOUDFLARE_` or `CF_` name.
+4. Lists the D1 databases of the account. Before it creates or migrates anything, it checks that every `database_id` exists and is the database its `database_name` names, and that no database, by ID, is bound by two Workers. Then it creates `virga-vault` and `virga-index` if they are missing and applies their migrations (`wrangler d1 migrations apply --remote`).
+5. Checks the master key.
+6. Checks the web settings, if `apps/web` declares required secrets.
+7. Runs each app's `build` script, if it has one, and deploys `virga-broker`, `virga-core` and `virga-web`, in this order.
+8. Prints what is still to do as `ACTION:` lines.
 
 It is safe to run again: existing databases are reused, applied migrations are skipped, and each Worker gets a new version.
 
 What it never does:
 
 - It reaches the Cloudflare API only through Wrangler, which acts on the account of `CLOUDFLARE_ACCOUNT_ID`. Apart from Wrangler it runs only the apps' `build` scripts.
-- It passes only `CLOUDFLARE_API_TOKEN` to Wrangler: a Global API Key in the environment is not used. A dry run passes no credentials at all.
+- It never lets Wrangler choose a config: every Wrangler call gets `--config` with the absolute path of the file it checked, so Wrangler neither searches for a config nor follows a `.wrangler/deploy` redirect, and it never selects a named environment.
+- It passes only `CLOUDFLARE_API_TOKEN` to Wrangler: a Global API Key in the environment is not used. A dry run passes no credentials at all. The `build` scripts get no `CLOUDFLARE_` or `CF_` variable at all, so no build-time package can read the token.
+- It takes only `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS` from its environment to upload as secrets of `virga-web`; never the token or any other variable.
 - It runs Wrangler with stdin closed, so Wrangler never prompts and never writes resource IDs into a `wrangler.jsonc`.
 - It never prints the token or a setting it uploads: all output passes through a filter that also removes anything shaped like a Cloudflare credential (`cfat_`, `cfut_`, `cfk_`, `cfoat_`). It never reads the master key.
 - It sends no Wrangler telemetry (`WRANGLER_SEND_METRICS=false`).
+
+The `npx wrangler` commands in this guide run in an app directory without `--config`. Wrangler then uses that app's own config only while no other Wrangler config sits next to or above it, which step 2 checks, and only while `CLOUDFLARE_ENV` is unset. Run the dry run first if in doubt.
 
 ### Deploy from CI
 
@@ -188,7 +194,7 @@ Pull the new version, run `pnpm install`, then the deploy script. New D1 migrati
    npx wrangler secret put ADMIN_EMAILS
    ```
 
-   Or as environment variables of the deploy script with these names: it uploads them as secrets with the deploy (`wrangler deploy --secrets-file`, through a private temporary file that it deletes afterwards) and never prints them. Secrets stay across deploys. If `apps/web/wrangler.jsonc` declares one of them under `vars`, the config value is used instead.
+   Or as environment variables of the deploy script with these names: it uploads them as secrets with the deploy (`wrangler deploy --secrets-file`, through a private temporary file that it deletes afterwards) and never prints them. Secrets stay across deploys. If `apps/web/wrangler.jsonc` declares one of them under `vars`, the config value is used instead. These three are the only names the script takes from its environment: any other name that `apps/web/wrangler.jsonc` lists under `secrets.required` must already be a secret of `virga-web`, created with `npx wrangler secret put`, and a `CLOUDFLARE_` or `CF_` name there stops the deploy.
 
 Things to know:
 
@@ -353,7 +359,15 @@ What stays behind:
 | Message or symptom | Cause and fix |
 | --- | --- |
 | `set CLOUDFLARE_API_TOKEN …` or `set CLOUDFLARE_ACCOUNT_ID …` | Export both. The account ID is 32 hex characters |
+| `unset CLOUDFLARE_ENV` or `unset WRANGLER_CI_OVERRIDE_NAME` | Unset the variable. The script deploys only the top-level configuration it checked, under the Worker names in the configs |
+| `usage: node scripts/deploy.ts [--dry-run]` | The script takes no other option; there is no `--env` |
 | `error: apps/<app>/wrangler.jsonc: …` | The configs do not fit together (names, service bindings, entrypoints, order, exposure, state). Fix the config; the message names the binding |
+| `… is a Wrangler config above the app` | A `wrangler.json`, `wrangler.jsonc` or `wrangler.toml` in the repository root, in `apps/` or further up, for example in your home directory. Remove or rename it: Wrangler run in an app directory without `--config` would use it |
+| `… an app has one Wrangler config` | The app has more than one of `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`. Keep only `wrangler.jsonc` |
+| `named environments (env) are not supported` | Remove the `env` block. The script checks and deploys only the top-level configuration |
+| `secrets.required names CLOUDFLARE_…` | Remove the name. The deploy token and the other `CLOUDFLARE_` and `CF_` variables never become Worker secrets |
+| `D1 binding … has database_id …, which is …, not …` | The `database_id` belongs to another database than `database_name`. Correct it, or remove `database_id`: the script finds databases by name |
+| `D1 database … is also bound by …` | Two Workers bind one database, by name or by ID. Each database belongs to one Worker (D-08); the vault only to `virga-broker` |
 | `… not found; run pnpm install first` | The app has no Wrangler installed. Run `pnpm install` at the repository root |
 | `store_id is a placeholder` | Set `store_id` in `apps/broker/wrangler.jsonc`, or use the `MASTER_KEY` fallback. A dry run only reports it |
 | `Secrets Store … has no secret virga-master-key` or `has no MASTER_KEY secret` | Create the key as in [Master key](#master-key), then run the deploy again |
@@ -363,7 +377,7 @@ What stays behind:
 | `Authentication error [code: 10000]` or a 403 from Wrangler | The deploy token lacks a group from [the table](#the-deploy-token), has expired, or belongs to another account. Creating a Worker for the first time needs Workers Admin |
 | `Couldn't find a D1 DB named …` | A database was deleted after the list. Run the deploy again; it creates it |
 | A migration fails | D1 rolls back the failed migration; earlier ones stay applied. Fix the cause and run the deploy again |
-| `virga-web does not exist yet and requires the secrets …` | `apps/web` lists them under `secrets.required`. Set them as environment variables for the first deploy |
+| `virga-web does not exist yet and requires the secrets …` or `virga-web requires the secrets …` | `apps/web` lists them under `secrets.required`. Set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS` as environment variables of the deploy; create any other name with the `npx wrangler secret put` command the message prints |
 | The dry run of `virga-web` fails on missing assets | The app's `build` script did not produce them. Run `pnpm run build` in `apps/web` to see why |
 | `ACTION:` lines | Not errors. Things left to do, such as settings of `virga-web` |
 

@@ -4,6 +4,8 @@
 // Wrangler configs against each other, creates missing D1 databases and
 // applies their migrations, checks the master key (D-15), then deploys
 // virga-broker, virga-core and virga-web in that order. Safe to run again.
+// Wrangler always gets the checked config as --config and never a named
+// environment.
 //
 // A real deploy uses CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of the
 // tool account. --dry-run runs `wrangler deploy --dry-run` for each Worker,
