@@ -175,7 +175,7 @@ export class Graph {
     hostname: string,
     path = "",
     service = "ssh://localhost:22",
-    { tunnelId = "tun-1", accessRequired = false } = {},
+    { tunnelId = "tun-1", accessRequired = false, viaFallthrough = false } = {},
   ): string {
     const tunnel = this.node("tunnel", tunnelId, "tunnel", {
       tunnel_type: "cfd_tunnel",
@@ -190,6 +190,7 @@ export class Graph {
       origin_scheme: scheme,
       tunnel_id: tunnelId,
       access_required: accessRequired,
+      via_fallthrough: viaFallthrough,
     });
     this.edge("ROUTES_TO", id, tunnel);
     return id;
