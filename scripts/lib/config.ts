@@ -265,12 +265,15 @@ export function readWorkerConfig(root: string, app: string): WorkerConfig | null
     ...parseWorkerConfig(raw, { app, dir, configPath, where }),
     configSha256: sha256(bytes),
   };
-  const assets = assetsDirectoryProblem(config);
-  if (assets !== null) throw new ConfigError(`${where}: ${assets}`);
+  const places = placeProblems(config);
+  if (places.length > 0) {
+    throw new ConfigError(places.map((problem) => `${where}: ${problem}`).join("\n"));
+  }
   return config;
 }
 
 type AssetsSource = Pick<WorkerConfig, "app" | "dir" | "name" | "assetsDirectory">;
+type PlaceSource = Pick<WorkerConfig, "app" | "dir" | "name" | "main" | "assetsDirectory" | "d1">;
 
 /**
  * `path` with every symlink followed, and the part that does not exist yet
@@ -294,36 +297,95 @@ function realPath(path: string): { real: string } | { dangling: string } {
   }
 }
 
+interface Place {
+  /** The key and its value, for messages. */
+  at: string;
+  value: string;
+  /** What Wrangler would do with what the path holds. */
+  use: string;
+  /** Where the path belongs. */
+  keep: string;
+  /** Refuse apps/<app> itself, with this reason. */
+  itself?: string;
+}
+
 /**
- * Why Wrangler would upload files from outside apps/<app> as the Worker's
- * assets, or null. assets.directory is resolved as Wrangler resolves it,
- * then with symlinks followed, so a link counts where it points. A directory
- * the build has yet to create is checked as written (R5-03).
+ * Why a path of the config leads Wrangler to files outside apps/<app> or in
+ * its node_modules, which holds the installed packages, or null. The path is
+ * resolved against the config's directory, as Wrangler resolves it, then with
+ * symlinks followed, so a link counts where it points. A path the build has
+ * yet to create is checked as written (R5-03).
  */
-export function assetsDirectoryProblem(worker: AssetsSource): string | null {
-  const directory = worker.assetsDirectory;
-  if (directory === null) return null;
-  const at = `assets.directory "${directory}"`;
+function placeProblem(worker: Pick<WorkerConfig, "app" | "dir">, place: Place): string | null {
   const app = `apps/${worker.app}`;
   let appDir: string;
   let resolved: ReturnType<typeof realPath>;
   try {
     appDir = realpathSync(worker.dir);
-    resolved = realPath(resolve(worker.dir, directory));
+    resolved = realPath(resolve(worker.dir, place.value));
   } catch (error) {
-    return `${at} cannot be resolved: ${error instanceof Error ? error.message : String(error)}`;
+    return `${place.at} cannot be resolved: ${error instanceof Error ? error.message : String(error)}`;
   }
   if ("dangling" in resolved) {
-    return `${at} passes through ${resolved.dangling}, a symlink to a path that does not exist. Remove the link`;
+    return `${place.at} passes through ${resolved.dangling}, a symlink to a path that does not exist. Remove the link`;
   }
   const inside = relative(appDir, resolved.real);
-  if (inside === "") {
-    return `${at} is ${app} itself; Wrangler would upload its sources and config with ${worker.name}. Use a directory below it, such as ./dist/client`;
-  }
+  if (inside === "" && place.itself !== undefined)
+    return `${place.at} is ${app} itself; ${place.itself}`;
   if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
-    return `${at} resolves to ${resolved.real} (symlinks followed), outside ${app}; Wrangler would upload what it holds with ${worker.name}. Keep the assets in a directory below ${app}`;
+    return `${place.at} resolves to ${resolved.real} (symlinks followed), outside ${app}; ${place.use}. ${place.keep}`;
+  }
+  if (inside.split(sep)[0]?.toLowerCase() === "node_modules") {
+    return `${place.at} resolves to ${resolved.real} (symlinks followed), inside ${app}/node_modules, which holds the installed packages; ${place.use}. ${place.keep}`;
   }
   return null;
+}
+
+/**
+ * Why Wrangler would upload files from outside apps/<app>, or from its
+ * node_modules, as the Worker's assets, or null (R5-03).
+ */
+export function assetsDirectoryProblem(worker: AssetsSource): string | null {
+  const directory = worker.assetsDirectory;
+  if (directory === null) return null;
+  const app = `apps/${worker.app}`;
+  return placeProblem(worker, {
+    at: `assets.directory "${directory}"`,
+    value: directory,
+    use: `Wrangler would upload what it holds with ${worker.name}`,
+    keep: `Keep the assets in a directory below ${app}, outside node_modules`,
+    itself: `Wrangler would upload its sources and config with ${worker.name}. Use a directory below it, such as ./dist/client`,
+  });
+}
+
+/**
+ * Why the config's paths lead Wrangler outside apps/<app> or into its
+ * node_modules: the main module it bundles, the assets it uploads, and the
+ * migrations directory of each D1 binding, Wrangler's default `migrations`
+ * included, whose SQL files it applies. Empty when none does.
+ */
+export function placeProblems(worker: PlaceSource): string[] {
+  const app = `apps/${worker.app}`;
+  const main =
+    worker.main === null
+      ? null
+      : placeProblem(worker, {
+          at: `main "${worker.main}"`,
+          value: worker.main,
+          use: `Wrangler would bundle it as the main module of ${worker.name}`,
+          keep: `Keep the main module below ${app}, outside node_modules`,
+        });
+  const migrations = worker.d1.map((db, i) =>
+    placeProblem(worker, {
+      at: `d1_databases[${i}].migrations_dir "${db.migrationsDir}"`,
+      value: db.migrationsDir,
+      use: `Wrangler would apply the SQL files there to ${db.databaseName ?? db.databaseId ?? db.binding}`,
+      keep: `Keep the migrations in a directory below ${app}, outside node_modules`,
+    }),
+  );
+  return [main, assetsDirectoryProblem(worker), ...migrations].filter(
+    (problem): problem is string => problem !== null,
+  );
 }
 
 /**

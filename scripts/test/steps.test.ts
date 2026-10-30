@@ -22,6 +22,7 @@ import {
   checkWebSettings,
   DeployError,
   deploy,
+  describeDatabases,
   describeMasterKey,
   ensureDatabases,
   planWebSettings,
@@ -84,6 +85,26 @@ describe("ensureDatabases", () => {
       "broker: d1 list --json",
       "broker: d1 create virga-vault --update-config=false",
       "broker: d1 migrations apply virga-vault --remote",
+      "core: d1 migrations apply virga-index --remote",
+    ]);
+  });
+
+  it("migrations_dir: finds the migration files at an absolute migrations_dir, as Wrangler resolves it", async () => {
+    const core = app("core", [{ binding: "INDEX", databaseName: "virga-index" }]);
+    const absolute = worker("core", {
+      dir: core.dir,
+      d1: core.d1.map((db) => ({ ...db, migrationsDir: join(core.dir, "migrations") })),
+    });
+    const lines: string[] = [];
+    describeDatabases({ ...fakeContext({}).ctx, log: (line) => lines.push(line) }, [absolute]);
+    expect(lines).toEqual([
+      "  virga-core: D1 virga-index (INDEX), created if missing, 1 migration file(s)",
+    ]);
+    const list = JSON.stringify([{ uuid: "1", name: "virga-index" }]);
+    const { ctx, calls } = fakeContext({ "d1 list --json": ok(list) });
+    await ensureDatabases(ctx, [absolute]);
+    expect(calls).toEqual([
+      "core: d1 list --json",
       "core: d1 migrations apply virga-index --remote",
     ]);
   });

@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { assetsDirectoryProblem, assetsLinkProblem, type WorkerConfig } from "./config.ts";
 import {
   MASTER_KEY_SECRET,
@@ -67,7 +67,7 @@ export function parseD1List(stdout: string): D1Database[] {
 }
 
 const migrationFiles = (worker: WorkerConfig, dir: string) => {
-  const path = join(worker.dir, dir);
+  const path = resolve(worker.dir, dir);
   return existsSync(path) ? readdirSync(path).filter((f) => f.endsWith(".sql")) : [];
 };
 
