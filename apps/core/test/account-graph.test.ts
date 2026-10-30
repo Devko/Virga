@@ -254,6 +254,7 @@ describe("scan steps in AccountGraph", () => {
       evaluated: 2,
       notEvaluated: 1,
       errors: 1,
+      errored: ["CF-003"],
       hits: 2,
       undecided: 4,
       opened: 2,

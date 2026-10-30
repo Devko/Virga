@@ -2,11 +2,13 @@ import type { CfReader } from "@virga/cf-api";
 import { COLLECTORS, type Collector, type CollectorContext } from "@virga/collectors";
 import { describe, isStaleScanError } from "../errors.ts";
 import { orderCollectors } from "./order.ts";
+import { RULE_ERRORS_LISTED } from "./policy.ts";
 import { API_STEP, type Failure, type ScanStep, STORE_STEP, settle } from "./step.ts";
 import type {
   BeginResult,
   ChunkCounters,
   ClassSummary,
+  RulesCounters,
   ScanGraph,
   ScanIndex,
   ScanStatus,
@@ -298,6 +300,9 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
 
   const stopped = await work();
   const status = stopped ? "failed" : scanStatus(summary);
+  // Single rules that ended `error` make the scan partial; say which (TM-11).
+  const errored = status === "partial" ? rulesDetail(summary.rules) : null;
+  if (errored) summary.detail = errored;
   const end = await step.do("finish", STORE_STEP, async () => {
     const at = clock();
     // A stopped scan leaves the graph as it is; the index row still ends.
@@ -330,8 +335,23 @@ export async function runScan(deps: ScanDeps, params: ScanParams): Promise<ScanS
   return result;
 }
 
+/**
+ * `failed` when the rules did not run; `complete` when every class, exposure
+ * and every rule ran fully; otherwise `partial`. A rule that ended `error`
+ * opened and resolved nothing, so the scan is not complete (TM-11).
+ */
 function scanStatus(summary: ScanSummary): Exclude<ScanStatus, "skipped"> {
   if (summary.rules?.status !== "complete") return "failed";
   const classesComplete = Object.values(summary.classes).every((c) => c.status === "complete");
-  return classesComplete && summary.exposure?.status === "complete" ? "complete" : "partial";
+  return classesComplete && summary.exposure?.status === "complete" && summary.rules.errors === 0
+    ? "complete"
+    : "partial";
+}
+
+/** `rules ended error (<count>): <IDs>`, at most RULE_ERRORS_LISTED IDs; null without errors. */
+function rulesDetail(rules: RulesCounters | null): string | null {
+  if (!rules || rules.errors === 0) return null;
+  const ids = (rules.errored ?? []).slice(0, RULE_ERRORS_LISTED).map((id) => id.slice(0, 64));
+  const more = rules.errors > ids.length ? ", …" : "";
+  return `rules ended error (${rules.errors}): ${ids.join(", ")}${more}`;
 }

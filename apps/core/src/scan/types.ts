@@ -40,6 +40,12 @@ export interface RulesCounters {
   undecided: number;
   opened: number;
   resolved: number;
+  /**
+   * IDs of the rules whose run ended `error`, in run order, at most
+   * RULE_ERRORS_LISTED (policy.ts); set only when `errors` is above 0
+   * (TM-11). Rule IDs come from the compiled rules, not the scanned account.
+   */
+  errored?: string[];
   detail?: string;
 }
 
@@ -108,9 +114,10 @@ export interface ClassSummary {
 }
 
 /**
- * `complete`: every class, exposure and rules ran fully. `partial`: rules
- * ran, but some input was not complete. `failed`: rules did not run.
- * `skipped`: another scan of the account was still running.
+ * `complete`: every class, exposure and every rule ran fully. `partial`:
+ * rules ran, but some input was not complete or single rules ended `error`
+ * (TM-11). `failed`: rules did not run. `skipped`: another scan of the
+ * account was still running, or the account is not in the index.
  */
 export type ScanStatus = "complete" | "partial" | "failed" | "skipped";
 
@@ -128,7 +135,10 @@ export interface ScanSummary {
   running?: string;
   /**
    * Why the scan was skipped or stopped: the account is not in the index or
-   * is being removed, or the scan is no longer the running scan of the account.
+   * is being removed, or the scan is no longer the running scan of the
+   * account. For a `partial` scan in which rules ended `error`, which ones:
+   * `rules ended error (<count>): <IDs>`, at most RULE_ERRORS_LISTED IDs
+   * (TM-11).
    */
   detail?: string;
 }

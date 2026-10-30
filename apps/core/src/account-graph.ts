@@ -30,7 +30,7 @@ import type {
   GraphSummary,
   Neighborhood,
 } from "./graph/views.ts";
-import { STALE_SCAN_MS } from "./scan/policy.ts";
+import { RULE_ERRORS_LISTED, STALE_SCAN_MS } from "./scan/policy.ts";
 import type {
   BeginResult,
   ChunkCounters,
@@ -179,7 +179,10 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
     }
   }
 
-  /** Runs every rule with the findings lifecycle and returns counters. */
+  /**
+   * Runs every rule with the findings lifecycle and returns counters, with
+   * the IDs of the first RULE_ERRORS_LISTED rules that ended `error`.
+   */
   evaluateRules(scanId: string): RulesCounters {
     const counters: RulesCounters = {
       status: "complete",
@@ -198,7 +201,13 @@ export class AccountGraph extends DurableObject<Env> implements ScanGraph {
         counters.rules++;
         if (run.status === "evaluated") counters.evaluated++;
         else if (run.status === "not_evaluated") counters.notEvaluated++;
-        else counters.errors++;
+        else {
+          counters.errors++;
+          // The scan reports itself partial and names these (TM-11).
+          if (counters.errors <= RULE_ERRORS_LISTED) {
+            counters.errored = [...(counters.errored ?? []), run.ruleId];
+          }
+        }
         counters.hits += run.hits;
         counters.undecided += run.undecided;
         counters.opened += run.opened;

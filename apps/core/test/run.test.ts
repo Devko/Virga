@@ -413,6 +413,66 @@ describe("runScan", () => {
     expect(rows.find((r) => r.resource_class === "exposure")?.status).toBe("error");
   });
 
+  /** A rule run of the fake evaluators. */
+  const ruleRun = (ruleId: string, status: "evaluated" | "error") => ({
+    ruleId,
+    status,
+    hits: 0,
+    undecided: 0,
+    missing: [],
+    opened: 0,
+    resolved: 0,
+    ...(status === "error" ? { error: `${ruleId} broke` } : {}),
+  });
+
+  it("TM-11: a scan in which single rules ended error is partial, and names them", async () => {
+    const runs = [ruleRun("CF-002", "evaluated"), ruleRun("CF-003", "error")];
+    const h = await harness(fakeEvaluators({ rules: () => [...runs, ruleRun("CF-010", "error")] }));
+    h.state.buckets = [bucket("logs")];
+    const { summary } = await h.scan("s1");
+
+    // Every class and exposure are complete; only the rules are not.
+    expect(Object.values(summary.classes).map((c) => c.status)).toEqual(["complete", "complete"]);
+    expect(summary.exposure?.status).toBe("complete");
+    expect(summary.rules).toMatchObject({
+      status: "complete",
+      rules: 3,
+      evaluated: 1,
+      errors: 2,
+      errored: ["CF-003", "CF-010"],
+    });
+    expect(summary.status).toBe("partial");
+    expect(summary.detail).toBe("rules ended error (2): CF-003, CF-010");
+    const run = await scanRun(h.id("s1"));
+    expect(run?.status).toBe("partial");
+    expect(JSON.parse(run?.summary ?? "{}")).toMatchObject({
+      status: "partial",
+      detail: "rules ended error (2): CF-003, CF-010",
+    });
+    // The graph's own scan row only says that the scan ended.
+    expect(await sql(h.stub, "SELECT status FROM scans")).toEqual([{ status: "complete" }]);
+  });
+
+  it("TM-11: lists at most 20 errored rules, and counts all", async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `CF-${String(900 + i)}`);
+    const h = await harness(fakeEvaluators({ rules: () => ids.map((id) => ruleRun(id, "error")) }));
+    h.state.buckets = [bucket("logs")];
+    const { summary } = await h.scan("s1");
+    expect(summary.status).toBe("partial");
+    expect(summary.rules?.errors).toBe(25);
+    expect(summary.rules?.errored).toEqual(ids.slice(0, 20));
+    expect(summary.detail).toBe(`rules ended error (25): ${ids.slice(0, 20).join(", ")}, …`);
+  });
+
+  it("TM-11: a scan whose rules all ran is complete without a detail", async () => {
+    const h = await harness(fakeEvaluators({ rules: () => [ruleRun("CF-002", "evaluated")] }));
+    h.state.buckets = [bucket("logs")];
+    const { summary } = await h.scan("s1");
+    expect(summary.status).toBe("complete");
+    expect(summary.rules?.errored).toBeUndefined();
+    expect(summary.detail).toBeUndefined();
+  });
+
   it("fails the scan when the rules cannot run", async () => {
     const h = await harness(
       fakeEvaluators({

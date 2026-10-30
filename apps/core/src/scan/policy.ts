@@ -7,3 +7,6 @@ export const STALE_SCAN_MS = 12 * 60 * 60 * 1000;
 
 /** Scan instances created per `createBatch` call, the documented maximum. */
 export const DISPATCH_BATCH = 100;
+
+/** Errored rule IDs a scan summary lists at most; the count covers all (TM-11). */
+export const RULE_ERRORS_LISTED = 20;

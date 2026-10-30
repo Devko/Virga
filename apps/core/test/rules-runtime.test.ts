@@ -156,6 +156,7 @@ describe("rule runs on Durable Object SQL (R6-02)", () => {
         rules: 1,
         evaluated: 0,
         errors: 1,
+        errored: ["CF-900"],
         resolved: 0,
       });
       expect(state(db)).toEqual(before);
