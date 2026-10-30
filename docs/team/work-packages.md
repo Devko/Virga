@@ -67,6 +67,19 @@ Round 3 status (2026-10-30): all four fix packages are merged, and every finding
 | `offboarding` | Account removal end to end: web route and UI (admin only) calling `TokenIntake.remove`, then `Admin.removeAccount`; the broker also clears the account's rate budget; the scan summary shows undecided and error counts | `apps/web/**`, `apps/broker/src/token-intake.ts`, `apps/broker/src/rate-budget.ts`, `apps/broker/test/**`, `apps/core/src/graph/**` | Tests cover removal and the summary |
 | `review-3` | Read-only verification: are R2-01 to R2-10 really fixed? Review of the round 3 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
 
+Round 4 status (2026-10-30): all four packages are merged; R3-01 to R3-07 are fixed, and account offboarding works end to end. The [verification review](../reviews/2026-10-30-verification-round-4.md) confirms R2-01, R2-03 to R2-07 and R2-09. It rates R2-02, R2-08 and R2-10 as partly fixed (variants R4-02, R4-06, R4-07) and found four new low-to-medium issues in the round 3 code (R4-01, R4-03 to R4-05).
+
+## Packages for phase 1, round 5
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `fix-exposure-3` | R4-01 | `packages/exposure/**` | A test reproduces the finding and passes |
+| `fix-rules-3` | R4-02 (CF-021); R4-06 (canonical CIDRs from the tokens collector, so CF-003 sees every spelling); R4-04 and R4-05 in the compiler (inputs derived from the tables a rule reads, writes rejected); CF-004 fixtures with `via_fallthrough` | `rules/**`, `packages/rules/src/` except `evaluate.ts`, `packages/rules/test/` except `evaluate*.test.ts`, `packages/collectors/src/identity/tokens.ts`, `packages/collectors/test/identity/tokens*` | Tests reproduce each finding and pass |
+| `fix-core-3` | R4-03 (a removed account cannot be scanned again); `GraphReader` reports a suppression past its end as open; a CF-024 Pages case in the end-to-end test | `apps/core/**` | Tests cover each item |
+| `supply-chain` | R4-07: a CI check that every version in the lockfile was released at least 14 days before the check runs; re-resolve the versions that fail it | `scripts/check-release-age.ts` and its tests, `.github/workflows/ci.yml`, `pnpm-lock.yaml`, the `scripts` field of the root `package.json` | CI fails on a too-young version; the lockfile passes |
+| `docs` | Apply the documentation changes requested in round 4; ADR for the scope of CF-024; review status tables | `docs/**`, `apps/broker/README.md`, `apps/core/README.md` | Every request is applied or answered |
+| `review-4` | Read-only verification of R3-01 to R3-07; review of the round 4 changes | none (report only) | A report per finding: fixed or not, with evidence; new findings verified |
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
