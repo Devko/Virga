@@ -430,15 +430,32 @@ function decideWorker(
  * hostname with `access_required` and rejects requests without one. Access
  * issues that token only when an Allow or Service Auth policy admits the
  * request; Bypass enforces nothing. Where Access alone would leave such a
- * hostname public without a token, it is `access`, decided by the tunnel
- * hostname. The audience tags cloudflared checks are not collected, so the
- * decision has at most medium confidence. A Service Auth policy that admits
- * everyone issues the token, so that stays `public`; `access`, `service_auth`
- * and `unknown` stay as they are.
+ * hostname public, the policies that give a token without a login decide,
+ * whichever policy named the public verdict (review R4-01): Service Auth for
+ * every address keeps it `public`, and one that cannot be decided makes it
+ * `unknown`. Without such a policy it is `access`, decided by the tunnel
+ * hostname; the audience tags cloudflared checks are not collected, so that
+ * decision has at most medium confidence. `access`, `service_auth` and
+ * `unknown` stay as they are.
  * developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#access
  */
 function withOriginAccess(result: Result, entryId: string): Result {
-  if (result.decision !== "public" || result.token) return result;
+  if (result.decision !== "public") return result;
+  const { token } = result;
+  if (token?.decision === "public") {
+    return {
+      decision: "public",
+      confidence: result.confidence,
+      reasonId: token.reasonId,
+      reason: `${token.reason}, so requests get the Access token cloudflared requires`,
+    };
+  }
+  if (token) {
+    return unknown(
+      token.reasonId,
+      `cloudflared requires an Access token, and a policy that may give one without a login cannot be decided: ${token.reason}`,
+    );
+  }
   return {
     decision: "access",
     confidence: Math.min(result.confidence, 1) as Confidence,

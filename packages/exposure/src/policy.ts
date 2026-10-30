@@ -6,10 +6,12 @@ export interface Verdict {
   reasonId: string | null;
   reason: string;
   /**
-   * Access admits these requests with an application token, as Service Auth
-   * does without a login, so an origin that checks the token lets them in too.
+   * What decides for the requests Access gives an application token without
+   * a login, which an origin that checks the token lets in. Only Service Auth
+   * gives one: `public` when a policy admits every address, `unknown` when a
+   * policy that might give one cannot be decided. Absent when none can.
    */
-  token?: boolean;
+  token?: Verdict;
 }
 
 const MAX_GROUP_DEPTH = 8;
@@ -105,6 +107,8 @@ const list = (kinds: Iterable<string>) => [...kinds].sort().join(", ");
 interface Ranked {
   rank: number;
   verdict: Verdict;
+  /** The policy may give an Access token without a login. */
+  issues?: boolean;
 }
 
 const EVERYONE = 0;
@@ -158,8 +162,7 @@ function bypassVerdict(id: string, policy: GraphNode, graph: GraphInput): Ranked
 function serviceAuthVerdict(id: string, policy: GraphNode, graph: GraphInput): Ranked | null {
   const include = readInclude(policy.props.include, graph);
   if (include.anyAddress) {
-    const open = ranked(PUBLIC, "public", id, "Service Auth policy includes every IP address");
-    return { ...open, verdict: { ...open.verdict, token: true } };
+    return ranked(PUBLIC, "public", id, "Service Auth policy includes every IP address");
   }
   if (include.unresolved) {
     return undecided(id, "Service Auth policy refers to an unknown Access group");
@@ -194,6 +197,8 @@ function orderedPolicies(app: GraphNode, graph: GraphInput): Ordered[] {
     .sort((a, b) => a.precedence - b.precedence || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+const issuing = (r: Ranked): Ranked => ({ ...r, issues: true });
+
 /**
  * What an Access app decides for the requests it covers. Bypass and Service
  * Auth policies run before Allow and Block, so one that admits requests
@@ -201,6 +206,11 @@ function orderedPolicies(app: GraphNode, graph: GraphInput): Ordered[] {
  * for everyone is named before one limited by selectors; otherwise the first
  * such policy in the order is.
  * developers.cloudflare.com/cloudflare-one/access-controls/policies/#cloudflare-access-policy-order-of-execution
+ *
+ * The named policy may be a Bypass, which gives no Access token, while
+ * another policy gives one to every address. So the policies that may give a
+ * token without a login also decide `token`, whichever policy is named
+ * (review R4-01). A missing policy or an unsupported action might be one.
  */
 export function appVerdict(app: GraphNode, graph: GraphInput): Verdict {
   const own: Ranked[] = [];
@@ -209,22 +219,25 @@ export function appVerdict(app: GraphNode, graph: GraphInput): Verdict {
   for (const { policy, id } of orderedPolicies(app, graph)) {
     const decision = str(policy?.props.decision);
     if (!policy) {
-      own.push(undecided(id, "a policy of this application is missing from the graph"));
+      own.push(issuing(undecided(id, "a policy of this application is missing from the graph")));
     } else if (!decision || !DECISIONS.has(decision)) {
-      own.push(undecided(id, "policy action not supported"));
+      own.push(issuing(undecided(id, "policy action not supported")));
     } else if (decision === "bypass") {
       own.push(bypassVerdict(id, policy, graph));
     } else if (decision === "non_identity") {
       const verdict = serviceAuthVerdict(id, policy, graph);
-      if (verdict) own.push(verdict);
+      if (verdict) own.push(issuing(verdict));
       else serviceAuth = true;
     } else if (decision === "allow") {
       allow = true;
     }
   }
-  // The sort is stable, so the policy order holds within a rank.
-  const [first] = own.sort((a, b) => a.rank - b.rank);
-  if (first) return first.verdict;
+  // The sort is stable, so the policy order holds within a rank, and the
+  // first issuer is one for every address if there is one.
+  own.sort((a, b) => a.rank - b.rank);
+  const [first] = own;
+  const issuer = own.find((r) => r.issues);
+  if (first) return issuer ? { ...first.verdict, token: issuer.verdict } : first.verdict;
   if (serviceAuth && !allow) {
     return { decision: "service_auth", reasonId: app.id, reason: "only Service Auth policies" };
   }
