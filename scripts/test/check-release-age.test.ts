@@ -5,6 +5,7 @@ import {
   type CheckOptions,
   checkReleaseAge,
   EXCEPTIONS,
+  LockfileError,
   main,
   parseLockfile,
 } from "../check-release-age.ts";
@@ -14,7 +15,9 @@ const NOW = new Date("2026-10-30T12:00:00Z");
 const DAY = 86_400_000;
 const ago = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
 
+/** A lockfile in the layout pnpm writes, with one snapshot per packages entry. */
 function lockfile(entries: string[]): string {
+  const keys = entries.map((entry) => entry.slice(2, entry.indexOf(":\n")));
   return [
     "lockfileVersion: '9.0'",
     "",
@@ -23,21 +26,81 @@ function lockfile(entries: string[]): string {
     "",
     "importers:",
     "",
-    "  .:",
-    "    devDependencies:",
-    "      typescript:",
-    "        specifier: 6.0.3",
-    "        version: 6.0.3",
+    "  .: {}",
     "",
     "packages:",
     "",
     ...entries.flatMap((entry) => [entry, ""]),
     "snapshots:",
     "",
-    "  typescript@6.0.3: {}",
-    "",
+    ...keys.flatMap((key) => [`  ${key}: {}`, ""]),
   ].join("\n");
 }
+
+const TYPES_NODE_INTEGRITY =
+  "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==";
+const UNDICI_TYPES_INTEGRITY =
+  "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==";
+
+/**
+ * The review's lockfile (R6-03), as pnpm 10.28.0 writes it: @types/node
+ * 26.6.6, published 2026-10-28, and its dependency. Line 17 is the packages
+ * key of @types/node.
+ */
+const REVIEW_LOCKFILE = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@types/node':
+        specifier: 26.6.6
+        version: 26.6.6
+
+packages:
+
+  '@types/node@26.6.6':
+    resolution: {integrity: ${TYPES_NODE_INTEGRITY}}
+
+  undici-types@8.9.0:
+    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}
+
+snapshots:
+
+  '@types/node@26.6.6':
+    dependencies:
+      undici-types: 8.9.0
+
+  undici-types@8.9.0: {}
+`;
+
+/** The review's three layouts: valid YAML that pnpm installs from, with the same entries. */
+function reviewLayout(layout: "flow" | "comment" | "indent"): string {
+  const [head = "", rest = ""] = REVIEW_LOCKFILE.split("packages:\n");
+  const [packages = "", snapshots = ""] = rest.split("snapshots:\n");
+  let changed = packages;
+  if (layout === "flow") {
+    changed = packages.replace(
+      `  '@types/node@26.6.6':\n    resolution: {integrity: ${TYPES_NODE_INTEGRITY}}`,
+      `  '@types/node@26.6.6': {resolution: {integrity: ${TYPES_NODE_INTEGRITY}}}`,
+    );
+  } else if (layout === "comment") {
+    changed = packages.replace("  '@types/node@26.6.6':\n", "  '@types/node@26.6.6': # types\n");
+  } else {
+    changed = packages.replaceAll(/^(?= +\S)/gm, " ");
+  }
+  expect(changed).not.toBe(packages);
+  return `${head}packages:\n${changed}snapshots:\n${snapshots}`;
+}
+
+const REVIEW_REGISTRY = {
+  "@types/node": { "26.6.6": "2026-10-28T18:36:00.000Z" },
+  "undici-types": { "8.9.0": "2026-06-01T00:00:00.000Z" },
+};
 
 const registryEntry = (key: string) =>
   `  ${key}:\n    resolution: {integrity: sha512-AAAA}\n    engines: {node: '>=14.17'}`;
@@ -132,6 +195,268 @@ describe("parseLockfile", () => {
     expect(packages.length).toBeGreaterThan(100);
     expect(packages.filter((p) => !p.registry)).toEqual([]);
     expect(packages.map((p) => p.key)).toContain("typescript@6.0.3");
+  });
+});
+
+describe("R6-03: the lockfile is read strictly", () => {
+  const refuses = (text: string, message: RegExp) => {
+    expect(() => parseLockfile(text)).toThrow(LockfileError);
+    expect(() => parseLockfile(text)).toThrow(message);
+  };
+  /** The review's lockfile with `replace` applied once; the replaced text must be there. */
+  const edited = (from: string, to: string) => {
+    expect(REVIEW_LOCKFILE).toContain(from);
+    return REVIEW_LOCKFILE.replace(from, to);
+  };
+
+  it("R6-03: reads the layout pnpm writes and fails the young version", async () => {
+    expect(parseLockfile(REVIEW_LOCKFILE).map((p) => p.key)).toEqual([
+      "@types/node@26.6.6",
+      "undici-types@8.9.0",
+    ]);
+    const { fetch } = mockFetch(REVIEW_REGISTRY);
+    const result = await checkReleaseAge(REVIEW_LOCKFILE, options(fetch));
+    expect(result.failures).toMatchObject([{ package: "@types/node@26.6.6", reason: "too_young" }]);
+  });
+
+  it("R6-03: refuses an entry written on one flow-style line", () => {
+    refuses(reviewLayout("flow"), /^pnpm-lock\.yaml line 17: .*one line/);
+  });
+
+  it("R6-03: refuses a comment after a key", () => {
+    refuses(reviewLayout("comment"), /^pnpm-lock\.yaml line 17: a comment/);
+  });
+
+  it("R6-03: refuses a packages section indented by 3 spaces", () => {
+    refuses(reviewLayout("indent"), /^pnpm-lock\.yaml line 17: .*indent 2.*indent 3/);
+  });
+
+  it("R6-03: main exits 1 for each of the review's layouts", async () => {
+    for (const layout of ["flow", "comment", "indent"] as const) {
+      const err: string[] = [];
+      const { fetch } = mockFetch(REVIEW_REGISTRY);
+      const code = await main({
+        lockfile: reviewLayout(layout),
+        fetch,
+        now: NOW,
+        exceptions: [],
+        log: () => {},
+        error: (line) => err.push(line),
+      });
+      expect(code).toBe(1);
+      expect(err).toEqual([expect.stringMatching(/^error: pnpm-lock\.yaml line 17: /)]);
+    }
+  });
+
+  it("R6-03: refuses comment lines, which would end a section for a line reader", () => {
+    const entry = "\n  undici-types@8.9.0:\n";
+    refuses(edited(entry, `\n# note\n${entry.slice(1)}`), /line 20: .*top-level key/);
+    refuses(edited(entry, `\n  # note\n${entry.slice(1)}`), /line 20: a comment/);
+    refuses(
+      edited(
+        "    resolution: {integrity: sha512-K",
+        "    # note\n    resolution: {integrity: sha512-K",
+      ),
+      /line 21: a comment/,
+    );
+    refuses(
+      edited(`${UNDICI_TYPES_INTEGRITY}}`, `${UNDICI_TYPES_INTEGRITY}} # note`),
+      /line 21: a comment/,
+    );
+  });
+
+  it("R6-03: refuses top-level keys it would read differently from YAML", () => {
+    refuses(edited("\npackages:\n", "\n'packages':\n"), /line 15: .*top-level key/);
+    refuses(edited("\npackages:\n", "\npackages :\n"), /line 15: .*top-level key/);
+    refuses(edited("\npackages:\n", "\npackages: # all\n"), /line 15: a comment/);
+    refuses(
+      edited("\nsnapshots:\n", "\npackages:\n\nsnapshots:\n"),
+      /line 23: packages appears twice/,
+    );
+    refuses(`---\n${REVIEW_LOCKFILE}`, /line 1: .*start with lockfileVersion/);
+    refuses(edited("\npackages:\n", "\n---\npackages:\n"), /line 15: .*top-level key/);
+    refuses(edited("\npackages:\n", "\npackages: {}\n"), /line 15: packages on one line/);
+    refuses(`settings: {}\n${REVIEW_LOCKFILE}`, /line 1: .*start with lockfileVersion/);
+    refuses(`  ${REVIEW_LOCKFILE}`, /line 1: .*start with lockfileVersion/);
+    refuses(
+      edited("\npackages:\n\n", "\npackages:\n<<<<<<< HEAD\n"),
+      /line 16: expected a top-level key/,
+    );
+  });
+
+  it("R6-03: refuses values that continue on the next line", () => {
+    const continued = (value: string) =>
+      edited(
+        `  undici-types@8.9.0:\n    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n`,
+        `  undici-types@8.9.0:\n    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n    deprecated: ${value}\n  young@1.0.0:\n    resolution: {integrity: sha512-AAAA}\n    x'\n`,
+      );
+    refuses(continued("'starts"), /line 22: a quoted value that continues/);
+    refuses(continued('"starts'), /line 22: a quoted value that continues/);
+    refuses(continued("{a: b,"), /line 22: a flow collection that continues/);
+    refuses(continued("[a,"), /line 22: a flow collection that continues/);
+  });
+
+  it("R6-03: refuses a value that continues on the next line in a section it does not read", () => {
+    // YAML would read packages: as part of the settings value, and pnpm would
+    // then take the resolution of the snapshot itself.
+    const text = edited("  excludeLinksFromLockfile: false\n", "  excludeLinksFromLockfile: 'x\n")
+      .replace(
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n`,
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n    engines:\n      y'\n`,
+      )
+      .replace(
+        "  undici-types@8.9.0: {}\n",
+        "  undici-types@8.9.0:\n    resolution: {integrity: sha512-AAAA, tarball: https://evil.example/u.tgz}\n",
+      );
+    refuses(text, /line 5: a quoted value that continues/);
+  });
+
+  it("R6-03: refuses anchors, aliases, tags and merge keys", () => {
+    const resolution = `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`;
+    refuses(edited(resolution, `    resolution: &r {integrity: sha512-AAAA}`), /line 21: .*anchor/);
+    refuses(edited(resolution, "    resolution: *r"), /line 21: .*anchor/);
+    refuses(
+      edited(resolution, `    resolution: !!map {integrity: sha512-AAAA}`),
+      /line 21: .*anchor/,
+    );
+    refuses(
+      edited(resolution, `${resolution}\n    <<: {deprecated: x}`),
+      /line 22: expected a field/,
+    );
+    refuses(edited("\n  undici-types@8.9.0:\n", "\n  <<:\n"), /line 20: .*key/);
+    refuses(
+      edited("\n  undici-types@8.9.0:\n", "\n  ? undici-types@8.9.0\n"),
+      /line 20: .*explicit key/,
+    );
+  });
+
+  it("R6-03: refuses an entry that is not a block mapping under its key", () => {
+    refuses(
+      edited("  undici-types@8.9.0:\n    resolution", "  undici-types@8.9.0:\n     resolution"),
+      /line 21: .*indent 5/,
+    );
+    refuses(
+      edited("  undici-types@8.9.0:\n    resolution", "  undici-types@8.9.0:\n      resolution"),
+      /line 21: .*indent 6/,
+    );
+    refuses(
+      edited(
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`,
+        "    resolution:\n      integrity: sha512-AAAA",
+      ),
+      /line 21: the resolution of undici-types@8\.9\.0 is not a one-line flow map/,
+    );
+    refuses(
+      edited(
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`,
+        "    resolution: {integrity: sha512-AAAA}\n    resolution: {integrity: sha512-BBBB}",
+      ),
+      /line 22: undici-types@8\.9\.0 has resolution twice/,
+    );
+    refuses(
+      edited(
+        "\n  undici-types@8.9.0:\n    resolution",
+        "\n  undici-types@8.9.0: {}\n    resolution",
+      ),
+      /line 20: .*no resolution|line 21/,
+    );
+  });
+
+  it("R6-03: breaks lines at a lone CR, as YAML does", async () => {
+    const text = edited(
+      "  undici-types@8.9.0:\n",
+      "  young@1.0.0:\r    resolution: {integrity: sha512-AAAA}\n\n  undici-types@8.9.0:\n",
+    ).replace("  undici-types@8.9.0: {}\n", "  undici-types@8.9.0: {}\n\n  young@1.0.0: {}\n");
+    expect(parseLockfile(text).map((p) => p.key)).toContain("young@1.0.0");
+  });
+
+  it("R6-03: reads block scalars, sequences and quoted values as pnpm writes them", () => {
+    const text = edited(
+      `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}\n`,
+      [
+        `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}, tarball: 'https://registry.npmjs.org/undici-types/-/undici-types-8.9.0.tgz'}`,
+        "    engines: {node: '>=14.17', npm: ^9 || >=10}",
+        "    cpu: [x64, arm64]",
+        "    deprecated: |-",
+        "      Don't use this; see #12:",
+        "        '  {unbalanced [",
+        "",
+        "      undici-types@9.0.0: still the message",
+        "    hasBin: true",
+        "",
+      ].join("\n"),
+    ).replace(
+      "    dependencies:\n      undici-types: 8.9.0\n",
+      "    dependencies:\n      undici-types: 8.9.0\n    transitivePeerDependencies:\n      - supports-color\n      - '@types/react'\n",
+    );
+    expect(parseLockfile(text)).toEqual([
+      expect.objectContaining({ key: "@types/node@26.6.6", registry: true }),
+      expect.objectContaining({ key: "undici-types@8.9.0", registry: true }),
+    ]);
+  });
+
+  it("R6-03: reads a resolution as YAML does, not split on ', '", () => {
+    const text = edited(
+      `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY}}`,
+      `    resolution: {integrity: ${UNDICI_TYPES_INTEGRITY},tarball: https://evil.example/undici-types-8.9.0.tgz}`,
+    );
+    expect(parseLockfile(text)).toMatchObject([
+      { key: "@types/node@26.6.6", registry: true },
+      { key: "undici-types@8.9.0", registry: false },
+    ]);
+  });
+
+  it("R6-03: refuses a snapshot without an entry in packages", () => {
+    // pnpm merges each snapshot with its packages entry; without one it would
+    // take the snapshot's own fields, a resolution among them.
+    const text = edited(
+      "  undici-types@8.9.0: {}\n",
+      "  undici-types@8.9.0: {}\n\n  young@1.0.0(react@19.0.0):\n    resolution: {tarball: https://evil.example/young.tgz}\n",
+    );
+    refuses(text, /line 31: snapshot young@1\.0\.0\(react@19\.0\.0\) has no entry in packages/);
+  });
+
+  it("R6-03: matches snapshots with peer and patch suffixes to their packages entry", () => {
+    const text = edited(
+      "  undici-types@8.9.0: {}\n",
+      "  undici-types@8.9.0(patch_hash=abc123)(react@19.0.0(scheduler@0.25.0)): {}\n",
+    );
+    expect(parseLockfile(text)).toHaveLength(2);
+  });
+
+  it("R6-03: refuses an importer version without an entry in packages", () => {
+    refuses(
+      edited("        version: 26.6.6\n", "        version: 26.6.7\n"),
+      /line 13: .*@types\/node@26\.6\.7, which has no entry in packages/,
+    );
+    refuses(
+      edited("        specifier: 26.6.6\n        version: 26.6.6\n", "        specifier: 26.6.6\n"),
+      /line 11: dependency @types\/node of importer \. has no version/,
+    );
+    refuses(
+      edited(
+        "    dependencies:\n      '@types/node':\n        specifier: 26.6.6\n        version: 26.6.6\n",
+        "    dependencies: {'@types/node': {specifier: 26.6.6, version: 26.6.7}}\n",
+      ),
+      /line 10: .*dependencies of importer \. as a block/,
+    );
+  });
+
+  it("R6-03: resolves importer versions as pnpm does: links, aliases and peer suffixes", () => {
+    const text = edited(
+      "        version: 26.6.6\n",
+      [
+        "        version: 26.6.6(undici-types@8.9.0)",
+        "      types-alias:",
+        "        specifier: npm:undici-types@8.9.0",
+        "        version: undici-types@8.9.0",
+        "      '@virga/graph':",
+        "        specifier: workspace:*",
+        "        version: link:../../packages/graph",
+        "",
+      ].join("\n"),
+    );
+    expect(parseLockfile(text)).toHaveLength(2);
   });
 });
 
