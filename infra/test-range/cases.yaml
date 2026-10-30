@@ -1,0 +1,408 @@
+# Seeded cases of the Virga test range: the expected result of every phase 1
+# rule on the range, for phase 1 gate 3 ("every phase 1 rule hits its seeded
+# case and stays quiet on the clean counterpart", implementation plan).
+#
+# How a check reads this file:
+# - `case` is a key of the Terraform output `subjects`
+#   (`terraform output -json subjects`), which gives the graph node ID of the
+#   case's subject. The finding to look for is `<rule>:<subject>`.
+# - `expect` is the rule's result for that subject in a full scan of the
+#   range:
+#     hit        a decided row (decided = 1); the finding opens
+#     undecided  a row with decided = 0; no finding opens
+#     quiet      no row for the subject
+# - `ready_after_days`: the case reaches `expect` only in a scan that starts
+#   at least this many days after apply. Before that it is quiet.
+# - `severity` is the severity of a hit. `severity_later` is a change that
+#   comes with time alone.
+# - `depends_on` names an open spike or decision that can change the result;
+#   `otherwise` is the result to expect if it goes the other way.
+# - A rule that is `not_evaluated` (a class it requires was not complete)
+#   fails the check: it is neither a hit nor quiet. Onboard the range with the
+#   inventory profile of the operator guide.
+# - Any other row of a phase 1 rule in the range is unexpected, except those
+#   under `known_extra`. The range is built so that each rule reports only
+#   its seeded cases.
+#
+# Not validated: the Terraform files have not been run through
+# `terraform validate`, planned or applied yet (README.md).
+
+version: 1
+provider: cloudflare/cloudflare 5.28.0
+validated: false
+
+# Shared by several cases (main.tf): the Allow policy for one address that
+# protects the entry points of cf002-*, cf004-clean, cf011-clean and
+# cf021-clean. It admits var.access_allowed_email and is never a subject.
+shared_resources:
+  - cloudflare_zero_trust_access_policy.allow_named_email
+
+known_extra:
+  - rule: CF-003
+    subject: the account token Terraform runs with
+    when: >
+      It is an account API token with a write permission, no expiry or more
+      than 90 days to it, and no IP condition.
+    avoid: >
+      Run Terraform with a user API token, or with an account API token that
+      expires within 90 days (README.md).
+
+rules:
+  - rule: CF-001
+    phase: 2
+    placeholder: true
+    file: cf001.tf
+    note: >
+      Phase 2 rule; no case is seeded yet. The phase 2 gate needs a public
+      Worker with a vulnerable package, its service binding variant and clean
+      counterparts. They need the phase 2 collectors and a Wrangler deploy for
+      package metadata the bundle confirms (cf001.tf).
+    cases: []
+
+  - rule: CF-002
+    phase: 1
+    file: cf002.tf
+    fix: ../../rules/CF-002/fix/
+    cases:
+      - case: cf002-seeded
+        role: seeded
+        subject_type: worker_script
+        setup: >
+          Worker with a Custom Domain behind an Access app (Allow for one
+          address) and its workers.dev URL on, without Access.
+        resources:
+          - cloudflare_workers_script.cf002_seeded
+          - cloudflare_workers_script_subdomain.cf002_seeded
+          - cloudflare_workers_custom_domain.cf002_seeded
+          - cloudflare_zero_trust_access_application.cf002_seeded
+        expect: hit
+        severity: high
+      - case: cf002-clean
+        role: clean
+        subject_type: worker_script
+        setup: The same Worker with workers.dev and preview URLs off.
+        resources:
+          - cloudflare_workers_script.cf002_clean
+          - cloudflare_workers_script_subdomain.cf002_clean
+          - cloudflare_workers_custom_domain.cf002_clean
+          - cloudflare_zero_trust_access_application.cf002_clean
+        expect: quiet
+
+  - rule: CF-003
+    phase: 1
+    file: cf003.tf
+    fix: ../../rules/CF-003/fix/
+    cases:
+      - case: cf003-seeded
+        role: seeded
+        subject_type: account_token
+        setup: >
+          Account token with Workers Routes Write on the range's zone, no
+          expiry, and an IP condition whose `in` list also holds 240.0.0.0/4,
+          which is wider than /8 and so limits nothing for the rule.
+        resources:
+          - cloudflare_account_token.cf003_seeded
+        expect: hit
+        severity: high
+        severity_later:
+          after_days: 90
+          severity: critical
+          reason: >
+            The token is never used, so 90 days after it was issued it counts
+            as unused for 90 days.
+        note: >
+          A token without any IP condition is not seeded: it would be a
+          working credential. Rule fixtures cover that case.
+      - case: cf003-clean
+        role: clean
+        subject_type: account_token
+        setup: >
+          The same token with an `in` list of 192.0.2.0/24 and 2001:db8::/32
+          only, which the rule counts as an IP restriction.
+        resources:
+          - cloudflare_account_token.cf003_clean
+        expect: quiet
+
+  - rule: CF-004
+    phase: 1
+    file: cf004.tf
+    fix: ../../rules/CF-004/fix/
+    cases:
+      - case: cf004-seeded
+        role: seeded
+        subject_type: tunnel_hostname
+        setup: >
+          Public hostname in the remotely managed ingress of a tunnel, with an
+          SSH origin and no Access app.
+        resources:
+          - cloudflare_zero_trust_tunnel_cloudflared.cf004
+          - cloudflare_zero_trust_tunnel_cloudflared_config.cf004
+          - cloudflare_dns_record.cf004_seeded
+        expect: hit
+        severity: critical
+      - case: cf004-clean
+        role: clean
+        subject_type: tunnel_hostname
+        setup: >
+          A second hostname of the same tunnel, same kind of origin, behind an
+          Access app with an Allow policy for one address.
+        resources:
+          - cloudflare_zero_trust_tunnel_cloudflared_config.cf004
+          - cloudflare_zero_trust_access_application.cf004_clean
+          - cloudflare_dns_record.cf004_clean
+        expect: quiet
+
+  - rule: CF-007
+    phase: 1
+    file: cf007.tf
+    fix: ../../rules/CF-007/fix/
+    cases:
+      - case: cf007-seeded
+        role: seeded
+        subject_type: dns_record
+        setup: >
+          Unproxied A record to 203.0.113.10, the address of a proxied A
+          record. No Access app covers the proxied host.
+        resources:
+          - cloudflare_dns_record.cf007_seeded_origin
+          - cloudflare_dns_record.cf007_seeded_proxied
+        expect: hit
+        severity: medium
+      - case: cf007-clean
+        role: clean
+        subject_type: dns_record
+        setup: The same pair of records to 203.0.113.20, both proxied.
+        resources:
+          - cloudflare_dns_record.cf007_clean_origin
+          - cloudflare_dns_record.cf007_clean_proxied
+        expect: quiet
+
+  - rule: CF-009
+    phase: 1
+    file: cf009.tf
+    fix: ../../rules/CF-009/fix/
+    made_by: >
+      Terraform cannot create traffic. An hourly cron trigger on cf009-live
+      stands in for it: every run is an invocation in the 30-day window of the
+      traffic collector. No manual step is needed, but the first scan must
+      start after the first cron run. If gate 3 finds `invocations_30d` 0 on
+      cf009-live, cron runs do not count as invocations, and the seeded case
+      needs another live user of the namespace (for example a Pages
+      production binding).
+    cases:
+      - case: cf009-seeded
+        role: seeded
+        subject_type: worker_script
+        setup: >
+          Idle Worker without triggers or entry points, bound to a KV
+          namespace that the live Worker binds too.
+        resources:
+          - cloudflare_workers_script.cf009_seeded
+          - cloudflare_workers_script_subdomain.cf009_seeded
+          - cloudflare_workers_kv_namespace.cf009_shared
+        expect: hit
+        severity: low
+        ready_after_days: 30
+        note: The rule counts a Worker only once it was created 30 days before the scan.
+      - case: cf009-clean
+        role: clean
+        subject_type: worker_script
+        setup: Idle Worker bound only to a namespace of its own.
+        resources:
+          - cloudflare_workers_script.cf009_clean
+          - cloudflare_workers_script_subdomain.cf009_clean
+          - cloudflare_workers_kv_namespace.cf009_clean_own
+        expect: quiet
+      - case: cf009-live
+        role: support
+        subject_type: worker_script
+        setup: Worker on an hourly cron trigger, bound to the shared namespace.
+        resources:
+          - cloudflare_workers_script.cf009_live
+          - cloudflare_workers_script_subdomain.cf009_live
+          - cloudflare_workers_cron_trigger.cf009_live
+        expect: quiet
+
+  - rule: CF-010
+    phase: 1
+    file: cf010.tf
+    fix: ../../rules/CF-010/fix/
+    cases:
+      - case: cf010-seeded
+        role: seeded
+        subject_type: access_policy
+        setup: >
+          Allow policy that includes Everyone, on the Access app of a Worker's
+          Custom Domain; the Worker binds a KV namespace.
+        resources:
+          - cloudflare_zero_trust_access_policy.cf010_seeded
+          - cloudflare_zero_trust_access_application.cf010_seeded
+          - cloudflare_workers_script.cf010_seeded
+          - cloudflare_workers_script_subdomain.cf010_seeded
+          - cloudflare_workers_custom_domain.cf010_seeded
+          - cloudflare_workers_kv_namespace.cf010_seeded
+        expect: hit
+        severity: critical
+      - case: cf010-clean
+        role: clean
+        subject_type: access_policy
+        setup: The same setup with an Allow policy for one address.
+        resources:
+          - cloudflare_zero_trust_access_policy.cf010_clean
+          - cloudflare_zero_trust_access_application.cf010_clean
+          - cloudflare_workers_script.cf010_clean
+          - cloudflare_workers_script_subdomain.cf010_clean
+          - cloudflare_workers_custom_domain.cf010_clean
+          - cloudflare_workers_kv_namespace.cf010_clean
+        expect: quiet
+
+  - rule: CF-011
+    phase: 1
+    file: cf011.tf
+    fix: ../../rules/CF-011/fix/
+    cases:
+      - case: cf011-seeded
+        role: seeded
+        subject_type: access_policy
+        setup: >
+          Bypass policy for Everyone on an Access app that covers the whole
+          host of a Worker's Custom Domain; the Worker binds a KV namespace.
+        resources:
+          - cloudflare_zero_trust_access_policy.cf011_seeded
+          - cloudflare_zero_trust_access_application.cf011_seeded
+          - cloudflare_workers_script.cf011_seeded
+          - cloudflare_workers_script_subdomain.cf011_seeded
+          - cloudflare_workers_custom_domain.cf011_seeded
+          - cloudflare_workers_kv_namespace.cf011_seeded
+        expect: hit
+        severity: high
+      - case: cf011-clean
+        role: clean
+        subject_type: access_policy
+        setup: >
+          The host's app has an Allow policy for one address; the Bypass
+          policy (the subject) sits on a separate path app for /assets.
+        resources:
+          - cloudflare_zero_trust_access_policy.cf011_clean_assets
+          - cloudflare_zero_trust_access_application.cf011_clean_assets
+          - cloudflare_zero_trust_access_application.cf011_clean
+          - cloudflare_workers_script.cf011_clean
+          - cloudflare_workers_script_subdomain.cf011_clean
+          - cloudflare_workers_custom_domain.cf011_clean
+          - cloudflare_workers_kv_namespace.cf011_clean
+        expect: quiet
+
+  - rule: CF-021
+    phase: 1
+    file: cf021.tf
+    fix: ../../rules/CF-021/fix/
+    cases:
+      - case: cf021-seeded
+        role: seeded
+        subject_type: r2_bucket
+        setup: Empty bucket with its managed r2.dev domain on.
+        resources:
+          - cloudflare_r2_bucket.cf021_seeded
+          - cloudflare_r2_managed_domain.cf021_seeded
+        expect: hit
+        severity: high
+      - case: cf021-clean
+        role: clean
+        subject_type: r2_bucket
+        setup: >
+          Empty bucket with r2.dev off and a custom domain behind an Access app
+          with an Allow policy for one address.
+        resources:
+          - cloudflare_r2_bucket.cf021_clean
+          - cloudflare_r2_managed_domain.cf021_clean
+          - cloudflare_r2_custom_domain.cf021_clean
+          - cloudflare_zero_trust_access_application.cf021_clean
+        expect: quiet
+
+  - rule: CF-022
+    phase: 1
+    file: cf022.tf
+    fix: ../../rules/CF-022/fix/
+    cases:
+      - case: cf022-seeded
+        role: seeded
+        subject_type: pages_project
+        setup: >
+          Direct-upload Pages project (previews on by default, no Access)
+          whose preview and production environments bind the same D1
+          database.
+        resources:
+          - cloudflare_pages_project.cf022_seeded
+          - cloudflare_d1_database.cf022_shared
+        expect: hit
+        severity: medium
+      - case: cf022-clean
+        role: clean
+        subject_type: pages_project
+        setup: The same project with a separate D1 database for previews.
+        resources:
+          - cloudflare_pages_project.cf022_clean
+          - cloudflare_d1_database.cf022_clean_production
+          - cloudflare_d1_database.cf022_clean_preview
+        expect: quiet
+
+  - rule: CF-024
+    phase: 1
+    file: cf024.tf
+    fix: ../../rules/CF-024/fix/
+    cases:
+      - case: cf024-worker-seeded
+        role: seeded
+        subject_type: worker_script
+        setup: >
+          Worker with a synthetic `cfat_` value in the plain_text binding
+          CF_API_TOKEN, next to LOG_LEVEL = info.
+        resources:
+          - cloudflare_workers_script.cf024_worker_seeded
+          - cloudflare_workers_script_subdomain.cf024_worker_seeded
+        expect: hit
+        severity: medium
+      - case: cf024-worker-clean
+        role: clean
+        subject_type: worker_script
+        setup: The same Worker with CF_API_TOKEN as a secret_text binding.
+        resources:
+          - cloudflare_workers_script.cf024_worker_clean
+          - cloudflare_workers_script_subdomain.cf024_worker_clean
+        expect: quiet
+      - case: cf024-pages-seeded
+        role: seeded
+        subject_type: pages_project
+        setup: >
+          Pages project with a synthetic `cfat_` value in the plain_text
+          production variable CF_API_TOKEN, next to SITE_NAME in both
+          environments.
+        resources:
+          - cloudflare_pages_project.cf024_pages_seeded
+        expect: hit
+        severity: medium
+        depends_on:
+          - id: S-05
+            question: >
+              Does an inventory token with Pages Metadata Read get the values
+              of plain-text env vars (decision 0004)?
+            otherwise: undecided
+      - case: cf024-pages-clean
+        role: clean
+        subject_type: pages_project
+        setup: The same project with CF_API_TOKEN as secret_text.
+        resources:
+          - cloudflare_pages_project.cf024_pages_clean
+        expect: quiet
+        depends_on:
+          - id: S-05
+            question: >
+              Does an inventory token with Pages Metadata Read get the values
+              of plain-text env vars (decision 0004)? Without them SITE_NAME
+              cannot be judged.
+            otherwise: undecided
+    note: >
+      If S-05 finds that the response has no env_vars object at all, every
+      Pages project of the range is undecided for CF-024, the CF-022 projects
+      included (their environments are then recorded as unread). Decision
+      0004 then moves Pages to a rule of its own.

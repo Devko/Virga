@@ -1,0 +1,12 @@
+// CF-002 fix template for the Worker's Wrangler config. A template, not a diff
+// (A-14): merge these keys into your own wrangler.jsonc and replace the values
+// in angle brackets.
+// Test range: turns case cf002-seeded into cf002-clean (infra/test-range/cf002.tf).
+{
+  "name": "<WORKER_NAME>",
+  // No workers.dev URL, and no version or alias preview URLs.
+  "workers_dev": false,
+  "preview_urls": false,
+  // Keep the entry points that an Access app protects.
+  "routes": [{ "pattern": "<HOSTNAME>", "custom_domain": true }]
+}

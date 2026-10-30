@@ -1,0 +1,13 @@
+// CF-024 fix template for a Worker's or Pages project's Wrangler config. A
+// template, not a diff (A-14): merge these keys into your own wrangler.jsonc
+// and replace the values in angle brackets.
+// Test range: turns cases cf024-worker-seeded and cf024-pages-seeded into
+// cf024-worker-clean and cf024-pages-clean (infra/test-range/cf024.tf).
+{
+  "name": "<WORKER_OR_PROJECT_NAME>",
+  // Only values that are no secret stay in vars. <VARIABLE_NAME> is gone from
+  // here; store its new, rotated value as a secret instead:
+  //   Workers: wrangler secret put <VARIABLE_NAME>
+  //   Pages:   wrangler pages secret put <VARIABLE_NAME> --project-name <PROJECT_NAME>
+  "vars": { "LOG_LEVEL": "info" }
+}
