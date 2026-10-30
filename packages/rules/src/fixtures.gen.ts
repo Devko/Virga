@@ -3211,6 +3211,119 @@ export const FIXTURES: readonly RuleFixture[] = [
   },
   {
     "rule": "CF-004",
+    "name": "negative-origin-enforced-access",
+    "description": "cloudflared requires an Access token for both hostnames. No Access app covers the SSH hostname, and a Bypass for everyone covers the wiki; Access alone would leave both public. The evaluator decides them access with confidence 1, decided by the tunnel hostname, and CF-004 follows the exposure rows.\n",
+    "nodes": [
+      {
+        "type": "tunnel",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+        "name": "office",
+        "props": {
+          "tunnel_type": "cfd_tunnel",
+          "status": "healthy",
+          "config_src": "cloudflare"
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "name": "ssh.example.com",
+        "props": {
+          "hostname": "ssh.example.com",
+          "path": "",
+          "service": "ssh://localhost:22",
+          "origin_scheme": "ssh",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": true
+        }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com",
+        "name": "wiki.example.com",
+        "props": {
+          "hostname": "wiki.example.com",
+          "path": "",
+          "service": "http://localhost:8080",
+          "origin_scheme": "http",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": true
+        }
+      },
+      {
+        "type": "access_app",
+        "id": "app-wiki",
+        "name": "Wiki",
+        "props": {
+          "app_type": "self_hosted",
+          "targets": [
+            {
+              "kind": "hostname",
+              "host": "wiki.example.com",
+              "path": "",
+              "overrides": []
+            }
+          ],
+          "session_duration": "24h",
+          "allowed_idps": []
+        }
+      },
+      {
+        "type": "access_policy",
+        "id": "pol-public",
+        "name": "Public",
+        "props": {
+          "decision": "bypass",
+          "include": [
+            {
+              "kind": "everyone",
+              "value": null
+            }
+          ],
+          "require": [],
+          "exclude": [],
+          "session_duration": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ALLOWS",
+        "src": "access_policy:pol-public",
+        "dst": "access_app:app-wiki",
+        "props": {
+          "precedence": 1
+        }
+      }
+    ],
+    "exposure": [
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:ssh.example.com",
+        "decision": "access",
+        "confidence": 1
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:wiki.example.com",
+        "decision": "access",
+        "confidence": 1
+      }
+    ],
+    "vulns": [],
+    "signals": [],
+    "expect": []
+  },
+  {
+    "rule": "CF-004",
     "name": "negative-protected-or-unknown",
     "description": "Access protects the SSH hostname and Service Auth the API. The evaluator could not decide a third hostname, which only answers with a status code: it would not qualify even if it were public, so it is not undecided either.\n",
     "nodes": [
@@ -3506,7 +3619,7 @@ export const FIXTURES: readonly RuleFixture[] = [
   {
     "rule": "CF-004",
     "name": "undecided-unknown-exposure",
-    "description": "The evaluator could not decide the database hostname, nor the /internal path of a web app that Access protects otherwise. Either would qualify if it were public, so both rows are undecided. On a third hostname the evaluator could not decide /, but /api is public, which decides it.\n",
+    "description": "The evaluator could not decide the database hostname, nor the /internal path of a web app that Access protects otherwise. Either would qualify if it were public, so both rows are undecided. On a third hostname the evaluator could not decide /, but /api is public, which decides it. The evaluator leaves the grafana hostname unknown although cloudflared requires an Access token for it; CF-004 does not decide what the evaluator left open, so that row is undecided too.\n",
     "nodes": [
       {
         "type": "tunnel",
@@ -3556,6 +3669,19 @@ export const FIXTURES: readonly RuleFixture[] = [
           "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
           "access_required": false
         }
+      },
+      {
+        "type": "tunnel_hostname",
+        "id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "name": "grafana.example.com",
+        "props": {
+          "hostname": "grafana.example.com",
+          "path": "",
+          "service": "http://localhost:3000",
+          "origin_scheme": "http",
+          "tunnel_id": "c1744f8b-faa1-48a4-9e5c-02ac921467fa",
+          "access_required": true
+        }
       }
     ],
     "edges": [
@@ -3572,6 +3698,11 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "type": "ROUTES_TO",
         "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
+        "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
+      },
+      {
+        "type": "ROUTES_TO",
+        "src": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
         "dst": "tunnel:c1744f8b-faa1-48a4-9e5c-02ac921467fa"
       }
     ],
@@ -3602,6 +3733,11 @@ export const FIXTURES: readonly RuleFixture[] = [
         "path": "/api",
         "decision": "public",
         "confidence": 2
+      },
+      {
+        "entry": "tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "decision": "unknown",
+        "confidence": 0
       }
     ],
     "vulns": [],
@@ -3618,6 +3754,10 @@ export const FIXTURES: readonly RuleFixture[] = [
       {
         "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:mixed.example.com",
         "severity": "high"
+      },
+      {
+        "fingerprint": "CF-004:tunnel_hostname:c1744f8b-faa1-48a4-9e5c-02ac921467fa:grafana.example.com",
+        "decided": false
       }
     ]
   },
