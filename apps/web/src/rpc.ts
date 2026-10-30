@@ -77,6 +77,11 @@ export interface EdgeView {
 
 export interface CoverageView {
   resourceClass: string;
+  /**
+   * `complete`, `partial`, `no_permission`, `error` or `skipped`. A `partial`
+   * class may have every chunk done: then a chunk left resources out, and
+   * `detail` reads `truncated (<count>): <reasons>` (decision 0005).
+   */
   status: string;
   chunksTotal: number;
   chunksDone: number;
