@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { parseJsonc } from "./jsonc.ts";
+import { dotEnvFiles, dotEnvProblem } from "./run.ts";
 
 export interface ServiceBinding {
   binding: string;
@@ -125,6 +126,10 @@ export function readWorkerConfig(root: string, app: string): WorkerConfig | null
         )
         .join("\n"),
     );
+  }
+  const dotEnv = dotEnvFiles(dir);
+  if (dotEnv.length > 0) {
+    throw new ConfigError(dotEnv.map((path) => dotEnvProblem(show(path))).join("\n"));
   }
   let raw: unknown;
   try {
