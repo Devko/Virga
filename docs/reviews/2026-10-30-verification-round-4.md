@@ -2,7 +2,19 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 2 review](2026-10-30-security-review.md) fixed? (2) review of the round 3 changes, at commit c5f076c
-- Status: new findings R4-01 to R4-07 open; fixes are planned in round 5 of the [work packages](../team/work-packages.md)
+- Status: R4-01 to R4-07 fixed in round 5 of the [work packages](../team/work-packages.md), except the collector half of R4-02 (an `r2.dev` domain whose `enabled` cannot be read), which is planned in round 6. No review has verified the round 5 fixes yet: the [round 5 verification](2026-10-30-verification-round-5.md) reviewed the round 4 code.
+
+| Finding | Fixed by | Commits | Test |
+| --- | --- | --- | --- |
+| R4-01 | `fix-exposure-3` | 0597e12, 6f7d3a8, 913dea0 | `packages/exposure/test/evaluate.test.ts` (seven R4-01 cases: a narrower Bypass, any policy order, an undecided issuer, tied apps, a public override path) |
+| R4-02 | `fix-rules-3` (CF-021 version 3) | 953f00b | `packages/rules/test/cf021.test.ts` (R4-02 tests), fixture `rules/CF-021/fixtures/undecided-unknown-enabled-state.yaml`. Open: the storage collector still emits the `r2.dev` domain only when `enabled` is `true` (round 6, `tunnels-limits`) |
+| R4-03 | `fix-core-3` | a43844e | `apps/core/test/run.test.ts` (three R4-03 tests), `apps/core/test/workflow.test.ts` (two), `apps/core/test/admin.test.ts` (one) |
+| R4-04 | `fix-rules-3` | 13fff70 | `packages/rules/test/compile.test.ts` (R4-04 tests, including the review's copy of CF-004 without `exposure` in `requires`) |
+| R4-05 | `fix-rules-3` | 13fff70 | `packages/rules/test/compile.test.ts` (R4-05 tests: writes behind a CTE, with and without `RETURNING`) |
+| R4-06 | `fix-rules-3` (tokens collector, CF-003 version 3) | 7fd8fa4, 9011540, 1d2b9a9 | `packages/collectors/test/identity/tokens-cidr.test.ts`, `packages/rules/test/cf003.test.ts` (R4-06 tests), CF-003 fixtures `positive-ip-allow-list-mapped-spellings` and `negative-restricted-in-any-spelling` |
+| R4-07 | `supply-chain` | d51727c, 802ba2c, e256124, 0dc42f6 | `scripts/test/check-release-age.test.ts` (R4-07 tests, including the CI job order); `pnpm check:release-age` passes on the re-resolved lockfile |
+
+The R4-07 lockfile went back to body-parser 2.3.0 and fast-uri 3.1.8, which have published advisories; the patched versions are younger than 14 days. Whether to add an exception is open for the maintainer ([work packages](../team/work-packages.md), round 5 status).
 
 ## Summary
 
