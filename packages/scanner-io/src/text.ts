@@ -30,21 +30,62 @@ export const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:+-]*$/;
 
 /**
+ * Characters that render as nothing: Unicode's Default_Ignorable_Code_Point
+ * (DerivedCoreProperties.txt), written out so that every runtime refuses the
+ * same set. Zero-width spaces and joiners, the word joiner, the byte order
+ * mark, fillers, variation selectors and tag characters can hide text or
+ * make two different names look the same (R9 hardening). The set includes
+ * the bidi controls. A test compares it with the engine's
+ * `\p{Default_Ignorable_Code_Point}`.
+ */
+const INVISIBLE: readonly (readonly [number, number])[] = [
+  [0x00ad, 0x00ad], // soft hyphen
+  [0x034f, 0x034f], // combining grapheme joiner
+  [0x061c, 0x061c], // Arabic letter mark
+  [0x115f, 0x1160], // Hangul fillers
+  [0x17b4, 0x17b5], // Khmer inherent vowels
+  [0x180b, 0x180f], // Mongolian variation selectors and vowel separator
+  [0x200b, 0x200f], // zero-width space, joiners, direction marks
+  [0x202a, 0x202e], // bidi embeddings and overrides
+  [0x2060, 0x206f], // word joiner, invisible operators, isolates, deprecated formats
+  [0x3164, 0x3164], // Hangul filler
+  [0xfe00, 0xfe0f], // variation selectors
+  [0xfeff, 0xfeff], // zero-width no-break space, byte order mark
+  [0xffa0, 0xffa0], // halfwidth Hangul filler
+  [0xfff0, 0xfff8], // unassigned specials
+  [0x1bca0, 0x1bca3], // shorthand format controls
+  [0x1d173, 0x1d17a], // musical formatting
+  [0xe0000, 0xe0fff], // tags and variation selectors supplement
+];
+
+/** True when the code point renders as nothing (Default_Ignorable_Code_Point). */
+export function isInvisible(cp: number): boolean {
+  if (cp < 0x00ad) return false;
+  for (const [low, high] of INVISIBLE) {
+    if (cp < low) return false;
+    if (cp <= high) return true;
+  }
+  return false;
+}
+
+/**
  * True when `text` has no C0 or C1 control character, no lone surrogate, no
- * bidi control (Trojan Source) and no line or paragraph separator.
+ * line or paragraph separator and no invisible character (`INVISIBLE`,
+ * which holds the bidi controls of Trojan Source).
  */
 export function isCleanText(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return false;
-    if (c === 0x061c || c === 0x200e || c === 0x200f) return false;
-    if ((c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) return false;
     if (c === 0x2028 || c === 0x2029) return false;
     if (c >= 0xdc00 && c <= 0xdfff) return false;
     if (c >= 0xd800 && c <= 0xdbff) {
       const next = text.charCodeAt(i + 1);
       if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      if (isInvisible(((c - 0xd800) << 10) + (next - 0xdc00) + 0x10000)) return false;
       i++;
+    } else if (isInvisible(c)) {
+      return false;
     }
   }
   return true;

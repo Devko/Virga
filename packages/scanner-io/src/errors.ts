@@ -19,7 +19,10 @@ export const REJECTION_REASONS = [
   "duplicate_key",
   "wrong_type",
   "missing_field",
-  /** A string with a control character, a lone surrogate or a bidi control. */
+  /**
+   * A string with a control character, a lone surrogate or an invisible
+   * character (bidi controls included).
+   */
   "invalid_text",
   /** A string that breaks its pattern (ID, purl, label, severity). */
   "invalid_format",

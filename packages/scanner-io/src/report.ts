@@ -68,12 +68,18 @@ const packageKey = (p: ScannedPackage): string =>
 const maxRank = (a: SeverityRank | null, b: SeverityRank | null): SeverityRank | null =>
   a === null ? b : b === null ? a : a > b ? a : b;
 
+/** A match while it is collected; the sets are made when the first item comes. */
 interface Match {
-  packageKey: string;
-  id: string;
-  aliases: Set<string>;
+  aliases: Set<string> | null;
   severity: SeverityRank | null;
-  fixed: Set<string>;
+  fixed: Set<string> | null;
+}
+
+/** A stored package: its sort key, kept once, and its matches by advisory ID. */
+interface Entry {
+  key: string;
+  pkg: ScannedPackage;
+  matches: Map<string, Match>;
 }
 
 /**
@@ -82,14 +88,21 @@ interface Match {
  * entry seen wins. A vulnerability match is identified by package and ID;
  * merged matches take the higher severity and the union of aliases and
  * fixed versions. The result is sorted, so equal input gives equal output.
+ *
+ * No key repeats a long string per entry: matches hang off their package
+ * and secrets off their file. A key built from the package key and the ID
+ * copied a 900-character key once per match (R9-06).
  */
 export class ReportBuilder {
   readonly tool: Tool;
   readonly limits: Limits;
   readonly fields: Fields;
-  private readonly packages = new Map<string, ScannedPackage>();
-  private readonly matches = new Map<string, Match>();
-  private readonly secrets = new Map<string, SecretFinding>();
+  private readonly packages = new Map<string, Entry>();
+  private readonly entries = new Map<ScannedPackage, Entry>();
+  private matchCount = 0;
+  /** Secrets by file, then by lines, rule and prefix. */
+  private readonly secrets = new Map<string, Map<string, SecretFinding>>();
+  private secretCount = 0;
 
   constructor(tool: Tool, limits: Limits, fields: Fields) {
     this.tool = tool;
@@ -99,13 +112,21 @@ export class ReportBuilder {
 
   /** Adds a package, or returns the one already known under its key. */
   addPackage(pkg: ScannedPackage): ScannedPackage {
+    return this.entry(pkg).pkg;
+  }
+
+  private entry(pkg: ScannedPackage): Entry {
+    const stored = this.entries.get(pkg);
+    if (stored) return stored;
     const key = packageKey(pkg);
     const known = this.packages.get(key);
     if (known) return known;
     if (this.packages.size >= this.limits.maxPackages) this.fields.fail("too_many_items", "/");
     const copy = { purl: pkg.purl, ecosystem: pkg.ecosystem, name: pkg.name, version: pkg.version };
-    this.packages.set(key, copy);
-    return copy;
+    const entry: Entry = { key, pkg: copy, matches: new Map() };
+    this.packages.set(key, entry);
+    this.entries.set(copy, entry);
+    return entry;
   }
 
   addVulnerability(
@@ -115,22 +136,28 @@ export class ReportBuilder {
     severity: SeverityRank | null,
     fixed: readonly string[],
   ): void {
-    const known = this.addPackage(pkg);
-    const pkgKey = packageKey(known);
-    const key = `${pkgKey}\u0000${id}`;
-    let match = this.matches.get(key);
+    const entry = this.entry(pkg);
+    let match = entry.matches.get(id);
     if (!match) {
-      if (this.matches.size >= this.limits.maxVulnerabilities) {
+      if (this.matchCount >= this.limits.maxVulnerabilities) {
         this.fields.fail("too_many_items", "/");
       }
-      match = { packageKey: pkgKey, id, aliases: new Set(), severity: null, fixed: new Set() };
-      this.matches.set(key, match);
+      match = { aliases: null, severity: null, fixed: null };
+      entry.matches.set(id, match);
+      this.matchCount++;
     }
-    for (const alias of aliases) if (alias !== id) match.aliases.add(alias);
-    for (const version of fixed) match.fixed.add(version);
+    for (const alias of aliases) {
+      if (alias === id) continue;
+      match.aliases ??= new Set();
+      match.aliases.add(alias);
+    }
+    for (const version of fixed) {
+      match.fixed ??= new Set();
+      match.fixed.add(version);
+    }
     if (
-      match.aliases.size > FIELD_LIMITS.aliases ||
-      match.fixed.size > FIELD_LIMITS.fixedVersions
+      (match.aliases?.size ?? 0) > FIELD_LIMITS.aliases ||
+      (match.fixed?.size ?? 0) > FIELD_LIMITS.fixedVersions
     ) {
       this.fields.fail("too_many_items", "/");
     }
@@ -138,35 +165,37 @@ export class ReportBuilder {
   }
 
   addSecret(finding: SecretFinding): void {
-    const key = JSON.stringify([
-      finding.file,
-      finding.line,
-      finding.endLine,
-      finding.ruleId,
-      finding.prefix,
-    ]);
-    if (this.secrets.has(key)) return;
-    if (this.secrets.size >= this.limits.maxSecrets) this.fields.fail("too_many_items", "/");
-    this.secrets.set(key, { ...finding });
+    let byFile = this.secrets.get(finding.file);
+    const key = JSON.stringify([finding.line, finding.endLine, finding.ruleId, finding.prefix]);
+    if (byFile?.has(key)) return;
+    if (this.secretCount >= this.limits.maxSecrets) this.fields.fail("too_many_items", "/");
+    if (!byFile) {
+      byFile = new Map();
+      this.secrets.set(finding.file, byFile);
+    }
+    byFile.set(key, { ...finding });
+    this.secretCount++;
   }
 
   build(): ScanReport {
-    const packageKeys = [...this.packages.keys()].sort(compare);
-    const order = new Map(packageKeys.map((key, i) => [key, i]));
-    const packages = packageKeys.map((key) => ({ ...(this.packages.get(key) as ScannedPackage) }));
-    const vulnerabilities = [...this.matches.values()]
-      .sort(
-        (a, b) =>
-          (order.get(a.packageKey) ?? 0) - (order.get(b.packageKey) ?? 0) || compare(a.id, b.id),
-      )
-      .map((m) => ({
-        package: { ...(packages[order.get(m.packageKey) ?? 0] as ScannedPackage) },
-        id: m.id,
-        aliases: [...m.aliases].sort(compare),
-        severity: m.severity,
-        fixedVersions: [...m.fixed].sort(compare),
-      }));
-    const secrets = [...this.secrets.values()].sort(compareSecrets);
+    const entries = [...this.packages.values()].sort((a, b) => compare(a.key, b.key));
+    const packages = entries.map((e) => ({ ...e.pkg }));
+    const vulnerabilities: VulnerabilityMatch[] = [];
+    entries.forEach((entry, i) => {
+      for (const id of [...entry.matches.keys()].sort(compare)) {
+        const m = entry.matches.get(id) as Match;
+        vulnerabilities.push({
+          package: { ...(packages[i] as ScannedPackage) },
+          id,
+          aliases: m.aliases ? [...m.aliases].sort(compare) : [],
+          severity: m.severity,
+          fixedVersions: m.fixed ? [...m.fixed].sort(compare) : [],
+        });
+      }
+    });
+    const secrets = [...this.secrets.values()]
+      .flatMap((byFile) => [...byFile.values()])
+      .sort(compareSecrets);
     return { tool: this.tool, packages, vulnerabilities, secrets };
   }
 }

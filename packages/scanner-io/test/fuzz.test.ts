@@ -29,6 +29,7 @@ const FUZZ_LIMITS: Limits = resolveLimits({
   maxBytes: 256 * 1024,
   maxDepth: 16,
   maxValues: 20_000,
+  maxContainers: 2_000,
   maxArrayItems: 400,
   maxObjectKeys: 64,
   maxStringLength: 4096,
