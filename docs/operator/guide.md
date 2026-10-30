@@ -386,7 +386,7 @@ Where to look:
 The removal runs in this order:
 
 1. The broker deletes the stored token, then the account's rate budget (`TokenIntake.remove`). A scan that still runs gets no more API access.
-2. Core marks the account `removing` in the index, deletes its whole graph (nodes, history and findings), then its index rows (`accounts`, `scan_runs`) (`Admin.removeAccount`, R5-08). Until the last step the account stays listed with status `removing`; the UI marks it **removal pending**, hides **Start scan**, and offers **Remove account again…**, which finishes the removal. From the first step on, the dispatcher and **Start scan** start no scan of it, and a scan that begins then, for example one queued before the removal, stops at its first step without an API call or a write (R4-03). A scan that still runs is refused at its next write once the graph is deleted.
+2. Core marks the account `removing` in the index, deletes its whole graph (nodes, history and findings), then its index rows (`accounts`, `scan_runs`) (`Admin.removeAccount`, R5-08). Until the last step the account stays listed with status `removing`; the UI marks it **removal pending**, hides **Start scan**, and offers **Remove account again…**, which finishes the removal. When the graph of such an account can no longer be read, the account page shows the read error, still says that the removal is pending, and still offers **Remove account again…**. From the first step on, the dispatcher and **Start scan** start no scan of it, and a scan that begins then, for example one queued before the removal, stops at its first step without an API call or a write (R4-03). A scan that still runs is refused at its next write once the graph is deleted.
 
 | Response | Meaning |
 | --- | --- |

@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the findings of the [round 4 verification](2026-10-30-verification-round-4.md) (R4-01 to R4-07, fixed in round 5) and the [round 5 verification](2026-10-30-verification-round-5.md) (R5-01 to R5-08, fixed in round 6) fixed? (2) review of the round 5 and round 6 changes, at commit 3617367
-- Status: round 8 of the [work packages](../team/work-packages.md) fixed R6-01 (`deploy-build`), R6-02 (compiler half `rules-5`, run-time half the local integrator), R6-03 and R6-04 (`supply-chain-2`); not yet verified by a review. Open: R6-05, R6-06, R6-07
+- Status: round 8 of the [work packages](../team/work-packages.md) fixed all seven: R6-01 (`deploy-build`), R6-02 (compiler half `rules-5`, run-time half the local integrator), R6-03 and R6-04 (`supply-chain-2`), R6-05 and R6-06 (`collectors-5-shapes`, plus the integrator for R6-06 entries), R6-07 (`core-web-5`); not yet verified by a review
 
 | Finding | Fixed by | Commits | Test |
 | --- | --- | --- | --- |
@@ -10,6 +10,9 @@
 | R6-02 | `rules-5` (compiler), integrator (run time) | d58acd0, 334ed3c; 45b6c73 | `packages/rules/test/params.test.ts`, `compile.test.ts`, `compile-tail.test.ts` (`[x--];`, `[a;b]`, a tail); `apps/core/test/rules-runtime.test.ts` (two-statement rules on the Durable Object's SqlRunner end `error` and change nothing, in every order); `packages/rules/test/evaluate.test.ts` and `packages/graph/test/node.test.ts` (R6-02). [Decision 0006](../decisions/0006-read-only-rule-runs.md) |
 | R6-03 | `supply-chain-2` | 08d7bbf, 2573593 | `scripts/test/check-release-age.test.ts` (R6-03: flow-style entries, comments, other indents, integrity against the registry) |
 | R6-04 | `supply-chain-2` | ae4df81, 949b9d6 | `scripts/test/check-release-age.test.ts` (R6-04: a young pnpm in `packageManager`; every installing CI job needs the age check) |
+| R6-05 | `collectors-5-shapes` | b43b646, 2973411 | `packages/collectors/test/platform/pages.test.ts` and `workers.test.ts` (R6-05: plain_text values that are null, objects, arrays, numbers or booleans are uninspected), `secrets.test.ts`; e2e `apps/core/test/e2e/scan.test.ts` (scans `token-null-no-domain` and `token-object-no-domains`: the open CF-024 finding stays open as undecided) |
+| R6-06 | `collectors-5-shapes`, integrator (entries) | 95d90ba, 2973411, 93a0d4e | `packages/collectors/test/platform/storage.test.ts` (R6-06: a managed response without `domain` while not disabled, a custom response without a `domains` array, an enabled custom entry without `domain` fail the chunk); e2e (the same two scans: storage `partial`, CF-021 `not_evaluated`, its finding open) |
+| R6-07 | `core-web-5` | ae34908 | `apps/core/test/admin.test.ts` (R6-07: a scan refused after the account was removed and added again, and a run the index got after the re-add that began before it, leave the new account due); `index-db.test.ts` |
 
 ## Summary
 

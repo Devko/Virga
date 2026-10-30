@@ -11,7 +11,7 @@ The scan work package had to decide when an account is due, how to tell a hung s
 ## Decision
 
 - **Dispatch.** A dispatcher Workflow runs on a schedule on its binding, every hour at minute 17 (UTC). It selects due accounts from the index database and creates scan instances with `createBatch`, which skips IDs that already exist.
-- **Due rule.** An account is due when at least `cadence_hours` full UTC hours have passed since `last_scan_at`. `last_scan_at` is the start time of the last finished scan, whatever its outcome. The default cadence is 24 hours (D-09). Accounts whose removal has begun (`removing_at` set, R5-08) are never due.
+- **Due rule.** An account is due when at least `cadence_hours` full UTC hours have passed since `last_scan_at`. `last_scan_at` is the start time of the last finished scan, whatever its outcome. It counts only a run the index still holds and that began at or after the account was added (`created_at`), so a scan from before the account was removed and added again does not set it (R6-07). The default cadence is 24 hours (D-09). Accounts whose removal has begun (`removing_at` set, R5-08) are never due.
 - **Instance IDs.**
   - Scheduled scans: `scan-<accountId>-<yyyymmddhh>`, so one account gets at most one scheduled scan per hour.
   - Manual scans: `scan-<accountId>-<yyyymmddhhmm>-manual`.
