@@ -271,7 +271,15 @@ Known limits of the per-rule model, and which way each errs:
 | `expires_on` | string \| null | `null` means no expiry |
 | `not_before` | string \| null | |
 | `policies` | `Policy[]` | `{ effect, permission_groups: { id, name }[], resources: Record<string, string> }`. Nested resource maps from the API (`account -> resource -> value`) are flattened to their inner entries |
-| `ip_condition` | `{ in, not_in }` \| null | Arrays of CIDRs |
+| `ip_condition` | `{ in, not_in }` \| null | Arrays of CIDRs in canonical form (below); `null` when the token has no IP condition |
+
+`ip_condition` entries are canonical, so a rule sees one spelling per range (review R4-06):
+
+- IPv4 as a dotted quad; IPv6 as RFC 5952 text (lower case, no leading zeros, the longest run of two or more zero groups as `::`, the first of equal runs); IPv4-mapped IPv6 as `::ffff:a.b.c.d`; the prefix length in decimal.
+- Host bits and a missing prefix are kept.
+- Each list is deduplicated and sorted.
+- An entry that does not parse is kept as given, trimmed and cut to 64 characters with a trailing `…`. An entry that is not a string becomes `""`. Neither limits anything.
+- The original spellings are not stored. CF-003 parses every spelling itself, so it needs no raw field.
 
 Signal: `last_used_on` (epoch ms, `null` when never used).
 
