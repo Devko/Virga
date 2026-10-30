@@ -165,6 +165,7 @@ const RPC_TYPES: true[] = [
   true as Typed<Awaited<ReturnType<typeof exports.Admin.addAccount>>>,
   true as Typed<Awaited<ReturnType<typeof exports.Admin.triggerScan>>>,
   true as Typed<Awaited<ReturnType<typeof exports.Admin.removeAccount>>>,
+  true as Typed<Awaited<ReturnType<typeof exports.Admin.listToolCalls>>>,
   true as Typed<Awaited<ReturnType<Stub["beginScan"]>>>,
   true as Typed<Awaited<ReturnType<Stub["writeChunk"]>>>,
   true as Typed<Awaited<ReturnType<Stub["sweep"]>>>,
@@ -193,6 +194,8 @@ describe("GraphReader", () => {
     expect(Object.getOwnPropertyNames(Admin.prototype).sort()).toEqual([
       "addAccount",
       "constructor",
+      "listToolCalls",
+      "recordToolCall",
       "removeAccount",
       "triggerScan",
     ]);
@@ -278,6 +281,7 @@ describe("GraphReader", () => {
       severity: "critical",
       status: "open",
       title: "title of CF-001",
+      subject: "worker_script:api",
       evidence: { hosts: ["api.example.com"] },
       insightId: null,
       firstSeen: AT,
@@ -285,6 +289,19 @@ describe("GraphReader", () => {
       resolvedAt: null,
       suppressedUntil: null,
     });
+  });
+
+  it("lists each finding with its subject node, or null without one", async () => {
+    const page = await reader.listFindings(accountId, { limit: 10 });
+    expect(page?.findings.map((f) => [f.fingerprint, f.subject])).toEqual([
+      ["CF-001:worker_script:api", "worker_script:api"],
+      ["CF-002:worker_script:api", null],
+      ["CF-002:worker_script:web", null],
+      ["CF-010:access_app:x", null],
+      ["CF-003:r2_bucket:logs", null],
+    ]);
+    const detail = await reader.getFinding(accountId, "CF-001:worker_script:api");
+    expect(detail?.subject).toBe("worker_script:api");
   });
 
   it("filters findings by status and severity", async () => {

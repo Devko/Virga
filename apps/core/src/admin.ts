@@ -1,5 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
+  listToolCalls,
+  recordToolCall,
+  type ToolCall,
+  type ToolCallPage,
+  type ToolCallQuery,
+} from "./audit.ts";
+import {
   type AccountRow,
   checkNewAccount,
   deleteAccount,
@@ -42,8 +49,9 @@ async function remove(env: Env, accountId: string): Promise<boolean> {
 
 /**
  * Account administration for the web Worker: register an account in the
- * index, start a scan by hand, and remove an account. Tokens are stored and
- * removed through the broker's TokenIntake, never here.
+ * index, start a scan by hand, remove an account, and keep the tool audit
+ * trail. Tokens are stored and removed through the broker's TokenIntake,
+ * never here.
  */
 export class Admin extends WorkerEntrypoint<Env> {
   /**
@@ -97,5 +105,19 @@ export class Admin extends WorkerEntrypoint<Env> {
   async removeAccount(accountId: string): Promise<RemoveResult> {
     assertAccountId(accountId);
     return { removed: await remove(this.env, accountId) };
+  }
+
+  /**
+   * Adds one row to the tool audit trail, at the time of the call. Every
+   * field must fit its shape (src/audit.ts), or the call throws a TypeError
+   * and writes nothing.
+   */
+  async recordToolCall(entry: ToolCall): Promise<void> {
+    await recordToolCall(this.env.INDEX, entry, Date.now());
+  }
+
+  /** One page of the tool audit trail, newest first. The web Worker shows it to admins only. */
+  async listToolCalls(query?: ToolCallQuery): Promise<ToolCallPage> {
+    return listToolCalls(this.env.INDEX, query);
   }
 }

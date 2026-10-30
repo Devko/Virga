@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { type BrokerApi, brokerTransport, type CfReader, createReader } from "@virga/cf-api";
 import { COLLECTORS, type Collector } from "@virga/collectors";
+import { purgeToolCalls, runAuditPurge } from "../audit.ts";
 import { d1ScanIndex, dueAccounts } from "../index-db.ts";
 import { type DispatchSummary, runDispatch, type ScanParamsPayload } from "./dispatch.ts";
 import { assertAccountId } from "./ids.ts";
@@ -43,23 +44,33 @@ export class ScanWorkflow extends WorkflowEntrypoint<Env, ScanParamsPayload> {
   }
 }
 
+/** The dispatcher's result: the scans it started, and the audit rows it deleted (null: failed). */
+export type DispatchResult = DispatchSummary & { auditPurged: number | null };
+
 /**
- * Runs on the `schedules` of its binding (hourly, UTC) and starts the scans
- * of all accounts that are due.
+ * Runs on the `schedules` of its binding (hourly, UTC), starts the scans of
+ * all accounts that are due, then deletes tool audit rows older than 90 days.
  */
 export class DispatchWorkflow extends WorkflowEntrypoint<Env> {
   override async run(
     event: Readonly<WorkflowEvent<unknown>>,
     step: WorkflowStep,
-  ): Promise<DispatchSummary> {
+  ): Promise<DispatchResult> {
     const at = event.schedule?.scheduledTime ?? event.timestamp.getTime();
-    return runDispatch(
+    const steps = workflowStep(step);
+    const summary = await runDispatch(
       {
-        step: workflowStep(step),
+        step: steps,
         dueAccounts: (time, options) => dueAccounts(this.env.INDEX, time, options),
         scans: this.env.SCAN_WORKFLOW,
       },
       at,
     );
+    const auditPurged = await runAuditPurge(
+      steps,
+      (before) => purgeToolCalls(this.env.INDEX, before),
+      at,
+    );
+    return { ...summary, auditPurged };
   }
 }
