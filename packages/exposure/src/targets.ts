@@ -23,6 +23,18 @@ export type Target =
 
 const isScope = (value: unknown): value is Scope => value === "all" || value === "previews";
 
+/**
+ * The host of a hostname target: exact, or `*.` and an exact host. A port or
+ * any other wildcard is outside the contract's shape. Reading `a:8443` as `a`
+ * would cover every port, and other wildcards have no documented meaning.
+ */
+function accessHost(value: unknown): HostPattern | null {
+  if (typeof value !== "string" || value.includes(":")) return null;
+  const host = parseHost(value);
+  const rest = host?.labels[0] === "*" ? host.labels.slice(1) : host?.labels;
+  return host && rest && rest.length > 0 && !rest.some((l) => l.includes("*")) ? host : null;
+}
+
 /** The `{ behavior, path_pattern }[]` of a target, or null if it is not one. */
 function parseOverrides(value: unknown): Override[] | null {
   if (!Array.isArray(value)) return null;
@@ -49,7 +61,7 @@ export function parseTarget(target: unknown): Target | null {
   const overrides = parseOverrides(target.overrides);
   if (!overrides) return other;
   if (target.kind === "hostname") {
-    const host = parseHost(target.host);
+    const host = accessHost(target.host);
     if (!host || typeof target.path !== "string") return other;
     return { kind: "hostname", host, path: parseAccessPath(target.path), overrides };
   }

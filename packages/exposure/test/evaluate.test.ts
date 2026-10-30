@@ -197,8 +197,7 @@ const cases: Case[] = [
       g.script("w");
       g.customDomain("app.example.com", "w");
       g.customDomain("other.example.com", "w");
-      // `*app` also matches `app` and has as many literal characters.
-      bypassApp(g, "aw", [host("*.example.com"), host("*app.example.com")]);
+      bypassApp(g, "aw", [host("*.example.com")]);
       allowApp(g, "ae", [host("app.example.com")]);
     },
     expect: [
@@ -227,14 +226,14 @@ const cases: Case[] = [
       workerEntries(g);
       allowApp(g, "root", [host("app.example.com")]);
       bypassApp(g, "static", [host("app.example.com", "/static/*")]);
-      allowApp(g, "previews", [host("*-w.my-subdomain.workers.dev")]);
+      allowApp(g, "dev", [host("*.my-subdomain.workers.dev")]);
     },
     expect: [
       [CD("app.example.com"), "/", "access", 2, APP("root")],
       [CD("app.example.com"), "/static/*", "public", 2, POLICY("static-bypass")],
-      [`worker_preview_url:${PREVIEW}`, "/", "access", 1, APP("previews")],
+      [`worker_preview_url:${PREVIEW}`, "/", "access", 1, APP("dev")],
       ["worker_route:r1", "/", "public", 2, null],
-      [`workers_dev:${DEV}`, "/", "public", 2, null],
+      [`workers_dev:${DEV}`, "/", "access", 1, APP("dev")],
     ],
   },
   {
@@ -346,7 +345,7 @@ const cases: Case[] = [
     build: (g) => {
       g.script("w");
       g.route("r", "*.example.com/*", "w");
-      allowApp(g, "a1", [host("*.example.com"), host("*.*.example.com")]);
+      allowApp(g, "a1", [host("*.example.com"), host("*.a.example.com")]);
     },
     expect: [["worker_route:r", "/", "public", 1, null]],
   },
@@ -1093,6 +1092,23 @@ const cases: Case[] = [
     expect: [
       [CD("app.example.com"), "/", "unknown", 0, APP("odd")],
       [CD("v.example.com"), "/", "public", 2, null],
+    ],
+  },
+  {
+    name: "a hostname target with a port or another host wildcard than a leading *. is not interpretable",
+    build: (g) => {
+      g.script("w");
+      g.customDomain("app.example.com", "w");
+      g.customDomain("app.x.example.org", "w");
+      g.customDomain("app.example.net", "w");
+      allowApp(g, "port", [host("app.example.com:8443")]);
+      allowApp(g, "inner", [host("app.*.example.org")]);
+      allowApp(g, "partial", [host("*app.example.net")]);
+    },
+    expect: [
+      [CD("app.example.com"), "/", "unknown", 0, APP("port")],
+      [CD("app.example.net"), "/", "unknown", 0, APP("partial")],
+      [CD("app.x.example.org"), "/", "unknown", 0, APP("inner")],
     ],
   },
   {
