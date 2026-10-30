@@ -114,15 +114,12 @@ describe('operator guide, "Deploy from CI"', () => {
   });
 
   it("H-1: finds continue-on-error in the check and a status function in a gated job's if", () => {
-    const withCheck = (job: string) =>
-      workflow.replace("      - run: node scripts/check-release-age.ts\n", job);
-    expect(
-      gateProblems(
-        withCheck(
-          "      - run: node scripts/check-release-age.ts\n        continue-on-error: true\n",
-        ),
-      ),
-    ).toEqual([IGNORED]);
+    // The check's step, with --fresh-checkout or without.
+    const step = /^ {6}- run: node scripts\/check-release-age\.ts.*\n/m;
+    expect(workflow).toMatch(step);
+    expect(gateProblems(workflow.replace(step, "$&        continue-on-error: true\n"))).toEqual([
+      IGNORED,
+    ]);
     expect(
       gateProblems(
         workflow.replace("  release-age:\n", "  release-age:\n    continue-on-error: true\n"),

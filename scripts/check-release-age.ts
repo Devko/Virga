@@ -1,4 +1,4 @@
-// Usage: node scripts/check-release-age.ts
+// Usage: node scripts/check-release-age.ts [--fresh-checkout]
 //
 // Checks that every package version in pnpm-lock.yaml (R4-07), and the pnpm
 // version package.json pins in packageManager and devEngines.packageManager
@@ -15,8 +15,11 @@
 // so only the root may name the package manager (R8-02). The root .npmrc is
 // read as strictly, since lockfile-dir makes pnpm install from a lockfile the
 // check never dated, and no directory below the root may hold one (R9-01,
-// R9-02). Needs network access to registry.npmjs.org and nothing else; CI runs
-// it before anything is installed.
+// R9-02). No directory may hold a pnpmfile, whose hooks pnpm runs on every
+// command (R10-01), a .pnp.cjs, or a package.yaml or package.json5 (R10-02).
+// With --fresh-checkout, as in CI before anything is installed and on a fresh
+// clone, no directory may hold node_modules either. Needs network access to
+// registry.npmjs.org and nothing else.
 import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
