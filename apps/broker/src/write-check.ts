@@ -31,6 +31,7 @@ export type IssueCode =
   | "not_active"
   | "details_unavailable"
   | "token_mismatch"
+  | "token_changed"
   | "no_policies"
   | "not_read_only"
   | "no_expiry"

@@ -204,6 +204,15 @@ export async function markChecked(
   return result.meta.changes > 0;
 }
 
+/** Whether the vault holds a token for the account. */
+export async function hasToken(db: D1Database, accountId: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 AS found FROM vault_tokens WHERE account_id = ?")
+    .bind(accountId)
+    .first<{ found: number }>();
+  return row !== null;
+}
+
 /**
  * Deletes the token of an account. With `seen`, only while the row still
  * holds that token, so a failed recheck does not delete a token stored
