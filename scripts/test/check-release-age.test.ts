@@ -2215,8 +2215,8 @@ describe("CI workflow", () => {
       ...(extra.check ?? []),
       "    steps:",
       "      - name: Release age",
-      "        run: node scripts/check-release-age.ts",
-      "      - run: node scripts/check-release-age.ts",
+      "        run: node scripts/check-release-age.ts --fresh-checkout",
+      "      - run: node scripts/check-release-age.ts --fresh-checkout",
       ...(extra.step ?? []),
       "  install:",
       "    needs: release-age",
@@ -2431,6 +2431,76 @@ describe("CI workflow", () => {
       ["", ["the workflow is not a mapping"]],
     ];
     for (const [source, problems] of cases) expect(gateProblems(source), source).toEqual(problems);
+  });
+
+  it("R11-01: refuses a lone CR, NEL, LS or PS, which another parser may read as a line break", () => {
+    // The review's inputs: a break after a trailing comment, inside a comment
+    // line and before an if:, which yaml reads as part of the comment and
+    // libyaml as the start of a new line.
+    const timeout = "    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@";
+    expect(workflow).toContain(timeout);
+    const lineOf = (text: string, marker: string) =>
+      text.slice(0, text.indexOf(marker)).split("\n").length;
+    for (const [brk, name] of [
+      ["\r", ""],
+      ["\u0085", "U+0085"],
+      ["\u2028", "U+2028"],
+      ["\u2029", "U+2029"],
+    ] as const) {
+      const variants = [
+        workflow.replace(
+          timeout,
+          `    timeout-minutes: 10 # limit${brk}    continue-on-error: true\n    steps:\n      - uses: actions/checkout@`,
+        ),
+        workflow.replace(
+          "  release-age:\n",
+          `  release-age:\n    # note${brk}    continue-on-error: true\n`,
+        ),
+        workflow.replace(
+          "  check:\n    needs: release-age\n",
+          `  check:\n    needs: release-age # gated${brk}    if: always()\n`,
+        ),
+      ];
+      for (const variant of variants) {
+        expect(variant).not.toBe(workflow);
+        const line = lineOf(variant, brk);
+        expect(gateProblems(variant), JSON.stringify(brk)).toEqual([
+          brk === "\r"
+            ? `line ${line}: a CR not followed by LF, which another parser may read as a line break; the guard allows only printable ASCII, LF and CRLF`
+            : `line ${line}: the character ${name}; the guard allows only printable ASCII, LF and CRLF, since another parser may read other characters as a line break or fold them to ASCII`,
+        ]);
+      }
+    }
+    // CRLF line ends are one break, as every parser reads them.
+    expect(gateProblems(workflow.replaceAll("\n", "\r\n"))).toEqual([]);
+  });
+
+  it("R11-01 lead: refuses non-ASCII letters in keys and conditions, and tabs", () => {
+    for (const condition of ["alway\u017f()", "fa\u0131lure()"]) {
+      const problems = gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] }));
+      expect(problems, condition).toHaveLength(1);
+      expect(problems[0]).toMatch(/^line 12: the character U\+(?:017F|0131);/);
+    }
+    expect(gateProblems(scratchWorkflow({ check: ["    continue-on-erro\u0280: true"] }))).toEqual([
+      "line 6: the character U+0280; the guard allows only printable ASCII, LF and CRLF, since another parser may read other characters as a line break or fold them to ASCII",
+    ]);
+    expect(gateProblems(scratchWorkflow({ check: ["    timeout-minutes:\t10"] }))).toHaveLength(1);
+    // A character outside the BMP is reported once, by its code point.
+    expect(gateProblems(`${scratchWorkflow()}# \u{1F600}\n`)).toEqual([
+      "line 15: the character U+1F600; the guard allows only printable ASCII, LF and CRLF, since another parser may read other characters as a line break or fold them to ASCII",
+    ]);
+  });
+
+  it("Round 11 hardening: the release-age job runs the check with --fresh-checkout", () => {
+    const without = workflow.replace(
+      "      - run: node scripts/check-release-age.ts --fresh-checkout\n",
+      "      - run: node scripts/check-release-age.ts\n",
+    );
+    expect(without).not.toBe(workflow);
+    expect(gateProblems(without)).toEqual([
+      "no release-age job that runs the check before anything else",
+      `line ${without.slice(0, without.indexOf("      - run: node scripts/check-release-age.ts\n")).split("\n").length}: release-age runs the check without --fresh-checkout, which refuses a node_modules the commit holds`,
+    ]);
   });
 
   it("TM-32: .nvmrc pins an exact Node.js version of at least 22.18, and every setup-node reads it", () => {
