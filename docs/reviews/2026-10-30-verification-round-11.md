@@ -2,7 +2,15 @@
 
 - Date: 2026-10-30
 - Scope: (1) are the round 10 findings fixed: R10-01 to R10-04, the hardening items "Broker, same token ID", "Identity check", ".npmrc messages" and "Guide", and the lead "Committed node_modules" of the [round 10 verification](2026-10-30-verification-round-10.md)? (2) review of the round 11 merges at commit ff05f56: `hardening-11` (cb7d409), `deploy-5` (aa5f71c) and `supply-chain-5` (8eb7462), each diffed against 953b930, and the integrator's doc commits
-- Status: not yet fixed; R11-01 and R11-02 are open
+- Status: round 12 of the [work packages](../team/work-packages.md) (2026-11-20) fixed R11-01, R11-02 and the hardening items; see the [round 12 verification](2026-11-20-verification-round-12.md)
+
+| Finding | Fixed by | Test |
+| --- | --- | --- |
+| R11-01 | `supply-chain-6` | `scripts/test/check-release-age.test.ts` ("R11-01: refuses a lone CR, NEL, LS or PS …", "R11-01 lead: …"), `scripts/test/guide.test.ts` ("R11-01: …") |
+| R11-02 | `deploy-6` | `scripts/test/workspace.test.ts` ("recordWorkspace and Yarn PnP manifests (R11-02)"), `deploy.test.ts`, `run.test.ts` ("R11-02: …") |
+| Broker: a pass after the token was removed | `hardening-12` | `apps/broker/test/recheck.test.ts` ("Round 11 hardening: a token removed during its recheck", "R10 hardening: broker same token ID") |
+| Guard: require `--fresh-checkout`; Updates flow | `supply-chain-6` | `check-release-age.test.ts`, `guide.test.ts` ("Round 11 hardening: …") |
+| Guard: characters; lead "Non-ASCII status functions" | `supply-chain-6` | `check-release-age.test.ts` ("R11-01 lead: …") |
 
 ## Summary
 
