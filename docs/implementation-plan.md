@@ -2,6 +2,8 @@
 
 Status: proposal, 2026-10-29. The design spec refers to a companion "Implementierungsplan" tab that was not exported. This plan was written from the [design spec](concept/design-spec.md) and the review in [analysis.md](analysis.md). Decision IDs (D-xx) refer to [analysis.md § Open decisions](analysis.md#open-decisions). Spike IDs (S-xx) are defined below.
 
+The [completion plan](completion-plan.md) (2026-11-20) orders the remaining work from round 12 to the first release.
+
 ## Approach
 
 - **Vertical slices, not layers.** Every phase ends with findings a person can act on, in a deployed instance, against a real account.

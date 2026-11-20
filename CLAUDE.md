@@ -11,6 +11,7 @@ Read before changing anything:
 - `docs/concept/design-spec.md`: the design spec, the source of intent. Do not edit its text; record deviations in `docs/analysis.md` or as decisions
 - `docs/analysis.md`: review, verified platform facts, open decisions D-01 to D-15
 - `docs/implementation-plan.md`: phases, gates, spikes S-01 to S-08, backlog, topology, layout
+- `docs/completion-plan.md`: order of the remaining work, accounts needed, end of the hardening rounds
 - `docs/architecture/data-model.md`: graph schema, write path, rule format
 - `docs/decisions/` and `docs/spikes/`: accepted decisions and spike results
 - `docs/architecture/graph-contract.md`: what collectors emit and what evaluators and rules may read; change it before the code
