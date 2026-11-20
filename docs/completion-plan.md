@@ -7,7 +7,7 @@ Status: proposal, 2026-11-20. This plan takes Virga from its state on 2026-10-30
 - **Code.** Phase 1 is built: graph store, broker, 11 collectors, exposure evaluator v1, scan Workflow, web Worker (UI, API, MCP), deploy script, end-to-end scan test against a fake account, OCSF export, tool audit trail, test range Terraform. Phase 2 groundwork (`packages/vulns`, `packages/scanner-io`) started early under [decision 0007](decisions/0007-later-phases-before-the-phase-1-gate.md). 2,663 tests, CI green.
 - **Reviews.** Eleven rounds. Round 11 left two lows (R11-01, R11-02), one broker hardening item (recheck after removal), and guard hardening ([round 11 verification](reviews/2026-10-30-verification-round-11.md)). Leads R8-06 to R8-11 wait for observed API shapes.
 - **Platform.** Nothing has run on Cloudflare. No spike that needs an account has run (S-01, S-05 to S-08; the production halves of S-02 to S-04). The test range has never been through `terraform validate`.
-- **Accounts.** As of 2026-11-20 the owner has one account on **Workers Paid** (confirmed). There is no second account yet.
+- **Accounts.** As of 2026-11-20 the owner has one account on **Workers Paid** (confirmed), which already runs other Workers. Virga's first deploy goes there and scans it too ([decision 0011](decisions/0011-shared-tool-account-for-the-first-deploy.md)). There is no second account yet.
 - **Dependencies.** TM-16: body-parser 2.3.0 and fast-uri 3.1.8 have published advisories; their patched versions pass the 14-day age gate in November 2026.
 
 ## What changes in how we work
@@ -22,9 +22,9 @@ Status: proposal, 2026-11-20. This plan takes Virga from its state on 2026-10-30
 | --- | --- | --- | --- |
 | Tool account | Workers Paid | Runs Virga: broker, core, web, D1, R2, Secrets Store, Access; S-01, S-03 production run, S-07 | Dedicated: nothing else in it, few members, all with security keys, deploys only through CI ([operator guide](operator/guide.md)). Anyone who can deploy the broker can read every stored token |
 | Test range account | Free is probably enough; check with the first `terraform plan` (R2 must be enabled, which needs a payment method). Not a temporary account (see below) | Seeded misconfigurations, phase 1 gates 3 and 5, phase 2 gate 1, phase 3 gates 1 to 3 | Dedicated, with a zone that serves nothing else, ideally a domain bought for it ([test range README](../infra/test-range/README.md)). Never the tool account |
-| Real account to scan | Any | Phase 1 gate 4 ("at least one other real account"); S-05, S-06 can also run here | The owner's existing account, scanned with a read-only token |
+| Real account to scan | Any | Phase 1 gate 4 ("at least one other real account"); S-05, S-06 can also run here | Not the tool account. Until a third account exists, the test range account counts, scanned before the range is applied (empty) and after |
 
-If the paid account is the owner's general account with other things in it, it should be the "real account to scan", and the tool account should be a new, empty account on Workers Paid. If it is empty, it becomes the tool account.
+The owner's Workers Paid account runs other Workers. By [decision 0011](decisions/0011-shared-tool-account-for-the-first-deploy.md) it is the tool account and the first scanned account until the release: the instance stores tokens only for accounts the owner controls, and before the deploy its members and Workers write tokens are reviewed. The release gates run on a dedicated tool account.
 
 **Temporary accounts do not work for the test range.** `wrangler deploy --temporary` accounts ([notes](spikes/temporary-accounts.md)) are on Workers Free, are deleted after 60 minutes unless claimed, and offer no zones, R2, Access or Zero Trust, account token management, Workflows or cron triggers. The range needs a zone, a public R2 bucket, Access apps and account tokens, and a nightly scan needs it to stay up. They remain useful for quick checks of API response shapes in stage 2 (Workers API, `Ratelimit` headers). Claiming one turns it into an ordinary Free account, which is the same as creating a second account; creating one directly is simpler.
 
@@ -48,8 +48,7 @@ Each stage ends with a check. "Agents" means work packages run as before; "Owner
 
 Owner first:
 
-1. Confirm the plan is Workers Paid, and decide which account is the tool account (see above).
-2. Create read-only API tokens for the spikes, scoped to one account, short expiry. They never go into the repository, a fixture or a log; recorded responses are sanitized before they are committed.
+1. Create read-only API tokens for the spikes, scoped to one account, short expiry. They never go into the repository, a fixture or a log; recorded responses are sanitized before they are committed.
 
 Then the spikes, in this order, because each unblocks the most code:
 
@@ -79,14 +78,15 @@ Each spike writes `docs/spikes/S-0x-*.md` and opens the follow-up work packages 
 
 ### Stage 4: first real deploy and scans, phase 1 gate (owner and agents; 1 to 2 weeks)
 
-1. Dashboard prerequisites from the operator guide: Zero Trust, Access in front of `virga-web`, R2, a zone for the custom domain, and the master key.
-2. **Secrets Store risk.** Secrets Store is still in open beta (D-15). Try it first. If store creation, the `workers` scope or the binding fails, use the documented Worker secret fallback and record the reason in a decision. Either way, write down where the master key backup lives: if it is lost, every account must be onboarded again. Key rotation has no entrypoint yet; add one before the release (stage 6).
-3. `pnpm deploy` from a fresh clone, following only the guide; fix the guide where it is wrong. Gate 1.
-4. Onboarding refusal test against the deployed broker with real tokens that have write, no expiry and more than 90 days to expiry. Gate 2.
-5. Onboard the tool account itself (dogfooding) and the real account; full scans; missing permissions show as `not evaluated`. Gate 4.
-6. Onboard and scan the test range; every phase 1 rule hits its seeded case and stays quiet on the clean one; no 429, no 5-minute block. Gates 3 and 5.
-7. Exposure review: at least 50 entry points across the three accounts reviewed by hand; zero `public` on entry points marked protected. Gate 6.
-8. A nightly scheduled scan of the test range with the findings compared to `cases.yaml` (testing strategy, end to end).
+1. Account review ([decision 0011](decisions/0011-shared-tool-account-for-the-first-deploy.md)): list the members and every token with Workers write permissions in the shared account, remove what is not needed, and require security keys.
+2. Dashboard prerequisites from the operator guide: Zero Trust, Access in front of `virga-web`, R2, a zone for the custom domain, and the master key.
+3. **Secrets Store risk.** Secrets Store is still in open beta (D-15). Try it first. If store creation, the `workers` scope or the binding fails, use the documented Worker secret fallback and record the reason in a decision. Either way, write down where the master key backup lives: if it is lost, every account must be onboarded again. Key rotation has no entrypoint yet; add one before the release (stage 6).
+4. `pnpm deploy` from a fresh clone, following only the guide; fix the guide where it is wrong. Gate 1.
+5. Onboarding refusal test against the deployed broker with real tokens that have write, no expiry and more than 90 days to expiry. Gate 2.
+6. Onboard the tool account itself (dogfooding) and the real account; full scans; missing permissions show as `not evaluated`. Gate 4.
+7. Onboard and scan the test range; every phase 1 rule hits its seeded case and stays quiet on the clean one; no 429, no 5-minute block. Gates 3 and 5.
+8. Exposure review: at least 50 entry points across the three accounts reviewed by hand; zero `public` on entry points marked protected. Gate 6.
+9. A nightly scheduled scan of the test range with the findings compared to `cases.yaml` (testing strategy, end to end).
 
 **Done when:** all six phase 1 gate items pass and are recorded in `docs/gates/phase-1.md` with evidence.
 
@@ -120,7 +120,7 @@ Calendar time depends mostly on the owner's steps in stages 2 to 4.
 | API shapes differ from the docs (Workers Versions beta, permission groups, R2, tunnels) | Collectors and the allowlist need changes; leads R8-06 to R8-11 turn into findings | Stage 2 runs before the deploy; recorded, sanitized responses become fixtures |
 | Secrets Store beta changes or is unavailable | The broker cannot bind the master key | Worker secret fallback is implemented and documented |
 | Test range Terraform never validated | Stage 3 takes longer | Budget for fixes; the README lists the known risks |
-| The paid account is the owner's general account | Tool account not dedicated; the broker would sit next to other workloads | Use a new empty account as the tool account |
+| The tool account is shared with other Workers (decision 0011) | Anyone who can deploy Workers there can replace the broker and read stored tokens | Store only the owner's own tokens; review members and Workers write tokens before the deploy; move to a dedicated account before the release |
 | Review findings keep coming | No end to hardening | Round 12 is the last round; high and critical only block a gate |
 | Free plan limits in the test range | Some seeded cases cannot be created | Upgrade the test range account to Workers Paid if `terraform plan` needs it |
 
@@ -131,9 +131,9 @@ Answered on 2026-11-20:
 - The account is on Workers Paid.
 - The hardening rounds end after round 12.
 - The old branch `ccr-fb16682f-xtuagp` may be deleted.
+- The Workers Paid account runs Virga and is scanned by it ([decision 0011](decisions/0011-shared-tool-account-for-the-first-deploy.md)).
 
 Open:
 
-1. Is the paid account empty (tool account) or the general account (scanned account)?
-2. A second, Free account and a domain for the test range (temporary accounts cannot host it, see [Accounts needed](#accounts-needed)). Stages 1 and 2 do not wait for it; stage 3 and phase 1 gates 3 and 5 do.
-3. Ship a configuration-only preview after the phase 1 gate, or wait for phase 4.
+1. A second, Free account and a domain for the test range (temporary accounts cannot host it, see [Accounts needed](#accounts-needed)). Stages 1 and 2 do not wait for it; stage 3 and phase 1 gates 3 and 5 do.
+2. Ship a configuration-only preview after the phase 1 gate, or wait for phase 4.
