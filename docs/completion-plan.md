@@ -7,13 +7,13 @@ Status: proposal, 2026-11-20. This plan takes Virga from its state on 2026-10-30
 - **Code.** Phase 1 is built: graph store, broker, 11 collectors, exposure evaluator v1, scan Workflow, web Worker (UI, API, MCP), deploy script, end-to-end scan test against a fake account, OCSF export, tool audit trail, test range Terraform. Phase 2 groundwork (`packages/vulns`, `packages/scanner-io`) started early under [decision 0007](decisions/0007-later-phases-before-the-phase-1-gate.md). 2,663 tests, CI green.
 - **Reviews.** Eleven rounds. Round 11 left two lows (R11-01, R11-02), one broker hardening item (recheck after removal), and guard hardening ([round 11 verification](reviews/2026-10-30-verification-round-11.md)). Leads R8-06 to R8-11 wait for observed API shapes.
 - **Platform.** Nothing has run on Cloudflare. No spike that needs an account has run (S-01, S-05 to S-08; the production halves of S-02 to S-04). The test range has never been through `terraform validate`.
-- **Accounts.** As of 2026-11-20 the owner has a paid Cloudflare plan on one account. It has to be confirmed that this is **Workers Paid** (the account plan, $5 a month), not a zone **Pro** plan: only Workers Paid raises the Durable Object, Workflow and CPU limits and allows Containers.
+- **Accounts.** As of 2026-11-20 the owner has one account on **Workers Paid** (confirmed). There is no second account yet.
 - **Dependencies.** TM-16: body-parser 2.3.0 and fast-uri 3.1.8 have published advisories; their patched versions pass the 14-day age gate in November 2026.
 
 ## What changes in how we work
 
 1. **Round 12 is the last hardening round.** After it, review findings no longer open a new round on their own. A finding rated high or critical is fixed before the next gate; medium and low findings go into the backlog (GitHub issues) and are picked up with the work that touches the same code. Eleven rounds have moved from design flaws (rounds 2 to 4) to supply-chain edge cases rated low (rounds 9 to 11); more rounds without platform contact have little left to find. The remaining risk is in API shapes nobody has observed, and only a real account answers that.
-2. **`main` is the development branch.** Work goes through pull requests to `main`, with CI as the required check. The old branch `ccr-fb16682f-xtuagp` is kept until the owner confirms it can go.
+2. **`main` is the development branch** and the default branch (since 2026-11-20). Work goes through pull requests to `main`, with CI as the required check. The old branch `ccr-fb16682f-xtuagp` is retired.
 3. **Issues track the backlog.** Each open finding, lead and gate item below becomes a GitHub issue, so the state is visible without reading the review reports.
 
 ## Accounts needed
@@ -21,10 +21,12 @@ Status: proposal, 2026-11-20. This plan takes Virga from its state on 2026-10-30
 | Role | Plan | Used for | Rules |
 | --- | --- | --- | --- |
 | Tool account | Workers Paid | Runs Virga: broker, core, web, D1, R2, Secrets Store, Access; S-01, S-03 production run, S-07 | Dedicated: nothing else in it, few members, all with security keys, deploys only through CI ([operator guide](operator/guide.md)). Anyone who can deploy the broker can read every stored token |
-| Test range account | Free is probably enough; check with the first `terraform plan` (R2 must be enabled, which needs a payment method) | Seeded misconfigurations, phase 1 gates 3 and 5, phase 2 gate 1, phase 3 gates 1 to 3 | Dedicated, with a zone that serves nothing else, ideally a domain bought for it ([test range README](../infra/test-range/README.md)). Never the tool account |
+| Test range account | Free is probably enough; check with the first `terraform plan` (R2 must be enabled, which needs a payment method). Not a temporary account (see below) | Seeded misconfigurations, phase 1 gates 3 and 5, phase 2 gate 1, phase 3 gates 1 to 3 | Dedicated, with a zone that serves nothing else, ideally a domain bought for it ([test range README](../infra/test-range/README.md)). Never the tool account |
 | Real account to scan | Any | Phase 1 gate 4 ("at least one other real account"); S-05, S-06 can also run here | The owner's existing account, scanned with a read-only token |
 
-If the new paid account is the owner's general account with other things in it, it should be the "real account to scan", and the tool account should be a new, empty account on Workers Paid. If it is empty, it becomes the tool account.
+If the paid account is the owner's general account with other things in it, it should be the "real account to scan", and the tool account should be a new, empty account on Workers Paid. If it is empty, it becomes the tool account.
+
+**Temporary accounts do not work for the test range.** `wrangler deploy --temporary` accounts ([notes](spikes/temporary-accounts.md)) are on Workers Free, are deleted after 60 minutes unless claimed, and offer no zones, R2, Access or Zero Trust, account token management, Workflows or cron triggers. The range needs a zone, a public R2 bucket, Access apps and account tokens, and a nightly scan needs it to stay up. They remain useful for quick checks of API response shapes in stage 2 (Workers API, `Ratelimit` headers). Claiming one turns it into an ordinary Free account, which is the same as creating a second account; creating one directly is simpler.
 
 ## Stages
 
@@ -124,8 +126,14 @@ Calendar time depends mostly on the owner's steps in stages 2 to 4.
 
 ## Decisions for the owner
 
-1. Is the plan Workers Paid, and is that account empty (tool account) or the general account (scanned account)?
-2. A domain for the test range, and a second account for it.
-3. End the hardening rounds after round 12, as proposed.
-4. Ship a configuration-only preview after the phase 1 gate, or wait for phase 4.
-5. When the old branch `ccr-fb16682f-xtuagp` may be deleted.
+Answered on 2026-11-20:
+
+- The account is on Workers Paid.
+- The hardening rounds end after round 12.
+- The old branch `ccr-fb16682f-xtuagp` may be deleted.
+
+Open:
+
+1. Is the paid account empty (tool account) or the general account (scanned account)?
+2. A second, Free account and a domain for the test range (temporary accounts cannot host it, see [Accounts needed](#accounts-needed)). Stages 1 and 2 do not wait for it; stage 3 and phase 1 gates 3 and 5 do.
+3. Ship a configuration-only preview after the phase 1 gate, or wait for phase 4.
