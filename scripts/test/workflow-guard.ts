@@ -72,6 +72,11 @@ export const CHECK_RUNS: ReadonlySet<string> = new Set([
 const HIDES =
   "the guard refuses anchors, aliases, merge keys, tags and directives, which another parser may read differently and which could hide an if: or continue-on-error";
 
+/** Printable ASCII and LF, as a key or value may hold after YAML read its escapes. */
+const ASCII = /^[\x20-\x7e\n]*$/;
+const ESCAPED =
+  "a key or value that holds a character other than printable ASCII once YAML reads its escapes; another parser may fold it to ASCII (R12-01)";
+
 const preview = (text: string) => JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}…` : text);
 
 /**
@@ -161,12 +166,18 @@ export function readWorkflow(text: string): { workflow?: Workflow; problems: str
           );
           continue;
         }
+        if (!ASCII.test(pair.key.value)) {
+          problems.push(`line ${lineOf(pair.key.range?.[0])}: ${ESCAPED}`);
+        }
         entries.set(pair.key.value, toValue(pair.value));
       }
       return { kind: "map", line, entries };
     }
     if (isSeq(node)) return { kind: "seq", line, items: node.items.map(toValue) };
     const value = isScalar(node) ? node.value : null;
+    if (typeof value === "string" && !ASCII.test(value)) {
+      problems.push(`line ${line}: ${ESCAPED}`);
+    }
     if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
       return { kind: "scalar", line, value: value as YamlScalar["value"] };
     }

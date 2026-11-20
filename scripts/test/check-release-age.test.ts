@@ -2491,6 +2491,22 @@ describe("CI workflow", () => {
     ]);
   });
 
+  it("R12-01: refuses non-ASCII letters written as YAML escapes in keys and values", () => {
+    const ESCAPED =
+      "a key or value that holds a character other than printable ASCII once YAML reads its escapes; another parser may fold it to ASCII (R12-01)";
+    for (const condition of ['"\\u017flways()"', '"fa\\u0131lure()"', '"\\x85"']) {
+      expect(
+        gateProblems(scratchWorkflow({ install: [`    if: ${condition}`] })),
+        condition,
+      ).toEqual([`line 12: ${ESCAPED}`]);
+    }
+    expect(
+      gateProblems(scratchWorkflow({ check: ['    "continue-on-erro\\u0280": true'] }))[0],
+    ).toBe(`line 6: ${ESCAPED}`);
+    // Escapes that YAML reads as ASCII stay allowed; R10-03 checks what they spell.
+    expect(gateProblems(scratchWorkflow({ install: ['    if: "\\x61lways()"'] }))).toEqual([RUNS]);
+  });
+
   it("Round 11 hardening: the release-age job runs the check with --fresh-checkout", () => {
     const without = workflow.replace(
       "      - run: node scripts/check-release-age.ts --fresh-checkout\n",
