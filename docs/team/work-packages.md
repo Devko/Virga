@@ -201,6 +201,8 @@ From the [round 11 verification](../reviews/2026-10-30-verification-round-11.md)
 | `deps-1` | TM-16: body-parser 2.4.0 and fast-uri 3.1.9, the patched versions, older than 14 days; nothing else in the lockfile changes | `pnpm-lock.yaml`, TM-16 | `node scripts/check-release-age.ts` passes |
 | `review-12` | Read-only verification of the four packages | none (report only) | A report per item: fixed or not, with evidence |
 
+Round 12 status (2026-11-20): the [round 12 verification](../reviews/2026-11-20-verification-round-12.md) confirms R11-01, R11-02, the round 11 hardening items and TM-16 as fixed. It found two lows: R12-01, a non-ASCII letter written as a YAML escape in an `if:`, which the same pull request fixed, and R12-02, further advisories whose patches pass the age gate ([issue #3](https://github.com/Devko/Virga/issues/3)). Leads and hardening items are in [issue #4](https://github.com/Devko/Virga/issues/4). This ends the hardening rounds.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
