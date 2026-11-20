@@ -189,6 +189,20 @@ From the [round 10 verification](../reviews/2026-10-30-verification-round-10.md)
 
 Round 11 status (2026-10-30): all three packages are merged, and the [round 11 verification](../reviews/2026-10-30-verification-round-11.md) confirms R10-01 to R10-04 and the round 10 hardening items as fixed, and the committed-`node_modules` lead as partly fixed (the guide's Updates steps). It found R11-01 and R11-02 (low: a lone CR, NEL, LS or PS that hides a line from the workflow guard; a Yarn PnP manifest written by a build that retargets `@virga/rules` past the R10-04 record), and hardening for the broker's recheck after a removal.
 
+## Packages for phase 1, round 12
+
+From the [round 11 verification](../reviews/2026-10-30-verification-round-11.md) and TM-16, as stage 1 of the [completion plan](../completion-plan.md). Round 12 is the last hardening round: from here on, review findings rated high or critical block the next gate, and medium and low findings go into GitHub issues. The four packages ran in one branch and went to `main` by pull request.
+
+| WP | Scope | Owns | Done when |
+| --- | --- | --- | --- |
+| `supply-chain-6` | R11-01: the workflow guard allows only printable ASCII, LF and CRLF, so a lone CR, NEL, LS or PS and non-ASCII letters in keys and `if:` are refused; the `release-age` job must run the check with `--fresh-checkout`; the guide's Updates deploy from a fresh clone | `scripts/test/workflow-guard.ts`, `scripts/test/check-release-age.test.ts`, `scripts/test/guide.test.ts`, `CONTRIBUTING.md`, the guide's Updates | The review's inputs refused, in `ci.yml` and the guide's example |
+| `deploy-6` | R11-02: `.pnp.data.json`, `.pnp.cjs` and `.pnp.js`, in any case, recorded and refused in the app directory, each package tree and every directory above, before and after the builds and before each Wrangler call; named in the guide and TM-27 | `scripts/lib/workspace.ts` and its tests, `deploy.test.ts`, `run.test.ts`, `docs/operator/**` | A build that writes the review's manifest stops the deploy before Wrangler |
+| `hardening-12` | Broker: a recheck whose row no longer holds the checked token, after a pass or a failure, fails the call closed (503, 99006) and sends nothing; it reports `changed` and what the vault holds, not a deletion that did not happen | `apps/broker/**` | Tests for a removal and a replacement during a passing and a failing recheck |
+| `deps-1` | TM-16: body-parser 2.4.0 and fast-uri 3.1.9, the patched versions, older than 14 days; nothing else in the lockfile changes | `pnpm-lock.yaml`, TM-16 | `node scripts/check-release-age.ts` passes |
+| `review-12` | Read-only verification of the four packages | none (report only) | A report per item: fixed or not, with evidence |
+
+Round 12 status (2026-11-20): the [round 12 verification](../reviews/2026-11-20-verification-round-12.md) confirms R11-01, R11-02, the round 11 hardening items and TM-16 as fixed. It found two lows: R12-01, a non-ASCII letter written as a YAML escape in an `if:`, which the same pull request fixed, and R12-02, further advisories whose patches pass the age gate ([issue #3](https://github.com/Devko/Virga/issues/3)). Leads and hardening items are in [issue #4](https://github.com/Devko/Virga/issues/4). This ends the hardening rounds.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.

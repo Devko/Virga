@@ -167,6 +167,29 @@ describe('operator guide, "Deploy from CI"', () => {
     expect(gateProblems(escaped)).toEqual([RUNS]);
   });
 
+  it("R11-01: finds a line break other than LF or CRLF, and a check without --fresh-checkout", () => {
+    // The review's input: LS after a trailing comment hides continue-on-error.
+    const timeout = "    timeout-minutes: 10\n    steps:\n";
+    expect(workflow).toContain(timeout);
+    for (const brk of ["\r", "\u0085", "\u2028", "\u2029"]) {
+      const hidden = workflow.replace(
+        timeout,
+        `    timeout-minutes: 10 # limit${brk}    continue-on-error: true\n    steps:\n`,
+      );
+      const problems = gateProblems(hidden);
+      expect(problems, JSON.stringify(brk)).toHaveLength(1);
+      expect(problems[0]).toMatch(/the guard allows only printable ASCII, LF and CRLF/);
+    }
+    const without = workflow.replace(
+      "node scripts/check-release-age.ts --fresh-checkout\n",
+      "node scripts/check-release-age.ts\n",
+    );
+    expect(without).not.toBe(workflow);
+    expect(gateProblems(without)).toContain(
+      "no release-age job that runs the check before anything else",
+    );
+  });
+
   it("R8-04: the deploy job restores no package cache", () => {
     const deploy = jobOf(example, "deploy");
     expect(deploys(deploy)).toBe(true);
@@ -244,5 +267,12 @@ describe("operator guide, workstation steps", () => {
     const check = updates.indexOf("node scripts/check-release-age.ts");
     expect(check).toBeGreaterThan(-1);
     expect(check).toBeLessThan(updates.indexOf("pnpm install"));
+  });
+
+  it("Round 11 hardening: deploys an update from a fresh clone, with --fresh-checkout", () => {
+    const updates = section("### Updates");
+    expect(updates).toContain("fresh clone");
+    expect(updates).toContain("`node scripts/check-release-age.ts --fresh-checkout`");
+    expect(updates).not.toMatch(/^Pull the new version/m);
   });
 });

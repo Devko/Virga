@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   API_VARS,
@@ -850,6 +850,36 @@ describe("processRunner and what the builds can change (R6-01)", () => {
     await expect(runResolved()).rejects.toThrow(
       "tsconfig.base.json, which apps/web/tsconfig.json extends, sets compilerOptions.baseUrl",
     );
+    expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
+  });
+
+  it("R11-02: refuses to run Wrangler once a Yarn PnP manifest stands in its app directory or above", async () => {
+    put(join(root, "packages", "rules", "package.json"), '{ "name": "@virga/rules" }');
+    put(join(root, "packages", "rules", "src", "index.ts"), "export {};\n");
+    workspaceLink(root, app, "rules");
+    const workspaces = new Map([[app, recordWorkspace(root, "web")]]);
+    const wranglers = recordWranglers([app]);
+    const runResolved = () =>
+      processRunner({ credentials: "token", secrets: () => [], wranglers, workspaces })({
+        bin: "wrangler",
+        cwd: app,
+        config,
+        configSha256: sha256(CONFIG_TEXT),
+        args: ["deploy"],
+        capture: true,
+      });
+    await runResolved();
+    for (const path of [
+      join(root, ".pnp.data.json"),
+      join(app, ".pnp.cjs"),
+      join(root, "apps", ".pnp.js"),
+    ]) {
+      put(path, "{}");
+      await expect(runResolved(), path).rejects.toThrow(
+        `${relative(root, path)}: a Yarn Plug'n'Play manifest.`,
+      );
+      rmSync(path);
+    }
     expect(calls()).toBe(`deploy --config ${config} --env-file ${devNull}\n`);
   });
 });

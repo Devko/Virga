@@ -426,9 +426,11 @@ describe("R10 hardening: broker same token ID", () => {
         },
       },
     );
+    // Nothing was deleted, so the call does not say so: it fails closed (round 11 hardening).
     const response = await api.get(id, queues(id));
-    expect(response.status).toBe(401);
-    expect(response.body.errors[0]?.code).toBe(RECHECK_FAILED_CODE);
+    expect(response.status).toBe(503);
+    expect(response.body.errors[0]?.code).toBe(RECHECK_UNAVAILABLE_CODE);
+    expect(response.body.errors[0]?.message).not.toContain("deleted");
     expect(sent(calls)).toEqual([verify(id), details(id)]);
     // The old secret failed; the new token stays with its own check time.
     expect(await getEntry(env.VAULT, id)).toMatchObject({
@@ -461,10 +463,13 @@ describe("R10 hardening: broker same token ID", () => {
         },
       },
     );
-    // The old secret passed its check, so this call is served with it.
-    expect((await api.get(id, queues(id))).status).toBe(200);
-    expect(sent(calls)).toEqual([verify(id), details(id), `GET ${queues(id)}`]);
-    expect(calls.map((c) => c.authorization)).toEqual(Array(3).fill(`Bearer ${TEST_TOKEN}`));
+    // The old secret passed its check, but the vault no longer holds it, so
+    // the call fails closed and sends nothing with it (round 11 hardening).
+    const response = await api.get(id, queues(id));
+    expect(response.status).toBe(503);
+    expect(response.body.errors[0]?.code).toBe(RECHECK_UNAVAILABLE_CODE);
+    expect(sent(calls)).toEqual([verify(id), details(id)]);
+    expect(calls.map((c) => c.authorization)).toEqual(Array(2).fill(`Bearer ${TEST_TOKEN}`));
     // Its pass is not recorded on the new token: check time and expiry are the new token's.
     expect(await getEntry(env.VAULT, id)).toMatchObject({
       checkedAt: storedAt,
@@ -474,11 +479,99 @@ describe("R10 hardening: broker same token ID", () => {
 
     // The next call checks the new token before it uses it.
     expect((await api.get(id, queues(id))).status).toBe(200);
-    expect(sent(calls).slice(3)).toEqual([verify(id), details(id), `GET ${queues(id)}`]);
-    expect(calls.slice(3).map((c) => c.authorization)).toEqual(
+    expect(sent(calls).slice(2)).toEqual([verify(id), details(id), `GET ${queues(id)}`]);
+    expect(calls.slice(2).map((c) => c.authorization)).toEqual(
       Array(3).fill(`Bearer ${ROLLED_TOKEN}`),
     );
     expect((await getEntry(env.VAULT, id))?.checkedAt).toBeGreaterThan(storedAt);
+  });
+});
+
+describe("Round 11 hardening: a token removed during its recheck", () => {
+  /** Cloudflare that removes the account's token while the check runs, then passes or fails it. */
+  const removing = (id: string, passes: boolean) =>
+    cloudflare(
+      id,
+      passes ? {} : { policies: [policy([...INVENTORY_GROUPS, "DNS Write"], accountResource(id))] },
+      {
+        [verify(id)]: async () => {
+          expect((await exports.TokenIntake.remove(id)).removed).toBe(true);
+          return json(200, ok(verifyResult()));
+        },
+      },
+    );
+
+  it("Round 11 hardening: a pass after the token was removed fails closed and sends nothing with it", async () => {
+    const id = await stored(RECHECK_AFTER_MS);
+    const { calls } = removing(id, true);
+    const response = await api.get(id, queues(id));
+    expect(response.status).toBe(503);
+    expect(response.body.errors[0]?.code).toBe(RECHECK_UNAVAILABLE_CODE);
+    expect(response.body.errors[0]?.message).toContain("removed or replaced during its recheck");
+    // Only the check's own calls; the read was not sent with the removed token.
+    expect(sent(calls)).toEqual([verify(id), details(id)]);
+    expect(await getEntry(env.VAULT, id)).toBeNull();
+    // The next call finds no token.
+    const next = await api.get(id, queues(id));
+    expect(next.status).toBe(401);
+    expect(next.body.errors[0]?.code).toBe(NO_TOKEN_CODE);
+    expect(sent(calls)).toHaveLength(2);
+  });
+
+  it("Round 11 hardening: a failure after the token was removed does not claim a deletion", async () => {
+    const id = await stored(RECHECK_AFTER_MS);
+    const { calls } = removing(id, false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await api.get(id, queues(id));
+      expect(response.status).toBe(503);
+      expect(response.body.errors[0]?.code).toBe(RECHECK_UNAVAILABLE_CODE);
+      expect(response.body.errors[0]?.message).not.toContain("deleted");
+      expect(sent(calls)).toEqual([verify(id), details(id)]);
+      const logged = warn.mock.calls.map((args) => args.join(" "));
+      expect(logged.some((line) => line.includes("was deleted"))).toBe(false);
+      expect(logged.some((line) => line.includes("removed or replaced during its recheck"))).toBe(
+        true,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("Round 11 hardening: TokenIntake.recheck reports what the vault holds after a removal or a replacement", async () => {
+    const removed = await stored(RECHECK_AFTER_MS);
+    removing(removed, true);
+    const afterRemoval = await exports.TokenIntake.recheck(removed);
+    expect(afterRemoval).toMatchObject({
+      ok: false,
+      stored: false,
+      removed: false,
+      retryable: true,
+      changed: true,
+    });
+    expect(afterRemoval.reasons[0]?.code).toBe("token_changed");
+
+    const replaced = await stored(RECHECK_AFTER_MS);
+    cloudflare(
+      replaced,
+      {},
+      {
+        [verify(replaced)]: async () => {
+          await storeAgain(replaced, ROLLED_TOKEN, Date.now(), inDays(30));
+          return json(200, ok(verifyResult()));
+        },
+      },
+    );
+    const afterReplacement = await exports.TokenIntake.recheck(replaced);
+    // The vault holds a token, but not the one this recheck passed.
+    expect(afterReplacement).toMatchObject({
+      ok: false,
+      stored: true,
+      removed: false,
+      retryable: true,
+      changed: true,
+    });
+    expect(afterReplacement.reasons.map((r) => r.code)).toEqual(["token_changed"]);
   });
 });
 

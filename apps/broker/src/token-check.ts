@@ -12,6 +12,7 @@ import {
   claimRecheck,
   deleteToken,
   getToken,
+  hasToken,
   markChecked,
   releaseRecheck,
   type TokenProfile,
@@ -42,6 +43,13 @@ export interface IntakeResult extends WriteCheckResult {
   retryable: boolean;
   /** Seconds to wait before a retry, set when the check was rate-limited. */
   retryAfter?: number;
+  /**
+   * recheck: the vault no longer held the checked token when the check ended
+   * (removed or replaced meanwhile), so its outcome was neither recorded nor
+   * acted on. `ok` is false and `retryable` true; `stored` says whether the
+   * vault holds a token for the account now, which is not the checked one.
+   */
+  changed?: boolean;
 }
 
 type Checked = WriteCheckResult & { retryable: boolean; retryAfter?: number };
@@ -147,6 +155,12 @@ export async function writeCheck(
  * read (`SeenToken`: token ID and ciphertext), so a token rolled and stored
  * again meanwhile, under the same token ID too, is neither deleted nor marked
  * as checked by this recheck.
+ *
+ * When the row no longer holds the token at the end, the recheck reports
+ * that instead of its own outcome (round 11 hardening): a pass is not a pass
+ * for the token now stored, or for none, and a failure deleted nothing. The
+ * result is `changed`, not ok and retryable, and `stored` is what the vault
+ * holds now.
  */
 export async function recheckToken(
   env: BrokerEnv,
@@ -163,12 +177,39 @@ export async function recheckToken(
     check.reasons.push(mismatch);
   }
   if (check.ok) {
-    await markChecked(env.VAULT, entry.accountId, entry, check.expiresOn, Date.now());
-    return { ...check, stored: true, removed: false };
+    if (await markChecked(env.VAULT, entry.accountId, entry, check.expiresOn, Date.now())) {
+      return { ...check, stored: true, removed: false };
+    }
+    return changedDuring(env, entry.accountId, check, "passed");
   }
   if (check.retryable) return { ...check, stored: true, removed: false };
-  const removed = await deleteToken(env.VAULT, entry.accountId, entry);
-  return { ...check, stored: false, removed };
+  if (await deleteToken(env.VAULT, entry.accountId, entry)) {
+    return { ...check, stored: false, removed: true };
+  }
+  return changedDuring(env, entry.accountId, check, "failed");
+}
+
+/** The result of a recheck whose token the vault no longer held at its end. */
+async function changedDuring(
+  env: BrokerEnv,
+  accountId: string,
+  check: Checked,
+  outcome: "passed" | "failed",
+): Promise<IntakeResult> {
+  const issue: CheckIssue = {
+    code: "token_changed",
+    message: `the checked token ${outcome} its recheck, but it was removed or replaced meanwhile, so nothing was ${outcome === "passed" ? "recorded" : "deleted"}; retry to check the token stored now`,
+  };
+  const { retryAfter: _, ...rest } = check;
+  return {
+    ...rest,
+    ok: false,
+    reasons: [issue, ...check.reasons],
+    stored: await hasToken(env.VAULT, accountId),
+    removed: false,
+    retryable: true,
+    changed: true,
+  };
 }
 
 /**
@@ -203,6 +244,16 @@ const listed = (result: IntakeResult) =>
 
 function outcomeOf(result: IntakeResult, token: string): UsableToken {
   if (result.ok) return { ok: true, token };
+  if (result.changed) {
+    console.warn("broker: token removed or replaced during its recheck", result.accountId);
+    return {
+      ok: false,
+      status: 503,
+      code: RECHECK_UNAVAILABLE_CODE,
+      message:
+        "the stored token was removed or replaced during its recheck; nothing was sent, retry later",
+    };
+  }
   if (result.retryable) {
     console.warn("broker: token recheck could not run", result.accountId);
     const limited = result.retryAfter !== undefined;
@@ -232,6 +283,10 @@ function outcomeOf(result: IntakeResult, token: string): UsableToken {
  * closed. The outcome of a recheck:
  *
  * - passed: the check time is recorded and the call is served;
+ * - passed or failed, but the row no longer holds the checked token: the
+ *   call fails closed with 503 and RECHECK_UNAVAILABLE_CODE, and sends
+ *   nothing with the checked token; the next call finds no token or the
+ *   one stored now (round 11 hardening);
  * - failed: the token is deleted and the call fails with 401 and
  *   RECHECK_FAILED_CODE, which the reader turns into NoPermissionError;
  * - no answer: the token is kept and the call fails closed with

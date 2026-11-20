@@ -575,6 +575,30 @@ write(${JSON.stringify(`../../${file}`)}, ${JSON.stringify(text)});
     }
   });
 
+  it("R11-02: a build that writes a Yarn PnP manifest stops the deploy before any Wrangler call", () => {
+    // The review's case: the web build writes .pnp.data.json at the root,
+    // mapping @virga/rules to another directory. The links, rules.gen.ts and
+    // the R10-04 record are unchanged.
+    put(join(root, "planted", "rules", "index.ts"), planted);
+    const manifest = JSON.stringify({
+      packageRegistryData: [
+        ["@virga/rules", [["npm:1.0.0", { packageLocation: "./planted/rules/" }]]],
+      ],
+    });
+    for (const file of [".pnp.data.json", ".pnp.cjs", "apps/core/.pnp.js", "apps/.PNP.CJS"]) {
+      writes(file, manifest);
+      for (const args of [[], ["--dry-run"]]) {
+        const result = deploy(args, REAL);
+        expect(result.stdout, file).toContain("Building virga-web");
+        expect(result.status, file).toBe(1);
+        expect(result.stderr, file).toContain(`error: ${file}: a Yarn Plug'n'Play manifest.`);
+        expect(calls(), file).toBe("");
+        expect(result.stdout + result.stderr).not.toContain(TOKEN);
+        rmSync(join(root, file));
+      }
+    }
+  });
+
   it("R10-04: refuses a package.json changed after the checks, before the Wrangler call that bundles through it", () => {
     writeFileSync(join(root, "exports-later"), "");
     const result = deploy(["--dry-run"]);

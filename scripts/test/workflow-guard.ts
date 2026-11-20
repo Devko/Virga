@@ -9,7 +9,9 @@
  * function from it (R10-03). It refuses what another parser, such as
  * GitHub's, could read differently, or what lets one line stand for another:
  * anchors, aliases, merge keys, tags, directives, duplicate keys, keys that are
- * not strings and more than one document.
+ * not strings and more than one document. Before parsing, it refuses any
+ * character but printable ASCII, LF and CRLF, which other parsers could read
+ * as a line break (R11-01).
  *
  * The parser is `yaml`, which pnpm-lock.yaml locks for packages/rules. The
  * scripts declare no dependencies of their own, so it is imported from there.
@@ -58,16 +60,57 @@ export interface Workflow {
   jobs: Map<string, Job>;
 }
 
-/** The commands the release-age job may run: the check, on a fresh checkout or not. */
+/**
+ * The command the release-age job may run: the check on a fresh checkout,
+ * which refuses any node_modules (round 11 hardening). A runner always starts
+ * from a fresh checkout, so the flag costs nothing there.
+ */
 export const CHECK_RUNS: ReadonlySet<string> = new Set([
-  "node scripts/check-release-age.ts",
   "node scripts/check-release-age.ts --fresh-checkout",
 ]);
 
 const HIDES =
   "the guard refuses anchors, aliases, merge keys, tags and directives, which another parser may read differently and which could hide an if: or continue-on-error";
 
+/** Printable ASCII and LF, as a key or value may hold after YAML read its escapes. */
+const ASCII = /^[\x20-\x7e\n]*$/;
+const ESCAPED =
+  "a key or value that holds a character other than printable ASCII once YAML reads its escapes; another parser may fold it to ASCII (R12-01)";
+
 const preview = (text: string) => JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}…` : text);
+
+/**
+ * Characters other than printable ASCII, LF and CRLF (R11-01). `yaml` reads a
+ * lone CR, NEL (U+0085), LS (U+2028) and PS (U+2029) as part of a line, so a
+ * comment runs past them; YAML 1.1 parsers such as libyaml start a new line
+ * at each, and YAML 1.2 at a lone CR, so a key the guard reads as a comment
+ * could be a key to another parser. Allowing ASCII only also keeps non-ASCII
+ * letters out of keys and if: conditions, such as U+017F in `alwayſ()`, which
+ * a case-insensitive comparison may fold to ASCII. Tabs are refused too: YAML
+ * allows them only in some places, and the workflows do not need them.
+ */
+export function characterProblems(text: string): string[] {
+  const problems: string[] = [];
+  let line = 1;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code === 0x0a) {
+      line++;
+      continue;
+    }
+    if (code === 0x0d && text.charCodeAt(i + 1) === 0x0a) continue;
+    if (code >= 0x20 && code <= 0x7e) continue;
+    const point = text.codePointAt(i) ?? code;
+    const name = `U+${point.toString(16).toUpperCase().padStart(4, "0")}`;
+    problems.push(
+      code === 0x0d
+        ? `line ${line}: a CR not followed by LF, which another parser may read as a line break; the guard allows only printable ASCII, LF and CRLF`
+        : `line ${line}: the character ${name}; the guard allows only printable ASCII, LF and CRLF, since another parser may read other characters as a line break or fold them to ASCII`,
+    );
+    if (point > 0xffff) i++;
+  }
+  return problems;
+}
 
 /**
  * A workflow as the guard reads it, or the problems that keep it from reading
@@ -75,6 +118,8 @@ const preview = (text: string) => JSON.stringify(text.length > 60 ? `${text.slic
  * job that is not a mapping.
  */
 export function readWorkflow(text: string): { workflow?: Workflow; problems: string[] } {
+  const characters = characterProblems(text);
+  if (characters.length > 0) return { problems: characters };
   const lines = new LineCounter();
   const lineOf = (offset: number | undefined) => lines.linePos(offset ?? 0).line;
   const doc = parseDocument(text, {
@@ -121,12 +166,18 @@ export function readWorkflow(text: string): { workflow?: Workflow; problems: str
           );
           continue;
         }
+        if (!ASCII.test(pair.key.value)) {
+          problems.push(`line ${lineOf(pair.key.range?.[0])}: ${ESCAPED}`);
+        }
         entries.set(pair.key.value, toValue(pair.value));
       }
       return { kind: "map", line, entries };
     }
     if (isSeq(node)) return { kind: "seq", line, items: node.items.map(toValue) };
     const value = isScalar(node) ? node.value : null;
+    if (typeof value === "string" && !ASCII.test(value)) {
+      problems.push(`line ${line}: ${ESCAPED}`);
+    }
     if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
       return { kind: "scalar", line, value: value as YamlScalar["value"] };
     }
@@ -329,7 +380,11 @@ function checkJobProblems(job: Job): string[] {
   for (const step of job.steps) {
     keyProblems(step, CHECK_STEP_KEYS);
     const run = step.entries.get("run");
-    if (run !== undefined && !CHECK_RUNS.has(stringOf(run) ?? "")) {
+    if (stringOf(run) === "node scripts/check-release-age.ts") {
+      problems.push(
+        `line ${run?.line}: release-age runs the check without --fresh-checkout, which refuses a node_modules the commit holds`,
+      );
+    } else if (run !== undefined && !CHECK_RUNS.has(stringOf(run) ?? "")) {
       problems.push(
         `line ${run.line}: release-age runs ${preview(strings(run).join(" "))}, not the check; a command there could change the check's environment through $GITHUB_ENV or $GITHUB_PATH`,
       );
