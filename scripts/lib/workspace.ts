@@ -41,9 +41,20 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  * without one, for paths and baseUrl. esbuild finds them by name in any
  * case.
  */
-const RESOLUTION_FILES = new Set(["package.json", "tsconfig.json", "jsconfig.json"]);
+const CONFIG_FILES = ["package.json", "tsconfig.json", "jsconfig.json"];
+/**
+ * Yarn Plug'n'Play manifests (R11-02). esbuild 0.28.2 reads .pnp.data.json,
+ * .pnp.cjs or .pnp.js from its working directory, which Wrangler sets to the
+ * app directory, and from every directory above it, and resolves bare imports
+ * through the manifest before node_modules, so a manifest could make apps/core
+ * bundle another module as @virga/rules. Virga uses pnpm, which writes none:
+ * the deploy refuses them in every case, wherever it records resolution files.
+ */
+const PNP_FILES = new Set([".pnp.data.json", ".pnp.cjs", ".pnp.js"]);
+const RESOLUTION_FILES = new Set([...CONFIG_FILES, ...PNP_FILES]);
 const TSCONFIG_FILES = new Set(["tsconfig.json", "jsconfig.json"]);
 const isResolutionFile = (name: string) => RESOLUTION_FILES.has(name.toLowerCase());
+const isPnpManifest = (path: string) => PNP_FILES.has(basename(path).toLowerCase());
 const isTsconfig = (path: string) => TSCONFIG_FILES.has(basename(path).toLowerCase());
 
 export interface Sources {
@@ -51,7 +62,10 @@ export interface Sources {
   links: string[];
   /** node_modules directories other than the directory's own. */
   modules: string[];
-  /** Files named package.json, tsconfig.json or jsconfig.json, in any case (R10-04). */
+  /**
+   * Files named package.json, tsconfig.json or jsconfig.json (R10-04), or
+   * .pnp.data.json, .pnp.cjs or .pnp.js (R11-02), in any case.
+   */
   resolution: string[];
 }
 
@@ -78,6 +92,8 @@ export function walkSources(dir: string): Sources {
       } else if (entry.isDirectory()) {
         // Case-insensitive file systems open node_modules under any case.
         if (entry.name.toLowerCase() === "node_modules") found.modules.push(path);
+        // Recorded so that the deploy refuses it, whatever stands there (R11-02).
+        if (isPnpManifest(path)) found.resolution.push(path);
         pending.push(path);
       } else if (isResolutionFile(entry.name)) {
         found.resolution.push(path);
@@ -109,7 +125,8 @@ export interface WorkspaceRecord {
    * The files that tell esbuild how to resolve the app's imports, by path,
    * with the sha256 of each, `absent` for a path an extends could name, or
    * what stands there instead of a file (R10-04): every package.json,
-   * tsconfig.json and jsconfig.json in the app directory and in the
+   * tsconfig.json and jsconfig.json, and every Yarn PnP manifest, which the
+   * record refuses (R11-02), in the app directory and in the
    * workspace packages it bundles, outside their node_modules, and in every
    * directory above them, and the files their tsconfig files extend.
    */
@@ -251,6 +268,16 @@ function recordResolution(
         nearest = true;
       }
     }
+  }
+
+  const manifests = [...files].filter(([path, how]) => isPnpManifest(path) && how !== "absent");
+  if (manifests.length > 0) {
+    problems.push(
+      `${list(
+        root,
+        manifests.map(([path]) => path).sort(),
+      )}: a Yarn Plug'n'Play manifest. Wrangler's bundler (esbuild) reads .pnp.data.json, .pnp.cjs and .pnp.js from the app directory and every directory above it, and resolves imports through it before node_modules, so it could make apps/${app} bundle another module in place of a workspace package, past the checks of the workspace links and the generated rules. Virga uses pnpm, which writes none. Unless you added it yourself, find what wrote it, starting with the build scripts, and deploy from a fresh clone (operator guide, Troubleshooting)`,
+    );
   }
 
   const checked = new Set<string>();

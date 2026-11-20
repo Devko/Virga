@@ -373,6 +373,89 @@ describe("recordWorkspace and module resolution (R10-04)", () => {
   });
 });
 
+describe("recordWorkspace and Yarn PnP manifests (R11-02)", () => {
+  let root = "";
+  const core = (...parts: string[]) => join(root, "apps", "core", ...parts);
+  const packages = (...parts: string[]) => join(root, "packages", ...parts);
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "virga-pnp-")));
+    put(join(root, "package.json"), '{ "name": "virga", "private": true }');
+    for (const name of ["graph", "rules"]) workspacePackage(root, name);
+    put(core("package.json"), '{ "name": "@virga/core" }');
+    put(core("wrangler.jsonc"), `{ "name": "virga-core" }`);
+    put(core("src", "index.ts"), "export default {};\n");
+    for (const name of ["rules", "graph"]) pnpmLink(core(), name, packages(name));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const problem = () => {
+    try {
+      recordWorkspace(root, "core");
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkspaceError);
+      return (error as Error).message;
+    }
+  };
+  const REFUSED = (paths: string) =>
+    `${paths}: a Yarn Plug'n'Play manifest. Wrangler's bundler (esbuild) reads .pnp.data.json, .pnp.cjs and .pnp.js from the app directory and every directory above it, and resolves imports through it before node_modules, so it could make apps/core bundle another module in place of a workspace package, past the checks of the workspace links and the generated rules. Virga uses pnpm, which writes none. Unless you added it yourself, find what wrote it, starting with the build scripts, and deploy from a fresh clone (operator guide, Troubleshooting)`;
+  /** The review's manifest: @virga/rules, imported from apps/core, mapped to another directory. */
+  const MANIFEST = JSON.stringify({
+    packageRegistryData: [
+      [
+        "@virga/rules",
+        [
+          [
+            "workspace:packages/rules",
+            { packageLocation: "./outside/rules/", packageDependencies: [] },
+          ],
+        ],
+      ],
+    ],
+  });
+
+  it("R11-02: refuses the review's .pnp.data.json, written at the root by a build, after the record", () => {
+    const before = recordWorkspace(root, "core");
+    expect(problem()).toBeNull();
+    put(join(root, ".pnp.data.json"), MANIFEST);
+    expect(workspaceChanges(before)).toBe(REFUSED(".pnp.data.json"));
+    expect(problem()).toBe(REFUSED(".pnp.data.json"));
+    expect(() => checkAppDir(root, "core")).toThrow(REFUSED(".pnp.data.json"));
+  });
+
+  it("R11-02: refuses .pnp.data.json, .pnp.cjs and .pnp.js in any case, in the app, a package tree and every directory above", () => {
+    const places = [
+      root,
+      join(root, "apps"),
+      core(),
+      core("src"),
+      packages("rules"),
+      packages("rules", "src"),
+      dirname(root),
+    ];
+    for (const name of [".pnp.data.json", ".pnp.cjs", ".pnp.js", ".PNP.CJS", ".Pnp.Data.Json"]) {
+      for (const dir of places) {
+        // The temporary directory's parent may not be writable; the others are the checkout.
+        if (dir === dirname(root)) continue;
+        const path = join(dir, name);
+        put(path, "module.exports = {};\n");
+        expect(problem(), path).toBe(REFUSED(relative(root, path)));
+        rmSync(path);
+      }
+    }
+    expect(problem()).toBeNull();
+    // A directory of that name is refused too.
+    mkdirSync(core(".pnp.cjs"));
+    expect(problem()).toBe(REFUSED("apps/core/.pnp.cjs"));
+  });
+
+  it("R11-02: a manifest present before the builds stops the deploy at the record", () => {
+    put(core(".pnp.js"), "module.exports = {};\n");
+    put(join(root, ".pnp.cjs"), "module.exports = {};\n");
+    expect(problem()).toBe(REFUSED(".pnp.cjs, apps/core/.pnp.js"));
+  });
+});
+
 describe("the workspace links of the repository (L-2)", () => {
   it("L-2: the real tree passes, and core bundles packages/rules", () => {
     for (const app of ["broker", "core", "web"]) {
