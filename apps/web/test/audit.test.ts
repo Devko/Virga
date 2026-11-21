@@ -442,11 +442,16 @@ describe("tool audit trail: MCP", () => {
       { name: "get_finding", arguments: { account_id: UNKNOWN_ACCOUNT, fingerprint: MARKUP } },
       { name: "list_findings", arguments: { account_id: ACCOUNT, limit: 51 } },
     ]);
-    expect(audit.entries.map((e) => [e.action, e.accountId, e.outcome])).toEqual([
-      ["list_accounts", null, "ok"],
-      ["get_finding", UNKNOWN_ACCOUNT, "not_found"],
-      ["unknown_tool", ACCOUNT, "refused"],
-    ]);
+    // The tools of a batch run concurrently, so their rows land in the order
+    // they finish; only the refused row has a fixed place, after them.
+    const rows = audit.entries.map((e) => [e.action, e.accountId, e.outcome]);
+    expect(rows.slice(0, 2)).toEqual(
+      expect.arrayContaining([
+        ["list_accounts", null, "ok"],
+        ["get_finding", UNKNOWN_ACCOUNT, "not_found"],
+      ]),
+    );
+    expect(rows.slice(2)).toEqual([["unknown_tool", ACCOUNT, "refused"]]);
 
     // A batch of 100 calls that would all run writes at most MAX_TOOL_CALLS + 1 rows.
     audit.entries.length = 0;

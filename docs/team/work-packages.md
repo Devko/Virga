@@ -203,6 +203,8 @@ From the [round 11 verification](../reviews/2026-10-30-verification-round-11.md)
 
 Round 12 status (2026-11-20): the [round 12 verification](../reviews/2026-11-20-verification-round-12.md) confirms R11-01, R11-02, the round 11 hardening items and TM-16 as fixed. It found two lows: R12-01, a non-ASCII letter written as a YAML escape in an `if:`, which the same pull request fixed, and R12-02, further advisories whose patches pass the age gate ([issue #3](https://github.com/Devko/Virga/issues/3)). Leads and hardening items are in [issue #4](https://github.com/Devko/Virga/issues/4). This ends the hardening rounds.
 
+After round 12: `deps-2` (R12-02, [issue #3](https://github.com/Devko/Virga/issues/3)), before the first deploy. zod 4.6.6 in `apps/web`, hono 4.13.16 and `@hono/node-server` 2.1.6, and vitest 4.1.12 (which pins `@vitest/mocker` 4.1.12) in the root and `apps/web`, all older than 14 days; the lockfile changes only for these packages and the references to them. `node scripts/check-release-age.ts` and `pnpm run ci` pass. zod 4.6.5 and undici 7.29.1 stay locked for the test tooling, which pins them exactly; TM-16 says why.
+
 ## Rules for every work package
 
 - Stay inside the owned paths. `pnpm-lock.yaml` and the own `package.json` may change; the integrator regenerates the lockfile on merge.
